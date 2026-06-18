@@ -1,0 +1,22 @@
+{
+  "name": "docusearch",
+  "version-string": "1.0.0",
+  "description": "Offline Intelligent Document Search & OCR System for Windows",
+  "dependencies": [
+    "qt6-base",
+    "qt6-svg",
+    {
+      "name": "sqlite3",
+      "features": ["fts5"]
+    },
+    "tesseract",
+    "leptonica",
+    "poppler",
+    "zlib"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build unit tests (Qt Test framework)"
+    }
+  }
+}

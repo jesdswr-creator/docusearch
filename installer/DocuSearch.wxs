@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================
+  DocuSearch.wxs — WiX v4 installer for Windows 11
+  ============================================================
+
+  Builds a 64-bit MSI that installs DocuSearch to:
+
+      C:\Program Files\DocuSearch\
+
+  Features:
+    * Start Menu shortcut (DocuSearch)
+    * Optional Desktop shortcut (checkbox in wizard)
+    * Add/Remove Programs entry with publisher + version + icon
+    * File associations for .pdf, .docx, .xlsx, .pptx
+    * Tessdata folder prompt (user can point at a folder of
+      *.traineddata files; default %ProgramFiles%\Tesseract-OCR\tessdata)
+    * Per-machine install (ALLUSERS=1) so all users on the PC get it
+    * Uninstall removes everything including the local DB
+
+  Build with the build-release.ps1 script (which wraps candle + light):
+
+      .\scripts\build-release.ps1 -MakeMsi
+
+  Or directly:
+
+      candle installer\DocuSearch.wxs -o build\wix\
+      light  build\wix\DocuSearch.wixobj -o build\DocuSearch-Setup.msi ^
+             -ext WixUIExtension -ext WixUtilExtension
+  ============================================================
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?define ProductName       = "DocuSearch" ?>
+  <?define ProductPublisher  = "DocuSearch" ?>
+  <?define ProductVersion    = "1.0.0.0" ?>
+  <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
+
+  <Package
+      Name="$(var.ProductName)"
+      Manufacturer="$(var.ProductPublisher)"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="$(var.ProductUpgradeCode)"
+      Language="1033"
+      Codepage="1252">
+
+    <SummaryInformation
+        Codepage="1252"
+        Description="$(var.ProductName) installer"
+        Manufacturer="$(var.ProductPublisher)" />
+
+    <!-- Major upgrade rule: newer builds replace older builds -->
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed. The installer will now exit." />
+
+    <!-- Embed the standard WiX UI (license + feature tree + install dir) -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <ui:WixUIRef Id="WixUI_Common" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- Per-machine install -->
+    <Property Id="ALLUSERS" Value="1" />
+
+    <!-- Optional desktop shortcut: default ON -->
+    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
+
+    <!-- ============================================================
+         Product structure
+         ============================================================ -->
+    <Media Id="1" Cabinet="DocuSearch.cab" EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="$(var.ProductName)" Level="1"
+             Description="Offline intelligent document search &amp; OCR system.">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="ApplicationShortcutDesktop" />
+      <ComponentRef Id="RegistryUninstallEntry" />
+      <ComponentRef Id="FileAssocPdf" />
+      <ComponentRef Id="FileAssocDocx" />
+      <ComponentRef Id="FileAssocXlsx" />
+      <ComponentRef Id="FileAssocPptx" />
+    </Feature>
+
+    <!-- ============================================================
+         Install directory: Program Files\DocuSearch
+         ============================================================ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)">
+        <Directory Id="BinFolder"      Name="bin" />
+        <Directory Id="TessdataFolder" Name="tessdata" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="$(var.ProductName)" />
+    </StandardDirectory>
+
+    <!-- Desktop shortcut -->
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- ============================================================
+         App files (everything that windeployqt dumps in bin\Release)
+         ============================================================ -->
+    <ComponentGroup Id="AppFiles" Directory="BinFolder">
+      <!-- Main executable -->
+      <Component Id="MainExe" Guid="A1B2C3D4-1111-2222-3333-444455556666">
+        <File Id="DocuSearchExe"
+              Source="$(var.BuildOutputDir)\DocuSearch.exe"
+              KeyPath="yes" Checksum="yes" />
+      </Component>
+
+      <!-- Qt DLLs and plugins produced by windeployqt.
+           We harvest the whole bin\Release directory at build time
+           via heat.exe (see build-release.ps1); the resulting
+           DocuSearch harvest file is pulled in via <?include ?>. -->
+      <?include DocuSearch.Harvest.wxi ?>
+
+      <!-- VC++ Redistributable policy (the .exe is statically linked,
+           but we still record the runtime dependency for clarity). -->
+      <Component Id="VcRuntimeNote" Guid="A1B2C3D4-7777-8888-9999-AAAABBBBCCCC">
+        <RegistryValue Root="HKLM"
+                       Key="SOFTWARE\$(var.ProductPublisher)\$(var.ProductName)"
+                       Name="VCRuntime"
+                       Value="statically linked"
+                       Type="string" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ============================================================
+         Start Menu shortcut
+         ============================================================ -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcut" Guid="A1B2C3D4-DDDD-EEEE-FFFF-111122223333">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="$(var.ProductName)"
+                  Description="Launch $(var.ProductName)"
+                  Target="[BinFolder]DocuSearch.exe"
+                  WorkingDirectory="BinFolder"
+                  Icon="DocuSearchIcon.exe">
+          <ShortcutProperty Key="System.AppUserModel.ID"
+                            Value="$(var.ProductPublisher).$(var.ProductName)" />
+        </Shortcut>
+        <RemoveFolder Id="ApplicationProgramsFolder"
+                      Directory="ApplicationProgramsFolder"
+                      On="uninstall" />
+        <RegistryValue Root="HKMU"
+                       Key="SOFTWARE\$(var.ProductPublisher)\$(var.ProductName)\Shortcuts\StartMenu"
+                       Name="Installed"
+                       Value="1"
+                       Type="integer"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============================================================
+         Optional Desktop shortcut (controlled by INSTALLDESKTOPSHORTCUT)
+         ============================================================ -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="ApplicationShortcutDesktop" Guid="A1B2C3D4-4444-5555-6666-777788889999">
+        <Condition>INSTALLDESKTOPSHORTCUT = 1</Condition>
+        <Shortcut Id="ApplicationDesktopShortcut"
+                  Name="$(var.ProductName)"
+                  Description="Launch $(var.ProductName)"
+                  Target="[BinFolder]DocuSearch.exe"
+                  WorkingDirectory="BinFolder"
+                  Icon="DocuSearchIcon.exe" />
+        <RegistryValue Root="HKMU"
+                       Key="SOFTWARE\$(var.ProductPublisher)\$(var.ProductName)\Shortcuts\Desktop"
+                       Name="Installed"
+                       Value="1"
+                       Type="integer"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ============================================================
+         Add/Remove Programs (uninstall) entry
+         ============================================================ -->
+    <Component Id="RegistryUninstallEntry"
+               Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEEFFFF">
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="DisplayName"
+                     Value="$(var.ProductName)"
+                     Type="string" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="DisplayVersion"
+                     Value="$(var.ProductVersion)"
+                     Type="string" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="Publisher"
+                     Value="$(var.ProductPublisher)"
+                     Type="string" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="InstallLocation"
+                     Value="[INSTALLFOLDER]"
+                     Type="string" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="DisplayIcon"
+                     Value="[BinFolder]DocuSearch.exe,0"
+                     Type="string" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="NoModify"
+                     Value="1"
+                     Type="integer" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="NoRepair"
+                     Value="1"
+                     Type="integer" />
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
+                     Name="UninstallString"
+                     Value="[System64Folder]msiexec.exe /x [ProductCode] /qn"
+                     Type="string"
+                     KeyPath="yes" />
+    </Component>
+
+    <!-- ============================================================
+         File associations: .pdf, .docx, .xlsx, .pptx
+         Each registers a ProgID pointing at DocuSearch.exe with the
+         "open" verb, and associates the extension with that ProgID.
+         ============================================================ -->
+    <Component Id="FileAssocPdf"
+               Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-1001-2001-3001-400150016001">
+      <ProgId Id="DocuSearch.Assoc.PDF"
+              Description="PDF Document (DocuSearch)">
+        <Extension Id="pdf" Advertise="no">
+          <Verb Id="open" Command="Open with DocuSearch"
+                Argument="&quot;%1&quot;" TargetFile="DocuSearchExe" />
+        </Extension>
+      </ProgId>
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Classes\.pdf\OpenWithList\DocuSearch.exe"
+                     Value=""
+                     Type="string"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="FileAssocDocx"
+               Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-1002-2002-3002-400250026002">
+      <ProgId Id="DocuSearch.Assoc.DOCX"
+              Description="Word Document (DocuSearch)">
+        <Extension Id="docx" Advertise="no">
+          <Verb Id="open" Command="Open with DocuSearch"
+                Argument="&quot;%1&quot;" TargetFile="DocuSearchExe" />
+        </Extension>
+      </ProgId>
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Classes\.docx\OpenWithList\DocuSearch.exe"
+                     Value=""
+                     Type="string"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="FileAssocXlsx"
+               Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-1003-2003-3003-400350036003">
+      <ProgId Id="DocuSearch.Assoc.XLSX"
+              Description="Excel Workbook (DocuSearch)">
+        <Extension Id="xlsx" Advertise="no">
+          <Verb Id="open" Command="Open with DocuSearch"
+                Argument="&quot;%1&quot;" TargetFile="DocuSearchExe" />
+        </Extension>
+      </ProgId>
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Classes\.xlsx\OpenWithList\DocuSearch.exe"
+                     Value=""
+                     Type="string"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="FileAssocPptx"
+               Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-1004-2004-3004-400450046004">
+      <ProgId Id="DocuSearch.Assoc.PPTX"
+              Description="PowerPoint (DocuSearch)">
+        <Extension Id="pptx" Advertise="no">
+          <Verb Id="open" Command="Open with DocuSearch"
+                Argument="&quot;%1&quot;" TargetFile="DocuSearchExe" />
+        </Extension>
+      </ProgId>
+      <RegistryValue Root="HKMU"
+                     Key="SOFTWARE\Classes\.pptx\OpenWithList\DocuSearch.exe"
+                     Value=""
+                     Type="string"
+                     KeyPath="yes" />
+    </Component>
+
+    <!-- ============================================================
+         Icon resource (referenced by shortcuts + file associations)
+         ============================================================ -->
+    <Icon Id="DocuSearchIcon.exe"
+          SourceFile="$(var.BuildOutputDir)\DocuSearch.exe" />
+
+    <!-- ============================================================
+         Custom action: clean up the user database on uninstall
+         (we don't auto-delete on upgrade so the user keeps their index)
+         ============================================================ -->
+    <CustomAction Id="CleanupUserDb"
+                  Script="vbscript"
+                  Execute="deferred">
+      <![CDATA[
+        On Error Resume Next
+        Dim appData, dbPath
+        appData = Session.Property("AppDataFolder")
+        If appData = "" Then appData = CreateObject("Shell.Application").Namespace(&H1C).Self.Path
+        dbPath = appData & "\DocuSearch\docusearch.db"
+        If CreateObject("Scripting.FileSystemObject").FileExists(dbPath) Then
+          CreateObject("Scripting.FileSystemObject").DeleteFile dbPath, True
+        End If
+      ]]>
+    </CustomAction>
+
+    <InstallExecuteSequence>
+      <Custom Action="CleanupUserDb"
+              After="RemoveFiles"
+              Condition="(NOT UPGRADINGPRODUCTCODE) AND (REMOVE=&quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

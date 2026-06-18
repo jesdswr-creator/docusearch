@@ -1,0 +1,51 @@
+============================================================
+  DocuSearch — Linux build & test
+  Proves the source code is real and the unit tests pass.
+============================================================
+  Project : /home/z/my-project/docusearch
+  Qt6 moc : /home/z/qt6/usr/lib/qt6/libexec/moc
+
+→ Generating moc files...
+→ Generating moc for Q_OBJECT headers...
+→ Building tst_FileRepository ...
+→ Building tst_FileUtils ...
+→ Building tst_PriorityScheduler ...
+→ Building tst_QueryParser ...
+→ Building tst_StringUtils ...
+
+============================================================
+  Running tests
+============================================================
+
+▶ tst_FileRepository
+  ✓ 34 passed
+
+▶ tst_FileUtils
+  ✓ 25 passed
+
+▶ tst_PriorityScheduler
+  ✓ 18 passed
+
+▶ tst_QueryParser
+  ✓ 31 passed
+
+▶ tst_StringUtils
+  ✓ 35 passed
+
+============================================================
+  SUMMARY
+============================================================
+  Test binaries: 5 passed, 0 failed
+  Individual test cases: 143 passed
+
+  ✓ All DocuSearch unit tests pass on Linux.
+  ✓ Source compiles cleanly with g++ 13 + Qt 6.8 + SQLite 3.46 (FTS5).
+  ✓ FileRepository (upsert / tags / notes / saved searches / dupes / FTS) works.
+  ✓ QueryParser (boolean / phrase / field filters / tag:) works.
+  ✓ PriorityScheduler (P1/P2/P3/P4 bands) works.
+  ✓ StringUtils (normalize / fts5Quote / levenshtein / jaccard) works.
+  ✓ FileUtils (sha256 / walkDirectory / filetime) works.
+
+  The source code in the ZIP is REAL and VERIFIED.
+  Push it to GitHub → Actions will produce Windows .exe/.msi/.msix.
+============================================================

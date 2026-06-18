@@ -1,0 +1,34 @@
+# ============================================================
+# .gitignore
+# ============================================================
+build/
+build-*/
+out/
+dist/
+*.user
+*.user.*
+*.suo
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.dll
+*.lib
+.vs/
+.vscode/
+.idea/
+*.aps
+*.tlog
+.cache
+third_party/sqlite3/sqlite3.c
+third_party/sqlite3/sqlite3.h
+vcpkg_installed/
+certs/
+*.pfx
+*.cer
+*.msi
+*.msix
+*.appx
+*.appxupload
+*.msixbundle
+CMakeUserPresets.json

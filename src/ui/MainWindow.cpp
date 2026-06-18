@@ -1,0 +1,572 @@
+// ============================================================
+// MainWindow.cpp
+// ============================================================
+
+#include "MainWindow.h"
+#include "Theme.h"
+#include "SearchBar.h"
+#include "ResultsPane.h"
+#include "PreviewPane.h"
+#include "MetadataPane.h"
+#include "TagsNotesPane.h"
+#include "IndexingProgress.h"
+#include "SettingsDialog.h"
+
+#include "../core/Config.h"
+#include "../core/Constants.h"
+#include "../core/Logger.h"
+#include "../core/FileUtils.h"
+#include "../database/Database.h"
+#include "../database/Schema.h"
+#include "../database/FileRepository.h"
+#include "../search/SearchEngine.h"
+#include "../indexer/Indexer.h"
+#include "../ocr/OcrWorkerPool.h"
+#include "../monitoring/FileWatcher.h"
+#include "../preview/ThumbnailGenerator.h"
+#include "../settings/SettingsManager.h"
+
+#include <QApplication>
+#include <QMenuBar>
+#include <QMenu>
+#include <QAction>
+#include <QToolBar>
+#include <QStatusBar>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QCloseEvent>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QTimer>
+#include <QFile>
+#include <QTextStream>
+#include <QProgressDialog>
+#include <QThread>
+#include <QStyle>
+#include <QLabel>
+#include <QPixmap>
+#include <QFuture>
+#include <QtConcurrent>
+
+#include <memory>
+
+namespace DocuSearch {
+
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent) {
+
+    setWindowTitle(QString("%1 %2 — Offline Document Search")
+                   .arg(Constants::kAppName, Constants::kAppVersion));
+    resize(1400, 900);
+
+    // --- Initialize subsystems -----------------------------------------
+    db_   = std::make_unique<Database>(this);
+    repo_ = std::make_unique<FileRepository>(*db_, this);
+
+    const QString dbPath = Config::instance().dbPath();
+    QString err;
+    if (!db_->open(dbPath, &err)) {
+        QMessageBox::critical(this, "Database Error",
+            "Failed to open database:\n" + err);
+        return;
+    }
+    Schema::initialize(*db_);
+    Schema::migrate(*db_);
+
+    search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
+    ocrPool_ = std::make_unique<OcrWorkerPool>(2, this);
+    indexer_ = std::make_unique<Indexer>(*repo_, *ocrPool_, this);
+    watcher_ = std::make_unique<FileWatcher>(this);
+    thumbs_  = std::make_unique<ThumbnailGenerator>(Config::instance().thumbnailCacheDir(), this);
+
+    loadSettings();
+    ocrPool_->setAppSettings(settings_);
+
+    // --- UI ------------------------------------------------------------
+    buildCentral();
+    buildMenus();
+    buildToolbar();
+    applyTheme();
+
+    // --- Signals -------------------------------------------------------
+    connect(searchBar_, &SearchBar::searchRequested,
+            this, &MainWindow::onSearch);
+    connect(searchBar_, &SearchBar::savedSearchSelected,
+            this, &MainWindow::onSavedSearchSelected);
+
+    connect(resultsPane_, &ResultsPane::fileSelected,
+            this, &MainWindow::onFileSelected);
+    connect(resultsPane_, &ResultsPane::fileActivated,
+            this, &MainWindow::onFileActivated);
+
+    connect(previewPane_, &PreviewPane::openRequested,
+            this, &MainWindow::onOpenOriginal);
+
+    connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
+            this, &MainWindow::onTagAdded);
+    connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
+            this, &MainWindow::onTagRemoved);
+    connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
+            this, &MainWindow::onNoteChanged);
+
+    connect(indexer_.get(), &Indexer::progress,
+            this, &MainWindow::onIndexingProgress);
+    connect(indexer_.get(), &Indexer::phaseChanged,
+            this, &MainWindow::onPhaseChanged);
+    connect(indexer_.get(), &Indexer::indexingStarted,
+            this, &MainWindow::onIndexingStarted);
+    connect(indexer_.get(), &Indexer::indexingFinished,
+            this, &MainWindow::onIndexingFinished);
+
+    connect(indexingWidget_, &IndexingProgressWidget::pauseRequested,
+            this, &MainWindow::onPauseIndexing);
+    connect(indexingWidget_, &IndexingProgressWidget::resumeRequested,
+            this, &MainWindow::onResumeIndexing);
+    connect(indexingWidget_, &IndexingProgressWidget::stopRequested,
+            this, &MainWindow::onStopIndexing);
+
+    connect(watcher_.get(), &FileWatcher::fileAdded,    this, &MainWindow::onFileAdded);
+    connect(watcher_.get(), &FileWatcher::fileModified, this, &MainWindow::onFileModified);
+    connect(watcher_.get(), &FileWatcher::fileRenamed,  this, &MainWindow::onFileRenamed);
+    connect(watcher_.get(), &FileWatcher::fileDeleted,  this, &MainWindow::onFileDeleted);
+
+    // Live search debounce
+    liveSearchTimer_ = new QTimer(this);
+    liveSearchTimer_->setSingleShot(true);
+    liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
+    connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
+    connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
+        liveSearchTimer_->start();
+    });
+
+    refreshSavedSearches();
+    statusBar()->showMessage("Ready. Select drives in Settings → Indexing to begin.");
+
+    // Auto-start indexing if drives are configured
+    if (!settings_.indexedDrives.isEmpty()) {
+        QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
+    }
+    // Start file monitoring if enabled
+    if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
+        watcher_->addWatches(settings_.indexedDrives);
+    }
+}
+
+MainWindow::~MainWindow() {
+    if (indexer_) indexer_->stopIndexing();
+    if (ocrPool_) ocrPool_->shutdown();
+    if (watcher_) watcher_->stop();
+    if (db_)      db_->close();
+}
+
+void MainWindow::closeEvent(QCloseEvent* e) {
+    saveSettings();
+    if (indexer_ && indexer_->isRunning()) {
+        const auto rc = QMessageBox::question(
+            this, "Indexing in progress",
+            "Indexing is still running. Quit anyway?",
+            QMessageBox::Yes | QMessageBox::No);
+        if (rc != QMessageBox::Yes) { e->ignore(); return; }
+    }
+    QMainWindow::closeEvent(e);
+}
+
+// ============================================================
+// UI construction
+// ============================================================
+void MainWindow::buildCentral() {
+    mainSplitter_ = new QSplitter(Qt::Horizontal, this);
+    setCentralWidget(mainSplitter_);
+
+    // Left: search bar + results
+    auto* leftWidget = new QWidget(this);
+    auto* leftLay = new QVBoxLayout(leftWidget);
+    leftLay->setContentsMargins(8, 8, 8, 8);
+    searchBar_ = new SearchBar(leftWidget);
+    resultsPane_ = new ResultsPane(leftWidget);
+    leftLay->addWidget(searchBar_);
+    leftLay->addWidget(resultsPane_, 1);
+    mainSplitter_->addWidget(leftWidget);
+
+    // Middle: preview
+    previewPane_ = new PreviewPane(this);
+    mainSplitter_->addWidget(previewPane_);
+
+    // Right: tabs for metadata, tags/notes, indexing
+    rightSplitter_ = new QSplitter(Qt::Vertical, this);
+    metadataPane_   = new MetadataPane(rightSplitter_);
+    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
+    indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
+
+    rightSplitter_->addWidget(metadataPane_);
+    rightSplitter_->addWidget(tagsNotesPane_);
+    rightSplitter_->addWidget(indexingWidget_);
+    mainSplitter_->addWidget(rightSplitter_);
+
+    mainSplitter_->setStretchFactor(0, 5);
+    mainSplitter_->setStretchFactor(1, 3);
+    mainSplitter_->setStretchFactor(2, 2);
+}
+
+void MainWindow::buildMenus() {
+    // File menu
+    auto* fileMenu = menuBar()->addMenu("&File");
+    fileMenu->addAction("Open File…", QKeySequence::Open,
+        this, [this]{
+            const QString p = QFileDialog::getOpenFileName(this, "Open file");
+            if (!p.isEmpty()) openFile(p);
+        });
+    fileMenu->addAction("Export Results as CSV…", QKeySequence::Save,
+        this, &MainWindow::onExportCsv);
+    fileMenu->addSeparator();
+    fileMenu->addAction("Quit", QKeySequence::Quit,
+        qApp, &QApplication::quit);
+
+    // Index menu
+    auto* indexMenu = menuBar()->addMenu("&Index");
+    indexMenu->addAction("Start Indexing", this, &MainWindow::onStartIndexing);
+    indexMenu->addAction("Pause",  this, &MainWindow::onPauseIndexing);
+    indexMenu->addAction("Resume", this, &MainWindow::onResumeIndexing);
+    indexMenu->addAction("Stop",   this, &MainWindow::onStopIndexing);
+    indexMenu->addSeparator();
+    indexMenu->addAction("Detect Duplicates", this, &MainWindow::onDetectDuplicates);
+
+    // View menu
+    auto* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->addAction("Toggle Dark/Light Theme", QKeySequence("F11"),
+        this, &MainWindow::onToggleTheme);
+
+    // Tools menu
+    auto* toolsMenu = menuBar()->addMenu("&Tools");
+    toolsMenu->addAction("Settings…", this, &MainWindow::onOpenSettings);
+
+    // Help menu
+    auto* helpMenu = menuBar()->addMenu("&Help");
+    helpMenu->addAction("About DocuSearch", this, &MainWindow::onAbout);
+}
+
+void MainWindow::buildToolbar() {
+    auto* tb = addToolBar("Main");
+    tb->setMovable(false);
+    tb->setIconSize(QSize(20, 20));
+
+    auto* startAct = new QAction(style()->standardIcon(QStyle::SP_MediaPlay), "Index", this);
+    connect(startAct, &QAction::triggered, this, &MainWindow::onStartIndexing);
+    tb->addAction(startAct);
+
+    auto* pauseAct = new QAction(style()->standardIcon(QStyle::SP_MediaPause), "Pause", this);
+    connect(pauseAct, &QAction::triggered, this, &MainWindow::onPauseIndexing);
+    tb->addAction(pauseAct);
+
+    auto* stopAct = new QAction(style()->standardIcon(QStyle::SP_MediaStop), "Stop", this);
+    connect(stopAct, &QAction::triggered, this, &MainWindow::onStopIndexing);
+    tb->addAction(stopAct);
+
+    tb->addSeparator();
+
+    auto* settingsAct = new QAction(style()->standardIcon(QStyle::SP_FileDialogListView), "Settings", this);
+    connect(settingsAct, &QAction::triggered, this, &MainWindow::onOpenSettings);
+    tb->addAction(settingsAct);
+
+    auto* themeAct = new QAction(style()->standardIcon(QStyle::SP_DesktopIcon), "Theme", this);
+    connect(themeAct, &QAction::triggered, this, &MainWindow::onToggleTheme);
+    tb->addAction(themeAct);
+}
+
+void MainWindow::applyTheme() {
+    Theme::apply(settings_.darkMode ? Theme::Mode::Dark : Theme::Mode::Light);
+}
+
+void MainWindow::loadSettings() {
+    settings_ = Config::instance().load();
+    darkMode_ = settings_.darkMode;
+}
+
+void MainWindow::saveSettings() {
+    Config::instance().save(settings_);
+}
+
+void MainWindow::refreshSavedSearches() {
+    auto list = repo_->savedSearches();
+    QStringList names;
+    for (const auto& p : list) names << p.second;
+    searchBar_->setSavedSearches(names);
+}
+
+// ============================================================
+// Search & results
+// ============================================================
+void MainWindow::onSearch(const QString& query) {
+    if (query.isEmpty()) {
+        resultsPane_->clear();
+        return;
+    }
+    QElapsedTimer t; t.start();
+    auto hits = search_->search(query, 500);
+    resultsPane_->setResults(hits);
+    statusBar()->showMessage(QString("%1 result%2 in %3 ms")
+                             .arg(hits.size())
+                             .arg(hits.size() == 1 ? "" : "s")
+                             .arg(t.elapsed()));
+}
+
+void MainWindow::onLiveSearchTick() {
+    onSearch(searchBar_->text());
+}
+
+void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
+    FileRecord r;
+    if (fileId != 0 && repo_->getById(fileId, r)) {
+        metadataPane_->setRecord(r);
+        tagsNotesPane_->setFileId(fileId);
+        tagsNotesPane_->setTags(r.tags);
+        tagsNotesPane_->setNote(r.note);
+    }
+    previewPane_->setFilePath(path);
+
+    // Generate thumbnail in background
+    const QString ext = FileUtils::extensionOf(path);
+    if (Constants::kImageExtensions.contains(ext) || ext == "pdf") {
+        (void)QtConcurrent::run([this, path, fileId]{
+            QImage img = thumbs_->thumbnail(path, 512);
+            QMetaObject::invokeMethod(this, [this, img]{
+                previewPane_->setThumbnail(QPixmap::fromImage(img));
+            }, Qt::QueuedConnection);
+        });
+    } else {
+        previewPane_->setThumbnail(QPixmap());
+    }
+
+    // Lazy index: if file isn't fully indexed, do it now.
+    if (fileId != 0) {
+        (void)QtConcurrent::run([this, fileId]{
+            QString text = indexer_->lazyIndex(fileId);
+            if (!text.isEmpty()) {
+                QMetaObject::invokeMethod(this, [this, text]{
+                    previewPane_->setExtractedText(text);
+                }, Qt::QueuedConnection);
+            }
+        });
+    }
+}
+
+void MainWindow::onFileActivated(qint64 fileId, const QString& path) {
+    Q_UNUSED(fileId);
+    openFile(path);
+    if (fileId != 0) repo_->incrementOpenCount(fileId);
+}
+
+void MainWindow::onOpenOriginal(const QString& path) {
+    openFile(path);
+}
+
+void MainWindow::openFile(const QString& path) {
+    if (path.isEmpty()) return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+// ============================================================
+// Indexing
+// ============================================================
+void MainWindow::onStartIndexing() {
+    if (settings_.indexedDrives.isEmpty()) {
+        QMessageBox::information(this, "No Drives Configured",
+            "Please add drives in Settings → Indexing first.");
+        onOpenSettings();
+        return;
+    }
+    if (indexer_->isRunning()) {
+        statusBar()->showMessage("Indexing already running.");
+        return;
+    }
+    indexer_->startIndexing(settings_);
+}
+
+void MainWindow::onStopIndexing() {
+    indexer_->stopIndexing();
+    statusBar()->showMessage("Indexing stopped.");
+}
+
+void MainWindow::onPauseIndexing() {
+    indexer_->pause();
+    statusBar()->showMessage("Indexing paused.");
+}
+
+void MainWindow::onResumeIndexing() {
+    indexer_->resume();
+    statusBar()->showMessage("Indexing resumed.");
+}
+
+void MainWindow::onIndexingProgress(const DocuSearch::IndexingProgress& p) {
+    indexingWidget_->update(p);
+}
+
+void MainWindow::onPhaseChanged(const QString& phase) {
+    indexingWidget_->setPhase(phase);
+    statusBar()->showMessage(phase);
+}
+
+void MainWindow::onIndexingStarted() {
+    statusBar()->showMessage("Indexing started…");
+}
+
+void MainWindow::onIndexingFinished() {
+    statusBar()->showMessage("Indexing finished.", 5000);
+}
+
+// ============================================================
+// File watcher
+// ============================================================
+void MainWindow::onFileAdded(const QString& path) {
+    if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return;
+    const QFileInfo fi(path);
+    FileRecord r;
+    r.path         = FileUtils::toNative(path);
+    r.filename     = fi.fileName();
+    r.extension    = FileUtils::extensionOf(path);
+    r.size         = fi.size();
+    r.createdDate  = fi.birthTime();
+    r.modifiedDate = fi.lastModified();
+    r.indexingStatus = Constants::IndexingStatus::kPending;
+    r.ocrStatus      = Constants::OcrStatus::kPending;
+    repo_->upsertFile(r);
+    DS_INFO("Watcher", "Added: " + path);
+}
+
+void MainWindow::onFileModified(const QString& path) {
+    FileRecord r;
+    if (repo_->getByPath(path, r)) {
+        indexer_->reindexFile(path);
+        DS_INFO("Watcher", "Reindexing modified: " + path);
+    } else {
+        onFileAdded(path);  // might be a fresh file
+    }
+}
+
+void MainWindow::onFileRenamed(const QString& oldPath, const QString& newPath) {
+    repo_->deleteByPath(oldPath);
+    onFileAdded(newPath);
+    DS_INFO("Watcher", QString("Renamed: %1 -> %2").arg(oldPath, newPath));
+}
+
+void MainWindow::onFileDeleted(const QString& path) {
+    repo_->deleteByPath(path);
+    DS_INFO("Watcher", "Deleted: " + path);
+}
+
+// ============================================================
+// Saved searches
+// ============================================================
+void MainWindow::onSavedSearchSelected(const QString& name) {
+    auto list = repo_->savedSearches();
+    for (const auto& p : list) {
+        if (p.second == name) {
+            const QString q = repo_->savedSearchQuery(p.first);
+            searchBar_->setText(q);
+            onSearch(q);
+            return;
+        }
+    }
+}
+
+// ============================================================
+// Tags & notes
+// ============================================================
+void MainWindow::onTagAdded(qint64 fileId, const QString& tag)   { repo_->addTag(fileId, tag); }
+void MainWindow::onTagRemoved(qint64 fileId, const QString& tag) { repo_->removeTag(fileId, tag); }
+void MainWindow::onNoteChanged(qint64 fileId, const QString& note) { repo_->setNote(fileId, note); }
+
+// ============================================================
+// Settings & theme
+// ============================================================
+void MainWindow::onOpenSettings() {
+    SettingsDialog dlg(settings_, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        settings_ = dlg.result();
+        saveSettings();
+        applyTheme();
+        ocrPool_->setAppSettings(settings_);
+        if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
+            watcher_->stop();
+            watcher_->addWatches(settings_.indexedDrives);
+        }
+        // Restart indexing with new settings if currently running
+        if (indexer_->isRunning()) {
+            indexer_->stopIndexing();
+            QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
+        }
+    }
+}
+
+void MainWindow::onToggleTheme() {
+    settings_.darkMode = !settings_.darkMode;
+    saveSettings();
+    applyTheme();
+}
+
+void MainWindow::onAbout() {
+    QMessageBox::about(this, "About DocuSearch",
+        QString("<h3>%1 %2</h3>"
+                "<p>Offline Intelligent Document Search &amp; OCR System.</p>"
+                "<p>Built with C++20, Qt 6, SQLite + FTS5, Tesseract OCR, and Poppler.</p>"
+                "<p>Completely offline. No cloud. No telemetry.</p>")
+        .arg(Constants::kAppName, Constants::kAppVersion));
+}
+
+void MainWindow::onExportCsv() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export results as CSV", "docusearch_results.csv", "CSV (*.csv)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, "Export", "Cannot write to file.");
+        return;
+    }
+    QTextStream s(&f);
+    s.setEncoding(QStringConverter::Utf8);
+    s << "filename,path,extension,size,modified_date\n";
+    // Pull current results via re-running search
+    auto hits = search_->search(searchBar_->text(), 10000);
+    for (const auto& h : hits) {
+        s << "\"" << h.filename << "\","
+          << "\"" << h.path << "\","
+          << h.extension << ","
+          << h.size << ","
+          << h.modifiedDate.toString(Qt::ISODate) << "\n";
+    }
+    s.flush();
+    QMessageBox::information(this, "Export",
+        QString("Exported %1 rows to %2").arg(hits.size()).arg(path));
+}
+
+void MainWindow::onDetectDuplicates() {
+    auto groups = repo_->duplicatesByHash();
+    if (groups.isEmpty()) {
+        QMessageBox::information(this, "Duplicates", "No duplicates found by hash.");
+        return;
+    }
+    // Build a search-like results list
+    QList<SearchHit> hits;
+    for (const auto& g : groups) {
+        for (const auto id : g) {
+            FileRecord r;
+            if (repo_->getById(id, r)) {
+                SearchHit h;
+                h.fileId      = r.id;
+                h.path        = r.path;
+                h.filename    = r.filename;
+                h.extension   = r.extension;
+                h.size        = r.size;
+                h.modifiedDate= r.modifiedDate;
+                hits.append(h);
+            }
+        }
+    }
+    resultsPane_->setResults(hits);
+    statusBar()->showMessage(
+        QString("Found %1 duplicate groups (%2 files)").arg(groups.size()).arg(hits.size()));
+}
+
+} // namespace DocuSearch

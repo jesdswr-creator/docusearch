@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/">
+        <file>themes/dark.qss</file>
+        <file>themes/light.qss</file>
+        <file>images/splash.png</file>
+        <file>icons/DocuSearch-256.png</file>
+    </qresource>
+</RCC>

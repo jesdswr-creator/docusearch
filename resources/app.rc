@@ -1,0 +1,64 @@
+// ============================================================
+// app.rc — Windows resource script
+// ============================================================
+// Embeds the application manifest, multi-resolution app icon,
+// and the standard VERSIONINFO block into DocuSearch.exe.
+//
+// Resource IDs:
+//   1  = CREATEPROCESS_MANIFEST_RESOURCE_ID (the app manifest)
+//   24 = RT_MANIFEST (resource type for manifests)
+//   1  = IDI_APPLICATION (default icon resource ID for the app)
+//
+// Using literal numbers instead of the windows.h macros so this
+// works identically across MSVC rc.exe and MinGW windres.
+// ============================================================
+
+#include <windows.h>
+
+// ---- Application manifest (resource ID 1, type 24) ----------------------
+// The manifest must be at resource ID 1 for Windows to find it.
+1 RT_MANIFEST "DocuSearch.exe.manifest"
+
+// ---- Application icon (multi-resolution .ico) ---------------------------
+// IDI_APPICON = 1 (matches the default icon Windows looks for)
+1 ICON "icons/DocuSearch.ico"
+
+// ---- Version info --------------------------------------------------------
+#define VER_MAJOR 1
+#define VER_MINOR 0
+#define VER_PATCH 0
+#define VER_BUILD 0
+
+#define STRINGIFY2(x) #x
+#define STRINGIFY(x) STRINGIFY2(x)
+#define VER_FILE_STR STRINGIFY(VER_MAJOR) "." STRINGIFY(VER_MINOR) "." STRINGIFY(VER_PATCH) "." STRINGIFY(VER_BUILD)
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    VER_MAJOR, VER_MINOR, VER_PATCH, VER_BUILD
+PRODUCTVERSION VER_MAJOR, VER_MINOR, VER_PATCH, VER_BUILD
+FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+FILEFLAGS      0L
+FILEOS         VOS_NT_WINDOWS32
+FILETYPE       VFT_APP
+FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "DocuSearch"
+            VALUE "FileDescription",  "DocuSearch - Offline Document Search & OCR"
+            VALUE "FileVersion",      VER_FILE_STR
+            VALUE "InternalName",     "DocuSearch"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 DocuSearch. MIT-style license."
+            VALUE "OriginalFilename", "DocuSearch.exe"
+            VALUE "ProductName",      "DocuSearch"
+            VALUE "ProductVersion",   VER_FILE_STR
+            VALUE "Comments",         "Completely offline intelligent document search & OCR system for Windows 11."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

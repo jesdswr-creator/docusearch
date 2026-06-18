@@ -1,0 +1,9 @@
+/* DocuSearch — Light theme overrides.
+   The authoritative QSS is compiled into Theme.cpp; this file is shipped
+   purely as an editable override. To customise the light theme, uncomment
+   and edit the rules below — they will be applied after the built-in QSS. */
+
+/*
+QMainWindow, QWidget { background-color: #fafafa; }
+QPushButton { border-radius: 8px; }
+*/

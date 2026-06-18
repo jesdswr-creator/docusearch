@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================
+  AppxManifest.xml — MSIX package for Windows 11 sideloading
+  ============================================================
+
+  This manifest turns DocuSearch into a packaged MSIX app that can
+  be installed via PowerShell:
+
+      Add-AppxPackage DocuSearch-x64.msix
+
+  Benefits over the bare .exe:
+    * Clean uninstall (Windows removes all app data)
+    * App is listed in Settings → Apps with proper icon + publisher
+    * Sandboxed file system access (broader via the manifest's
+      capabilities below — needed for indexing D:\)
+    * Modern Windows 11 visual identity (icon, splash, tile)
+    * Ready for Microsoft Store submission (just sign + upload)
+
+  Packaging flow:
+
+      # 1. Build the exe + run windeployqt (build-release.ps1 does this)
+      # 2. Lay out files in a staging folder matching the AppxManifest
+      #    structure (DocuSearch.exe + Qt DLLs + assets + this manifest)
+      # 3. Generate the .msix with MakeAppx:
+      makeappx pack /d staging\ /p DocuSearch-x64.msix
+      # 4. Sign it with a self-signed cert (or a real code-signing cert):
+      signtool sign /fd SHA256 /a /f MyCert.pfx /p MyPassword DocuSearch-x64.msix
+
+  The build-release.ps1 script automates all four steps.
+
+  Capabilities (broadFileSystemAccess) is required so the indexer can
+  walk D:\, E:\, etc. The user is prompted by Windows to grant this on
+  first launch — Settings → Privacy → File system → DocuSearch.
+  ============================================================
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+    xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+    xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+    xmlns:uap7="http://schemas.microsoft.com/appx/manifest/uap/windows10/7"
+    IgnorableNamespaces="uap uap3 rescap desktop4 desktop5 com uap7">
+
+  <!-- ============================================================
+       Package identity
+       ============================================================ -->
+  <Identity
+      Name="DocuSearch.DocuSearch"
+      Publisher="CN=DocuSearch, O=DocuSearch, C=US"
+      Version="1.0.0.0"
+      ProcessorArchitecture="x64" />
+
+  <!-- ============================================================
+       Properties
+       ============================================================ -->
+  <Properties>
+    <DisplayName>DocuSearch</DisplayName>
+    <PublisherDisplayName>DocuSearch</PublisherDisplayName>
+    <Description>Offline Intelligent Document Search &amp; OCR System for Windows 11</Description>
+    <Logo>assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <!-- ============================================================
+       Resources (just en-US; expand for localization)
+       ============================================================ -->
+  <Resources>
+    <Resource Language="en-US" />
+  </Resources>
+
+  <!-- ============================================================
+       Dependencies — Windows 10 1809+ (for desktop bridge / MSIX)
+       ============================================================ -->
+  <Dependencies>
+    <TargetDeviceFamily
+        Name="Windows.Desktop"
+        MinVersion="10.0.17763.0"
+        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <!-- ============================================================
+       Capabilities
+       ============================================================ -->
+  <!-- broadFileSystemAccess: REQUIRED for indexing D:\ / E:\ / F:\
+       The user grants this in Settings → Privacy → File system. -->
+  <Capabilities>
+    <rescap:Capability Name="broadFileSystemAccess" />
+    <rescap:Capability Name="runFullTrust" />
+    <uap:Capability Name="documentsLibrary" />
+  </Capabilities>
+
+  <!-- ============================================================
+       Applications
+       ============================================================ -->
+  <Applications>
+    <Application
+        Id="DocuSearch"
+        Executable="DocuSearch.exe"
+        EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="DocuSearch"
+          Description="Offline Intelligent Document Search &amp; OCR System"
+          BackgroundColor="#1F1F1F"
+          Square150x150Logo="assets\Square150x150Logo.png"
+          Square44x44Logo="assets\Square44x44Logo.png">
+        <uap:DefaultTile
+            Wide310x150Logo="assets\Wide310x150Logo.png"
+            Square310x310Logo="assets\Square310x310Logo.png"
+            Square71x71Logo="assets\Square71x71Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen
+            Image="assets\SplashScreen.png"
+            BackgroundColor="#1F1F1F" />
+      </uap:VisualElements>
+
+      <!-- ============================================================
+           File type associations (.pdf, .docx, .xlsx, .pptx)
+           ============================================================ -->
+      <uap:Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pdf">
+            <uap:DisplayName>PDF Document</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pdf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="docx">
+            <uap:DisplayName>Word Document</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.docx</uap:FileType>
+              <uap:FileType>.doc</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="xlsx">
+            <uap:DisplayName>Excel Workbook</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.xlsx</uap:FileType>
+              <uap:FileType>.xls</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pptx">
+            <uap:DisplayName>PowerPoint</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pptx</uap:FileType>
+              <uap:FileType>.ppt</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </uap:Extensions>
+
+      <!-- ============================================================
+           Jump-list support (Win11 desktop5)
+           ============================================================ -->
+      <Extensions>
+        <desktop5:Extension
+            Category="windows.appUserModelId"
+            Executable="DocuSearch.exe"
+            EntryPoint="Windows.FullTrustApplication">
+          <desktop5:AppUserModelId
+              DisplayName="DocuSearch"
+              ActivatedByShellShortcut="true" />
+        </desktop5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <!-- ============================================================
+       Package extensions
+       ============================================================ -->
+  <Extensions>
+    <!-- COM class registration if needed for shell integration -->
+    <com:Extension Category="windows.comServer">
+      <com:ComServer>
+        <com:SurrogateServer DisplayName="DocuSearch Shell Integration">
+          <com:Class Id="00000000-0000-0000-0000-000000000000"
+                      Path="DocuSearch.exe" />
+        </com:SurrogateServer>
+      </com:ComServer>
+    </com:Extension>
+  </Extensions>
+</Package>

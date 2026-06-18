@@ -1,0 +1,260 @@
+=== tst_FileRepository ===
+********* Start testing of TestFileRepository *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+INFO   : TestFileRepository::initTestCase() entering
+PASS   : TestFileRepository::initTestCase()
+INFO   : TestFileRepository::upsertFile_inserts() entering
+INFO   : TestFileRepository::upsertFile_inserts() QVERIFY(setup(db, repo))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(90)]
+INFO   : TestFileRepository::upsertFile_inserts() QVERIFY(id > 0)
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(94)]
+INFO   : TestFileRepository::upsertFile_inserts() QCOMPARE(repo->totalFiles(), qint64(1))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(95)]
+PASS   : TestFileRepository::upsertFile_inserts()
+INFO   : TestFileRepository::upsertFile_idempotentOnSamePath() entering
+INFO   : TestFileRepository::upsertFile_idempotentOnSamePath() QVERIFY(setup(db, repo))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(100)]
+INFO   : TestFileRepository::upsertFile_idempotentOnSamePath() QCOMPARE(id1, id2)
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(106)]
+INFO   : TestFileRepository::upsertFile_idempotentOnSamePath() QCOMPARE(repo->totalFiles(), qint64(1))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(107)]
+PASS   : TestFileRepository::upsertFile_idempotentOnSamePath()
+INFO   : TestFileRepository::upsertFile_updatesOnNewerModification() entering
+INFO   : TestFileRepository::upsertFile_updatesOnNewerModification() QVERIFY(setup(db, repo))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(112)]
+INFO   : TestFileRepository::upsertFile_updatesOnNewerModification() QVERIFY(repo->getByPath("D:\\Docs\\report.pdf", out))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(124)]
+INFO   : TestFileRepository::upsertFile_updatesOnNewerModification() QCOMPARE(out.size, qint64(200))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(125)]
+PASS   : TestFileRepository::upsertFile_updatesOnNewerModification()
+INFO   : TestFileRepository::getByPath_returnsFalseIfMissing() entering
+INFO   : TestFileRepository::getByPath_returnsFalseIfMissing() QVERIFY(setup(db, repo))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(130)]
+INFO   : TestFileRepository::getByPath_returnsFalseIfMissing() QVERIFY(!repo->getByPath("C:\\nonexistent.txt", out))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(133)]
+PASS   : TestFileRepository::getByPath_returnsFalseIfMissing()
+INFO   : TestFileRepository::getById_roundtrip() entering
+INFO   : TestFileRepository::getById_roundtrip() QVERIFY(setup(db, repo))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(138)]
+INFO   : TestFileRepository::getById_roundtrip() QVERIFY(id > 0)
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(142)]
+INFO   : TestFileRepository::getById_roundtrip() QVERIFY(repo->getById(id, out))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(145)]
+INFO   : TestFileRepository::getById_roundtrip() QCOMPARE(out.path, QString("D:\\Docs\\file.docx"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(146)]
+INFO   : TestFileRepository::getById_roundtrip() QCOMPARE(out.filename, QString("file.docx"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(147)]
+INFO   : TestFileRepository::getById_roundtrip() QCOMPARE(out.extension, QString("docx"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileRepository.cpp(148)]
+PASS   : TestFileRepository::getById_roundtrip()
+INFO   : TestFileRepository::updateContent_insertsDocumentText() entering
+INFO   : TestFileRepository::updateContent_insertsDocumentText() QVERIFY(setup(db, repo))
+
+=== tst_FileUtils ===
+********* Start testing of TestFileUtils *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+INFO   : TestFileUtils::initTestCase() entering
+PASS   : TestFileUtils::initTestCase()
+INFO   : TestFileUtils::extensionOf_basic() entering
+INFO   : TestFileUtils::extensionOf_basic() QCOMPARE(extensionOf("foo.pdf"), QString("pdf"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(37)]
+INFO   : TestFileUtils::extensionOf_basic() QCOMPARE(extensionOf("foo.TXT"), QString("txt"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(38)]
+INFO   : TestFileUtils::extensionOf_basic() QCOMPARE(extensionOf("foo.tar.gz"), QString("gz"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(39)]
+PASS   : TestFileUtils::extensionOf_basic()
+INFO   : TestFileUtils::extensionOf_noDot() entering
+INFO   : TestFileUtils::extensionOf_noDot() QVERIFY(extensionOf("README").isEmpty())
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(42)]
+PASS   : TestFileUtils::extensionOf_noDot()
+INFO   : TestFileUtils::extensionOf_trailingDot() entering
+INFO   : TestFileUtils::extensionOf_trailingDot() QCOMPARE(extensionOf("foo."), QString(""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(46)]
+PASS   : TestFileUtils::extensionOf_trailingDot()
+INFO   : TestFileUtils::extensionOf_pathWithDots() entering
+INFO   : TestFileUtils::extensionOf_pathWithDots() QCOMPARE(extensionOf("C:/my.folder/file.txt"), QString("txt"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(50)]
+PASS   : TestFileUtils::extensionOf_pathWithDots()
+INFO   : TestFileUtils::extensionOf_directorySeparator() entering
+INFO   : TestFileUtils::extensionOf_directorySeparator() QVERIFY(extensionOf("foo.bar/baz").isEmpty())
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(54)]
+PASS   : TestFileUtils::extensionOf_directorySeparator()
+INFO   : TestFileUtils::hasExtension_match() entering
+INFO   : TestFileUtils::hasExtension_match() QVERIFY(hasExtension("foo.pdf", {"pdf", "doc"}))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(60)]
+PASS   : TestFileUtils::hasExtension_match()
+INFO   : TestFileUtils::hasExtension_caseInsensitive() entering
+INFO   : TestFileUtils::hasExtension_caseInsensitive() QVERIFY(hasExtension("FOO.PDF", {"pdf"}))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(63)]
+PASS   : TestFileUtils::hasExtension_caseInsensitive()
+INFO   : TestFileUtils::hasExtension_noMatch() entering
+INFO   : TestFileUtils::hasExtension_noMatch() QVERIFY(!hasExtension("foo.zip", {"pdf", "doc"}))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(66)]
+PASS   : TestFileUtils::hasExtension_noMatch()
+INFO   : TestFileUtils::isUnderAny_match() entering
+INFO   : TestFileUtils::isUnderAny_match() QVERIFY(isUnderAny("D:\\Movies\\movie.mp4", {"D:\\Movies"}))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(72)]
+PASS   : TestFileUtils::isUnderAny_match()
+INFO   : TestFileUtils::isUnderAny_subfolder() entering
+INFO   : TestFileUtils::isUnderAny_subfolder() QVERIFY(isUnderAny("D:\\Games\\Steam\\foo.exe", {"D:\\Games"}))
+   Loc: [/home/z/my-project/docusearch/tests/tst_FileUtils.cpp(76)]
+PASS   : TestFileUtils::isUnderAny_subfolder()
+INFO   : TestFileUtils::isUnderAny_noMatch() entering
+INFO   : TestFileUtils::isUnderAny_noMatch() QVERIFY(!isUnderAny("D:\\Docs\\file.pdf", {"D:\\Movies", "D:\\Games"}))
+
+=== tst_PriorityScheduler ===
+********* Start testing of TestPriorityScheduler *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+INFO   : TestPriorityScheduler::initTestCase() entering
+PASS   : TestPriorityScheduler::initTestCase()
+INFO   : TestPriorityScheduler::today_isP1() entering
+INFO   : TestPriorityScheduler::today_isP1() QCOMPARE(PriorityScheduler::compute(now, "pdf"), IndexPriority::P1_Recent30Days)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(30)]
+PASS   : TestPriorityScheduler::today_isP1()
+INFO   : TestPriorityScheduler::yesterday_isP1() entering
+INFO   : TestPriorityScheduler::yesterday_isP1() QCOMPARE(PriorityScheduler::compute(y, "docx"), IndexPriority::P1_Recent30Days)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(35)]
+PASS   : TestPriorityScheduler::yesterday_isP1()
+INFO   : TestPriorityScheduler::boundary_30days_isP1() entering
+INFO   : TestPriorityScheduler::boundary_30days_isP1() QCOMPARE(PriorityScheduler::compute(d, "txt"), IndexPriority::P1_Recent30Days)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(40)]
+PASS   : TestPriorityScheduler::boundary_30days_isP1()
+INFO   : TestPriorityScheduler::thirtyOneDays_isP2() entering
+INFO   : TestPriorityScheduler::thirtyOneDays_isP2() QCOMPARE(PriorityScheduler::compute(d, "pdf"), IndexPriority::P2_LastYear)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(48)]
+PASS   : TestPriorityScheduler::thirtyOneDays_isP2()
+INFO   : TestPriorityScheduler::sixMonths_isP2() entering
+INFO   : TestPriorityScheduler::sixMonths_isP2() QCOMPARE(PriorityScheduler::compute(d, "xlsx"), IndexPriority::P2_LastYear)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(53)]
+PASS   : TestPriorityScheduler::sixMonths_isP2()
+INFO   : TestPriorityScheduler::boundary_365days_isP2() entering
+INFO   : TestPriorityScheduler::boundary_365days_isP2() QCOMPARE(PriorityScheduler::compute(d, "pptx"), IndexPriority::P2_LastYear)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(58)]
+PASS   : TestPriorityScheduler::boundary_365days_isP2()
+INFO   : TestPriorityScheduler::oneYearAndADay_isP3() entering
+INFO   : TestPriorityScheduler::oneYearAndADay_isP3() QCOMPARE(PriorityScheduler::compute(d, "pdf"), IndexPriority::P3_Older)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(66)]
+PASS   : TestPriorityScheduler::oneYearAndADay_isP3()
+INFO   : TestPriorityScheduler::tenYears_isP3() entering
+INFO   : TestPriorityScheduler::tenYears_isP3() QCOMPARE(PriorityScheduler::compute(d, "txt"), IndexPriority::P3_Older)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(71)]
+PASS   : TestPriorityScheduler::tenYears_isP3()
+INFO   : TestPriorityScheduler::ancientDate_isP3() entering
+INFO   : TestPriorityScheduler::ancientDate_isP3() QCOMPARE(PriorityScheduler::compute(old, "pdf"), IndexPriority::P3_Older)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(76)]
+PASS   : TestPriorityScheduler::ancientDate_isP3()
+INFO   : TestPriorityScheduler::zip_isP4_regardlessOfDate() entering
+INFO   : TestPriorityScheduler::zip_isP4_regardlessOfDate() QCOMPARE(PriorityScheduler::compute(now, "zip"), IndexPriority::P4_Archives)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(83)]
+PASS   : TestPriorityScheduler::zip_isP4_regardlessOfDate()
+INFO   : TestPriorityScheduler::rar_isP4() entering
+INFO   : TestPriorityScheduler::rar_isP4() QCOMPARE(PriorityScheduler::compute(now, "rar"), IndexPriority::P4_Archives)
+   Loc: [/home/z/my-project/docusearch/tests/tst_PriorityScheduler.cpp(87)]
+PASS   : TestPriorityScheduler::rar_isP4()
+INFO   : TestPriorityScheduler::sevenZ_isP4() entering
+INFO   : TestPriorityScheduler::sevenZ_isP4() QCOMPARE(PriorityScheduler::compute(now, "7z"), IndexPriority::P4_Archives)
+
+=== tst_QueryParser ===
+********* Start testing of TestQueryParser *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+INFO   : TestQueryParser::initTestCase() entering
+PASS   : TestQueryParser::initTestCase()
+INFO   : TestQueryParser::emptyQuery() entering
+INFO   : TestQueryParser::emptyQuery() QVERIFY(q.valid)
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(28)]
+INFO   : TestQueryParser::emptyQuery() QVERIFY(q.ftsQuery.isEmpty())
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(29)]
+PASS   : TestQueryParser::emptyQuery()
+INFO   : TestQueryParser::whitespaceOnly() entering
+INFO   : TestQueryParser::whitespaceOnly() QVERIFY(q.valid)
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(33)]
+INFO   : TestQueryParser::whitespaceOnly() QVERIFY(q.ftsQuery.isEmpty())
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(34)]
+PASS   : TestQueryParser::whitespaceOnly()
+INFO   : TestQueryParser::singleWord() entering
+INFO   : TestQueryParser::singleWord() QVERIFY(q.valid)
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(41)]
+INFO   : TestQueryParser::singleWord() QVERIFY(q.ftsQuery.contains("\"NOC\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(42)]
+PASS   : TestQueryParser::singleWord()
+INFO   : TestQueryParser::multipleWords() entering
+INFO   : TestQueryParser::multipleWords() QVERIFY(q.ftsQuery.contains("\"NOC\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(46)]
+INFO   : TestQueryParser::multipleWords() QVERIFY(q.ftsQuery.contains("\"examination\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(47)]
+PASS   : TestQueryParser::multipleWords()
+INFO   : TestQueryParser::quotedPhrase() entering
+INFO   : TestQueryParser::quotedPhrase() QVERIFY(q.ftsQuery.contains("\"Station Development\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(55)]
+PASS   : TestQueryParser::quotedPhrase()
+INFO   : TestQueryParser::phraseWithInternalQuotes() entering
+INFO   : TestQueryParser::phraseWithInternalQuotes() QVERIFY(q.ftsQuery.contains("\"a\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(64)]
+INFO   : TestQueryParser::phraseWithInternalQuotes() QVERIFY(q.ftsQuery.contains("\"b\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(65)]
+PASS   : TestQueryParser::phraseWithInternalQuotes()
+INFO   : TestQueryParser::booleanAnd() entering
+INFO   : TestQueryParser::booleanAnd() QVERIFY(q.ftsQuery.contains("AND"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(72)]
+PASS   : TestQueryParser::booleanAnd()
+INFO   : TestQueryParser::booleanOr() entering
+INFO   : TestQueryParser::booleanOr() QVERIFY(q.ftsQuery.contains("OR"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(76)]
+PASS   : TestQueryParser::booleanOr()
+INFO   : TestQueryParser::booleanNot() entering
+INFO   : TestQueryParser::booleanNot() QVERIFY(q.ftsQuery.contains("NOT"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_QueryParser.cpp(80)]
+PASS   : TestQueryParser::booleanNot()
+
+=== tst_StringUtils ===
+********* Start testing of TestStringUtils *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 14.2.0), debian 13
+INFO   : TestStringUtils::initTestCase() entering
+PASS   : TestStringUtils::initTestCase()
+INFO   : TestStringUtils::normalize_lowercases() entering
+INFO   : TestStringUtils::normalize_lowercases() QCOMPARE(normalize("Hello WORLD"), QString("hello world"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(35)]
+PASS   : TestStringUtils::normalize_lowercases()
+INFO   : TestStringUtils::normalize_stripsAccents() entering
+INFO   : TestStringUtils::normalize_stripsAccents() QCOMPARE(normalize(QString::fromUtf8("café résumé")), QString("cafe resume"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(39)]
+PASS   : TestStringUtils::normalize_stripsAccents()
+INFO   : TestStringUtils::normalize_collapsesWhitespace() entering
+INFO   : TestStringUtils::normalize_collapsesWhitespace() QCOMPARE(normalize("  foo   bar  \n\t baz "), QString("foo bar baz"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(42)]
+PASS   : TestStringUtils::normalize_collapsesWhitespace()
+INFO   : TestStringUtils::normalize_empty() entering
+INFO   : TestStringUtils::normalize_empty() QCOMPARE(normalize(""), QString(""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(45)]
+PASS   : TestStringUtils::normalize_empty()
+INFO   : TestStringUtils::toLowerAscii_asciiOnly() entering
+INFO   : TestStringUtils::toLowerAscii_asciiOnly() QCOMPARE(toLowerAscii("ABC123xyz"), QString("abc123xyz"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(51)]
+PASS   : TestStringUtils::toLowerAscii_asciiOnly()
+INFO   : TestStringUtils::toLowerAscii_preservesCJK() entering
+INFO   : TestStringUtils::toLowerAscii_preservesCJK() QVERIFY(out.contains(QString::fromUtf8("文件")))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(57)]
+INFO   : TestStringUtils::toLowerAscii_preservesCJK() QVERIFY(out.contains("name.pdf"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(58)]
+PASS   : TestStringUtils::toLowerAscii_preservesCJK()
+INFO   : TestStringUtils::fts5Quote_plain() entering
+INFO   : TestStringUtils::fts5Quote_plain() QCOMPARE(fts5Quote("hello"), QString("\"hello\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(64)]
+PASS   : TestStringUtils::fts5Quote_plain()
+INFO   : TestStringUtils::fts5Quote_doublesInternalQuotes() entering
+INFO   : TestStringUtils::fts5Quote_doublesInternalQuotes() QCOMPARE(fts5Quote("a\"b"), QString("\"a\"\"b\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(68)]
+PASS   : TestStringUtils::fts5Quote_doublesInternalQuotes()
+INFO   : TestStringUtils::fts5Quote_empty() entering
+INFO   : TestStringUtils::fts5Quote_empty() QCOMPARE(fts5Quote(""), QString("\"\""))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(71)]
+PASS   : TestStringUtils::fts5Quote_empty()
+INFO   : TestStringUtils::snippetAround_findsMatch() entering
+INFO   : TestStringUtils::snippetAround_findsMatch() QVERIFY(snip.contains("brown"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(79)]
+INFO   : TestStringUtils::snippetAround_findsMatch() QVERIFY(snip.startsWith("…"))
+   Loc: [/home/z/my-project/docusearch/tests/tst_StringUtils.cpp(80)]
+PASS   : TestStringUtils::snippetAround_findsMatch()
+INFO   : TestStringUtils::snippetAround_noMatch_returnsHead() entering
+INFO   : TestStringUtils::snippetAround_noMatch_returnsHead() QVERIFY(!snip.isEmpty())
+

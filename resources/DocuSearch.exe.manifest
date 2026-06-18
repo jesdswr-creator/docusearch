@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  DocuSearch.exe.manifest — Windows application manifest
+  ============================================================
+  Minimal, known-good manifest that Windows' SxS loader accepts.
+  Includes only elements defined in the official manifest schema:
+    - Common Controls v6 dependency (visual styles)
+    - asInvoker execution level (no UAC prompt)
+    - supportedOS GUIDs (Win 7..11)
+    - PerMonitorV2 DPI awareness
+    - UTF-8 active code page
+    - Dark title bar attribute (Win11)
+
+  File type associations are NOT in the manifest — they're
+  registered via the WiX installer's ProgID registry keys for
+  the MSI build, and via the MSIX AppxManifest for the packaged
+  build. Putting them in the SxS manifest makes Windows reject
+  the whole manifest.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+      type="win32"
+      name="DocuSearch.DocuSearch"
+      version="1.0.0.0"
+      processorArchitecture="*"/>
+
+  <!-- Common Controls v6 (Visual Styles — modern widget rendering) -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+          type="win32"
+          name="Microsoft.Windows.Common-Controls"
+          version="6.0.0.0"
+          processorArchitecture="*"
+          publicKeyToken="6595b64144ccf1df"
+          language="*"/>
+    </dependentAssembly>
+  </dependency>
+
+  <!-- Trust info: run with the invoking user's privileges (no UAC prompt) -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!-- Application compatibility: opt in to Windows 7..11 behaviour -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6fc0e31}"/>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+    </application>
+  </compatibility>
+
+  <!-- Application-level Windows settings (DPI, code page, dark title bar) -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <gdiScaling xmlns="http://schemas.microsoft.com/SMI/2017/WindowsSettings">true</gdiScaling>
+    </windowsSettings>
+  </application>
+</assembly>
