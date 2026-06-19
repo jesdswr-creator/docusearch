@@ -20,10 +20,10 @@
 #   .\scripts\build-release.ps1 -Clean -RunTests -MakeMsi    # clean + tests + MSI
 #
 # Required environment:
-#   $env:VCPKG_ROOT   — path to vcpkg checkout
-#   $env:QtPath       — e.g. C:\Qt\6.7.0\msvc2022_64  (or pass -QtPath)
-#   WiX v4 (`wix` dotnet tool)         — only for -MakeMsi
-#   Windows SDK (MakeAppx + signtool)  — only for -MakeMsix / -Sign
+#   $env:VCPKG_ROOT   - path to vcpkg checkout
+#   $env:QtPath       - e.g. C:\Qt\6.7.0\msvc2022_64  (or pass -QtPath)
+#   WiX v4 (`wix` dotnet tool)         - only for -MakeMsi
+#   Windows SDK (MakeAppx + signtool)  - only for -MakeMsix / -Sign
 # ============================================================
 
 param(
@@ -59,7 +59,7 @@ $exe          = Join-Path $buildOutput "DocuSearch.exe"
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host " DocuSearch — Windows 11 Release Builder"      -ForegroundColor Cyan
+Write-Host " DocuSearch - Windows 11 Release Builder"      -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host " Project root : $projectRoot"
 Write-Host " Build dir    : $BuildDir"
@@ -121,7 +121,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "windeployqt failed"; exit 1 }
 
 # Also copy the DocuSearch icon + themes next to the exe (windeployqt
 # doesn't see Qt resources embedded via RCC, but having the loose
-# files on disk makes Settings → Edit theme overrides work).
+# files on disk makes Settings -> Edit theme overrides work).
 $themesSrc = Join-Path $projectRoot "resources\themes"
 $themesDst = Join-Path $buildOutput "themes"
 if (-not (Test-Path $themesDst)) { New-Item -ItemType Directory -Path $themesDst | Out-Null }
@@ -172,7 +172,7 @@ if ($MakeMsi) {
     #     heat.exe walks BinFolder\*.* and emits <File> elements.
     $heatExe = (Get-Command heat.exe -ErrorAction SilentlyContinue).Source
     if (-not $heatExe) {
-        Write-Warning "heat.exe not on PATH — skipping auto-harvest."
+        Write-Warning "heat.exe not on PATH - skipping auto-harvest."
         Write-Warning "If DocuSearch.Harvest.wxi is missing, the MSI build will fail."
     } else {
         $harvestFile = Join-Path $wixWork "DocuSearch.Harvest.wxi"
@@ -269,7 +269,7 @@ if ($MakeMsix) {
         }
         Write-Host "      Generated MSIX assets." -ForegroundColor DarkGray
     } else {
-        Write-Warning "Master icon $masterPng not found — MSIX assets will be missing."
+        Write-Warning "Master icon $masterPng not found - MSIX assets will be missing."
     }
 
     # 7b. Stage the MSIX layout
