@@ -14,6 +14,8 @@
 #include <QApplication>
 #include <QStyleFactory>
 
+using namespace DocuSearch;
+
 int main(int argc, char* argv[]) {
     QApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
