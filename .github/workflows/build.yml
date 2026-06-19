@@ -44,9 +44,6 @@ jobs:
           pip install aqtinstall
           Write-Host "=== Available architectures for Qt $env:QT_VERSION ==="
           python -m aqt list-qt windows desktop --arch $env:QT_VERSION
-          # Install Qt — using win64_msvc2019_64 because Qt 6.7.3 doesn't have
-          # a win64_msvc2022_64 binary on the official Qt mirror. The MSVC2019
-          # Qt binary is ABI-compatible with the MSVC2022 compiler.
           python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
           $msvcRoot = "C:\Qt\$env:QT_VERSION\$env:QT_ARCH"
           if (-not (Test-Path $msvcRoot)) {
@@ -55,36 +52,19 @@ jobs:
           if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
           $qtBin = Join-Path $msvcRoot "bin"
           Write-Host "Qt root: $msvcRoot"
-          Write-Host "Contents of Qt bin dir:"
           Get-ChildItem $qtBin -Filter "Qt6*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
           Get-ChildItem $qtBin -Filter "windeployqt*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "QtInstallDir=$msvcRoot" >> $env:GITHUB_ENV
           echo "$qtBin" >> $env:GITHUB_PATH
 
-      - name: Cache vcpkg
-        uses: actions/cache@v5
-        with:
-          path: |
-            C:\vcpkg\installed
-            ~/.cache/vcpkg
-          key: vcpkg-win-v2
-          restore-keys: |
-            vcpkg-win-
-
-      - name: Install vcpkg
+      - name: Set up vcpkg
         shell: pwsh
         run: |
-          if (-not (Test-Path "C:\vcpkg")) {
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          }
-          & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          # Use the vcpkg pre-installed on GitHub-hosted Windows runners
+          # (C:\vcpkg). It's already bootstrapped.
           echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
           echo "C:\vcpkg" >> $env:GITHUB_PATH
-
-      - name: Install C++ libraries via vcpkg
-        shell: pwsh
-        run: |
-          & C:\vcpkg\vcpkg.exe install sqlite3[fts5]:x64-windows tesseract:x64-windows leptonica:x64-windows poppler:x64-windows zlib:x64-windows
+          & C:\vcpkg\vcpkg.exe --version
 
       - name: Install WiX v4
         shell: pwsh
@@ -92,10 +72,22 @@ jobs:
           dotnet tool install -g wix
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
 
-      - name: Configure CMake
+      # NOTE: vcpkg dependencies (sqlite3, tesseract, leptonica, poppler, zlib)
+      # are installed automatically by CMake via the vcpkg manifest (vcpkg.json)
+      # when we configure with -DCMAKE_TOOLCHAIN_FILE=vcpkg.cmake. No need for
+      # a separate `vcpkg install` step.
+
+      - name: Configure CMake (this also installs vcpkg deps from vcpkg.json)
         shell: pwsh
         run: |
-          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" -DCMAKE_PREFIX_PATH="$env:QtInstallDir" -DVCPKG_TARGET_TRIPLET=x64-windows -DDOCUSEARCH_BUILD_TESTS=ON
+          cmake -B build -S . `
+            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DVCPKG_MANIFEST_MODE=ON `
+            -DDOCUSEARCH_BUILD_TESTS=ON
+          Write-Host "=== vcpkg installed packages ==="
+          & C:\vcpkg\vcpkg.exe list
 
       - name: Build (Release)
         shell: pwsh
