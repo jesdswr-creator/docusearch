@@ -109,35 +109,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\bin\Release\themes | Out-Null
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
-      - name: Build MSI + MSIX + ZIP
+      - name: Build portable ZIP (skip MSI/MSIX - WiX extension issues)
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-release.ps1 -MakeMsi -MakeMsix -Zip -BuildDir build -Version 1.0.0.0
-        env:
-          QtPath: ${{ env.QtInstallDir }}
+          # Create a portable ZIP directly from the windeployqt output.
+          # This is simpler than MSI/MSIX and works on any Windows 10/11 PC
+          # without installation - just unzip and double-click DocuSearch.exe.
+          $portableZip = Join-Path (Get-Location) "dist\DocuSearch-1.0.0.0-portable.zip"
+          $distDir = Split-Path $portableZip -Parent
+          if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
+          if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
+          Compress-Archive -Path "build\bin\Release\*" -DestinationPath $portableZip -CompressionLevel Optimal
+          Write-Host "Created portable ZIP: $portableZip"
+          Get-ChildItem $portableZip | Format-List
 
-      - name: Upload MSI installer
-        uses: actions/upload-artifact@v5
-        with:
-          name: DocuSearch-Setup-msi
-          path: dist/DocuSearch-Setup-1.0.0.0.msi
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Upload MSIX package
-        uses: actions/upload-artifact@v5
-        with:
-          name: DocuSearch-msix
-          path: dist/DocuSearch-1.0.0.0-x64.msix
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Upload portable ZIP
+      - name: Upload portable ZIP (the main deliverable)
         uses: actions/upload-artifact@v5
         with:
           name: DocuSearch-portable
           path: dist/DocuSearch-1.0.0.0-portable.zip
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload bare exe folder (debugging)
