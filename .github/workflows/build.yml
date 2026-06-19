@@ -2,14 +2,19 @@ name: Build DocuSearch
 
 on:
   push:
-    branches: [main, master]
-    tags: ['v*']
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
   pull_request:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.7.3'
+  QT_VERSION: '6.7.0'
 
 jobs:
   build-windows:
@@ -36,16 +41,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install aqtinstall
-          $qtDir = "C:\Qt"
-          Write-Host "Installing Qt $env:QT_VERSION win64_msvc2022_64 to $qtDir"
-          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtcore qtgui qtwidgets qtconcurrent qtsql qtnetwork qtsvg -O $qtDir
-          $qtRoot = Get-ChildItem "$qtDir\*" -Directory | Select-Object -First 1 -ExpandProperty FullName
-          $msvcRoot = Join-Path $qtRoot "msvc2022_64"
-          Write-Host "Qt MSVC root: $msvcRoot"
-          if (-not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found at $msvcRoot" }
+          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtsvg -O C:\Qt
+          $msvcRoot = "C:\Qt\$env:QT_VERSION\msvc2022_64"
+          if (-not (Test-Path $msvcRoot)) {
+            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc2022_64" -Directory -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
           $qtBin = Join-Path $msvcRoot "bin"
+          Write-Host "Qt root: $msvcRoot"
+          Get-ChildItem $qtBin -Filter "Qt6*" | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "QtInstallDir=$msvcRoot" >> $env:GITHUB_ENV
-          echo "Qt5_DIR=$msvcRoot" >> $env:GITHUB_ENV
           echo "$qtBin" >> $env:GITHUB_PATH
 
       - name: Cache vcpkg
@@ -54,7 +59,7 @@ jobs:
           path: |
             C:\vcpkg\installed
             ~/.cache/vcpkg
-          key: vcpkg-win-${{ hashFiles('vcpkg.json') }}-v2
+          key: vcpkg-win-v2
           restore-keys: |
             vcpkg-win-
 
@@ -71,12 +76,7 @@ jobs:
       - name: Install C++ libraries via vcpkg
         shell: pwsh
         run: |
-          & C:\vcpkg\vcpkg.exe install `
-            sqlite3[fts5]:x64-windows `
-            tesseract:x64-windows `
-            leptonica:x64-windows `
-            poppler:x64-windows `
-            zlib:x64-windows
+          & C:\vcpkg\vcpkg.exe install sqlite3[fts5]:x64-windows tesseract:x64-windows leptonica:x64-windows poppler:x64-windows zlib:x64-windows
 
       - name: Install WiX v4
         shell: pwsh
@@ -87,11 +87,7 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -B build -S . `
-            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows `
-            -DDOCUSEARCH_BUILD_TESTS=ON
+          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" -DCMAKE_PREFIX_PATH="$env:QtInstallDir" -DVCPKG_TARGET_TRIPLET=x64-windows -DDOCUSEARCH_BUILD_TESTS=ON
 
       - name: Build (Release)
         shell: pwsh
