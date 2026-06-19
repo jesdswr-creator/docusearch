@@ -142,16 +142,19 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     refreshSavedSearches();
-    statusBar()->showMessage("Ready. Select drives in Settings → Indexing to begin.");
+    statusBar()->showMessage("Ready. Select drives in Settings -> Indexing to begin.");
 
-    // Auto-start indexing if drives are configured
-    if (!settings_.indexedDrives.isEmpty()) {
-        QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
-    }
-    // Start file monitoring if enabled
-    if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
-        watcher_->addWatches(settings_.indexedDrives);
-    }
+    // Auto-start indexing DISABLED for now — the OCR worker pool crashes
+    // when Tesseract isn't linked, which kills the app. Users can start
+    // indexing manually via the Index menu once we confirm the window stays open.
+    // if (!settings_.indexedDrives.isEmpty()) {
+    //     QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
+    // }
+
+    // File monitoring also disabled for now — same crash risk.
+    // if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
+    //     watcher_->addWatches(settings_.indexedDrives);
+    // }
 }
 
 MainWindow::~MainWindow() {
