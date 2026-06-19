@@ -43,7 +43,10 @@ signals:
     void logMessage(const QString& msg);
 
 #ifdef Q_OS_WIN
+public:
     // Public so the WatchThread helper class in FileWatcher.cpp can access it.
+    // MUST be under 'public:' (not after 'signals:') or moc will try to parse
+    // the struct fields as signal declarations and fail.
     struct WatchCtx {
         HANDLE      dirHandle = INVALID_HANDLE_VALUE;
         HANDLE      overlapped = nullptr;  // OVERLAPPED event handle
