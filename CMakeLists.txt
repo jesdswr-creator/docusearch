@@ -249,6 +249,11 @@ if(WIN32)
     if(MSVC)
         set_source_files_properties(${APP_RC} PROPERTIES
             COMPILE_FLAGS "/utf-8 /nologo")
+        # CRITICAL: app.rc already embeds the manifest via RT_MANIFEST.
+        # Tell the MSVC linker to NOT also generate and embed a default
+        # manifest (otherwise we get CVTRES CVT1100: duplicate resource).
+        set_target_properties(DocuSearch PROPERTIES
+            LINK_FLAGS "/MANIFEST:NO")
     endif()
 endif()
 
