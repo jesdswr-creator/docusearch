@@ -7,9 +7,6 @@
       "name": "sqlite3",
       "features": ["fts5"]
     },
-    "tesseract",
-    "leptonica",
-    "poppler",
     "zlib"
   ],
   "features": {

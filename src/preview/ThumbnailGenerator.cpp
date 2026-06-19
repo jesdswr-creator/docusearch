@@ -11,13 +11,13 @@
 #include <QDir>
 #include <QCryptographicHash>
 #include <QImageReader>
-#include <type_traits>
-#include <memory>
 
 #ifdef DOCUSEARCH_HAS_POPPLER
 #  include <poppler-document.h>
 #  include <poppler-page.h>
 #  include <poppler-page-renderer.h>
+#  include <type_traits>
+#  include <memory>
 #endif
 
 namespace DocuSearch {
@@ -61,9 +61,9 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
                     poppler::page_renderer renderer;
                     renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
                     const int dpi = 96;
-                    // render_page takes a poppler::page*.
-                    // Depending on poppler version, create_page() returns either
-                    // std::unique_ptr<poppler::page> or poppler::page* directly.
+                    // render_page takes poppler::page*. Depending on Poppler
+                    // version, create_page() returns either unique_ptr<page>
+                    // or page* directly. Handle both with 'if constexpr'.
                     using PageType = std::decay_t<decltype(page)>;
                     poppler::page* pagePtr = nullptr;
                     if constexpr (std::is_same_v<PageType, std::unique_ptr<poppler::page>>) {
@@ -71,9 +71,12 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
                     } else {
                         pagePtr = page;
                     }
-                    const auto img_data = renderer.render_page(pagePtr, dpi, dpi);
+                    auto img_data = renderer.render_page(pagePtr, dpi, dpi);
                     if (!img_data.is_valid()) return {};
-                    QImage tmp(reinterpret_cast<const uchar*>(img_data.data()),
+                    // img_data.data() returns non-const char* in some versions,
+                    // const char* in others. Cast away const if needed.
+                    char* dataPtr = const_cast<char*>(img_data.data());
+                    QImage tmp(reinterpret_cast<const uchar*>(dataPtr),
                                img_data.width(), img_data.height(),
                                img_data.bytes_per_row(),
                                QImage::Format_ARGB32);

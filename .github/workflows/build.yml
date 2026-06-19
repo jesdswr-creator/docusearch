@@ -85,7 +85,9 @@ jobs:
             -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DVCPKG_MANIFEST_MODE=ON `
-            -DDOCUSEARCH_BUILD_TESTS=ON
+            -DDOCUSEARCH_BUILD_TESTS=ON `
+            -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
+            -DDOCUSEARCH_ENABLE_POPPLER=OFF
           Write-Host "=== vcpkg installed packages ==="
           & C:\vcpkg\vcpkg.exe list
 

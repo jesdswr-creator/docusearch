@@ -36,6 +36,13 @@ endif()
 # ============================================================
 # Find dependencies
 # ============================================================
+
+# Options to disable Tesseract/Poppler entirely (they cause API issues
+# with some vcpkg versions). With both OFF, the app still works — just
+# without OCR and without PDF text extraction (PDFs flag as needsOcr).
+option(DOCUSEARCH_ENABLE_TESSERACT "Link Tesseract OCR engine" ON)
+option(DOCUSEARCH_ENABLE_POPPLER   "Link Poppler for PDF text extraction" ON)
+
 # Qt 6
 find_package(Qt6 REQUIRED COMPONENTS
     Core
@@ -56,6 +63,7 @@ if(NOT SQLite3_FOUND)
 endif()
 
 # Tesseract + Leptonica
+if(DOCUSEARCH_ENABLE_TESSERACT)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
@@ -73,8 +81,10 @@ if(NOT TESSERACT_FOUND)
         )
     endif()
 endif()
+endif()
 
 # Poppler (Qt binding preferred)
+if(DOCUSEARCH_ENABLE_POPPLER)
 if(PkgConfig_FOUND)
     pkg_check_modules(POPPLER IMPORTED_TARGET poppler-cpp)
 endif()
@@ -89,6 +99,7 @@ if(NOT POPPLER_FOUND)
             INTERFACE_LINK_LIBRARIES      "${POPPLER_LIBRARY}"
         )
     endif()
+endif()
 endif()
 
 # Minizip (for OOXML .zip reading) — usually bundled with zlib

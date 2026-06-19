@@ -41,8 +41,7 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             auto p = doc->create_page(i);
             if (!p) continue;
             // poppler::page::text() returns poppler::ustring (UTF-8 bytes).
-            // Convert via .to_string() (returns std::string with the UTF-8 bytes)
-            // then to QString.
+            // Use poppler::ustring::to_string() to get std::string.
             const std::string txt = p->text().to_string();
             const QString q = QString::fromUtf8(txt.data(), static_cast<int>(txt.size()));
             if (q.trimmed().isEmpty()) ++emptyPages;
@@ -51,7 +50,6 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             if (all.size() > 1'000'000) break; // cap text size
         }
         r.text = Utils::stripControlChars(all);
-        // If >50% of pages are empty, mark as scanned → OCR needed.
         if (maxPages > 0 && emptyPages * 2 > maxPages) r.needsOcr = true;
     } catch (const std::exception& e) {
         r.errorMessage = QString("Poppler exception: %1").arg(e.what());
