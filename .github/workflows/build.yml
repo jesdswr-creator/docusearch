@@ -15,6 +15,7 @@ on:
 
 env:
   QT_VERSION: '6.7.3'
+  QT_ARCH: 'win64_msvc2019_64'
 
 jobs:
   build-windows:
@@ -41,19 +42,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install aqtinstall
-          # First list what's available for this Qt version (debug)
           Write-Host "=== Available architectures for Qt $env:QT_VERSION ==="
           python -m aqt list-qt windows desktop --arch $env:QT_VERSION
-          Write-Host "=== Available modules for Qt $env:QT_VERSION win64_msvc2022_64 ==="
-          python -m aqt list-qt windows desktop --modules $env:QT_VERSION win64_msvc2022_64
-          # Install Qt base (no -m flag = install qtbase + all default modules)
-          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -O C:\Qt
-          # Find the install dir (aqtinstall creates C:\Qt\<version>\msvc2022_64\)
-          $msvcRoot = "C:\Qt\$env:QT_VERSION\msvc2022_64"
+          # Install Qt — using win64_msvc2019_64 because Qt 6.7.3 doesn't have
+          # a win64_msvc2022_64 binary on the official Qt mirror. The MSVC2019
+          # Qt binary is ABI-compatible with the MSVC2022 compiler.
+          python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
+          $msvcRoot = "C:\Qt\$env:QT_VERSION\$env:QT_ARCH"
           if (-not (Test-Path $msvcRoot)) {
-            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc2022_64" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc*" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
-          if (-not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
+          if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
           $qtBin = Join-Path $msvcRoot "bin"
           Write-Host "Qt root: $msvcRoot"
           Write-Host "Contents of Qt bin dir:"
