@@ -276,7 +276,9 @@ void MainWindow::buildToolbar() {
 }
 
 void MainWindow::applyTheme() {
-    Theme::apply(settings_.darkMode ? Theme::Mode::Dark : Theme::Mode::Light);
+    // Theme disabled for now — the QSS was causing a blank white window.
+    // Using native Windows styling instead. Re-enable once the QSS is fixed.
+    // Theme::apply(settings_.darkMode ? Theme::Mode::Dark : Theme::Mode::Light);
 }
 
 void MainWindow::loadSettings() {
