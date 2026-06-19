@@ -11,6 +11,8 @@
 #include <QDir>
 #include <QCryptographicHash>
 #include <QImageReader>
+#include <type_traits>
+#include <memory>
 
 #ifdef DOCUSEARCH_HAS_POPPLER
 #  include <poppler-document.h>
@@ -59,7 +61,17 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
                     poppler::page_renderer renderer;
                     renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
                     const int dpi = 96;
-                    const auto img_data = renderer.render_page(page.get(), dpi, dpi);
+                    // render_page takes a poppler::page*.
+                    // Depending on poppler version, create_page() returns either
+                    // std::unique_ptr<poppler::page> or poppler::page* directly.
+                    using PageType = std::decay_t<decltype(page)>;
+                    poppler::page* pagePtr = nullptr;
+                    if constexpr (std::is_same_v<PageType, std::unique_ptr<poppler::page>>) {
+                        pagePtr = page.get();
+                    } else {
+                        pagePtr = page;
+                    }
+                    const auto img_data = renderer.render_page(pagePtr, dpi, dpi);
                     if (!img_data.is_valid()) return {};
                     QImage tmp(reinterpret_cast<const uchar*>(img_data.data()),
                                img_data.width(), img_data.height(),

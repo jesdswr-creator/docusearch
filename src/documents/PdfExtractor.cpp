@@ -40,7 +40,10 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
         for (int i = 0; i < maxPages; ++i) {
             auto p = doc->create_page(i);
             if (!p) continue;
-            const std::string txt = p->text();
+            // poppler::page::text() returns poppler::ustring (UTF-8 bytes).
+            // Convert via .to_string() (returns std::string with the UTF-8 bytes)
+            // then to QString.
+            const std::string txt = p->text().to_string();
             const QString q = QString::fromUtf8(txt.data(), static_cast<int>(txt.size()));
             if (q.trimmed().isEmpty()) ++emptyPages;
             all.append(q);
@@ -64,7 +67,7 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             return r;
         }
     }
-    r.errorMessage = "Poppler not linked — PDF text extraction unavailable";
+    r.errorMessage = "Poppler not linked - PDF text extraction unavailable";
     r.needsOcr = true;
 #endif
     return r;
