@@ -114,7 +114,7 @@ if (-not (Test-Path $windeployqt)) {
     exit 1
 }
 & $windeployqt --release --no-translations --no-system-d3d-compiler `
-               --no-opengl-sw --no-quick-import --no-webkit2 `
+               --no-opengl-sw --no-quick-import `
                --compiler-runtime `
                $exe
 if ($LASTEXITCODE -ne 0) { Write-Error "windeployqt failed"; exit 1 }
