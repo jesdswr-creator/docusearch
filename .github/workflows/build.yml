@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.7.0'
+  QT_VERSION: '6.7.3'
 
 jobs:
   build-windows:
@@ -41,15 +41,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install aqtinstall
-          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtsvg -O C:\Qt
+          # First list what's available for this Qt version (debug)
+          Write-Host "=== Available architectures for Qt $env:QT_VERSION ==="
+          python -m aqt list-qt windows desktop --arch $env:QT_VERSION
+          Write-Host "=== Available modules for Qt $env:QT_VERSION win64_msvc2022_64 ==="
+          python -m aqt list-qt windows desktop --modules $env:QT_VERSION win64_msvc2022_64
+          # Install Qt base (no -m flag = install qtbase + all default modules)
+          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -O C:\Qt
+          # Find the install dir (aqtinstall creates C:\Qt\<version>\msvc2022_64\)
           $msvcRoot = "C:\Qt\$env:QT_VERSION\msvc2022_64"
           if (-not (Test-Path $msvcRoot)) {
-            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc2022_64" -Directory -Recurse | Select-Object -First 1 -ExpandProperty FullName
+            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc2022_64" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
           $qtBin = Join-Path $msvcRoot "bin"
           Write-Host "Qt root: $msvcRoot"
-          Get-ChildItem $qtBin -Filter "Qt6*" | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "Contents of Qt bin dir:"
+          Get-ChildItem $qtBin -Filter "Qt6*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          Get-ChildItem $qtBin -Filter "windeployqt*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "QtInstallDir=$msvcRoot" >> $env:GITHUB_ENV
           echo "$qtBin" >> $env:GITHUB_PATH
 
