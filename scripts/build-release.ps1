@@ -210,7 +210,7 @@ if ($MakeMsi) {
         $candle = (Get-Command candle -ErrorAction SilentlyContinue).Source
         $light  = (Get-Command light -ErrorAction SilentlyContinue).Source
         if (-not $candle -or -not $light) {
-            Write-Error "Neither `wix` nor `candle`+`light` found. Install WiX v4: `dotnet tool install -g wix`"
+            Write-Error "Neither 'wix' nor 'candle'+'light' found. Install WiX v4: 'dotnet tool install -g wix'"
             exit 1
         }
         Write-Host "      Using WiX v3 (candle + light)..." -ForegroundColor DarkGray
