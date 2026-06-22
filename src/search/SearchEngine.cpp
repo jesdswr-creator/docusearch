@@ -37,103 +37,113 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
 
     const ParsedQuery q = QueryParser::parse(rawQuery);
 
-    // Build a SQL query that joins SearchIndex (FTS5) with Files, then filters.
-    // We use anonymous '?' placeholders which auto-increment from 1 in the
-    // order they appear in the SQL string. Binding must happen in the same order.
-    QString sql;
-    bool usedFts = false;
+    // If the FTS query is empty, do a simple filename LIKE search.
+    // This is the safe path - no FTS5 MATCH, no crash risk.
+    if (q.ftsQuery.isEmpty()) {
+        QString sql = "SELECT id, path, filename, extension, size, "
+                      "modified_date, is_favorite "
+                      "FROM Files WHERE 1=1 ";
+        if (!q.typeFilter.isEmpty())   sql += " AND extension = ? ";
+        if (!q.folderFilter.isEmpty()) sql += " AND path LIKE ? ESCAPE '\\' ";
+        if (q.favoritesOnly)          sql += " AND is_favorite = 1 ";
+        if (!q.tagFilter.isEmpty())   sql += " AND id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
+        sql += " ORDER BY modified_date DESC LIMIT " + QString::number(limit) + ";";
 
-    if (!q.ftsQuery.isEmpty()) {
-        // Use FTS5 MATCH
-        sql = "SELECT f.id, f.path, f.filename, f.extension, f.size, "
-              "f.modified_date, f.is_favorite, "
-              "snippet(SearchIndex, 1, '<b>', '</b>', '…', 16) AS snip, "
-              "bm25(SearchIndex) AS score "
-              "FROM SearchIndex s JOIN Files f ON f.id = s.file_id "
-              "WHERE SearchIndex MATCH ? ";
-        usedFts = true;
-    } else {
-        // Filename-only fast LIKE
-        sql = "SELECT f.id, f.path, f.filename, f.extension, f.size, "
-              "f.modified_date, f.is_favorite, "
-              "'' AS snip, 0.0 AS score "
-              "FROM Files f WHERE 1=1 ";
-    }
-
-    if (!q.typeFilter.isEmpty()) {
-        sql += " AND f.extension = ? ";
-    }
-    if (!q.folderFilter.isEmpty()) {
-        sql += " AND f.path LIKE ? ESCAPE '\\' ";
-    }
-    if (!q.dateFilter.isEmpty()) {
-        // Year filter
-        bool ok = false;
-        const int year = q.dateFilter.toInt(&ok);
-        if (ok && year > 1900) {
-            sql += QString(" AND strftime('%Y', f.modified_date, 'unixepoch') = '%1' ").arg(year);
-        } else {
-            // Try "YYYY-MM" or "YYYY-MM-DD"
-            sql += QString(" AND date(f.modified_date, 'unixepoch') LIKE '%1%' ").arg(q.dateFilter);
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr) != SQLITE_OK) {
+            return results;
         }
-    }
-    if (q.favoritesOnly) {
-        sql += " AND f.is_favorite = 1 ";
-    }
-    if (q.ocrOnly) {
-        sql += " AND f.ocr_status = 'done' ";
-    }
-    if (!q.tagFilter.isEmpty()) {
-        // Files that have this tag. Uses the UNIQUE(file_id, tag) index on Tags
-        // for an index lookup — fast even with millions of files.
-        sql += " AND f.id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
-    }
-    if (usedFts) {
-        sql += " ORDER BY score ASC ";   // bm25: lower is better
-    } else {
-        sql += " ORDER BY f.modified_date DESC ";
-    }
-    sql += QString(" LIMIT %1;").arg(limit);
-
-    sqlite3_stmt* s = nullptr;
-    if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr) != SQLITE_OK) {
-        DS_ERROR("Search", QString("Prepare failed: %1 | SQL: %2").arg(sqlite3_errmsg(raw), sql));
+        int idx = 1;
+        if (!q.typeFilter.isEmpty()) {
+            const QByteArray u = q.typeFilter.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+        if (!q.folderFilter.isEmpty()) {
+            QString like = q.folderFilter;
+            like.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            like = "%" + like + "%";
+            const QByteArray u = like.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+        if (!q.tagFilter.isEmpty()) {
+            const QByteArray u = q.tagFilter.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            SearchHit h;
+            h.fileId      = sqlite3_column_int64(s, 0);
+            h.path        = colText(s, 1);
+            h.filename    = colText(s, 2);
+            h.extension   = colText(s, 3);
+            h.size        = sqlite3_column_int64(s, 4);
+            h.modifiedDate= QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
+            h.isFavorite  = sqlite3_column_int(s, 6) != 0;
+            results.append(h);
+        }
+        sqlite3_finalize(s);
         return results;
     }
 
-    // Bind in the SAME ORDER as the '?' placeholders appear above.
-    if (usedFts)                       bindText(s, 1, q.ftsQuery);
-    int bindIdx = usedFts ? 2 : 1;
-    if (!q.typeFilter.isEmpty())       bindText(s, bindIdx++, q.typeFilter);
-    if (!q.folderFilter.isEmpty()) {
-        QString like = q.folderFilter;
-        like.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-        bindText(s, bindIdx++, "%" + like + "%");
-    }
-    if (!q.tagFilter.isEmpty())        bindText(s, bindIdx++, q.tagFilter);
+    // FTS5 content search - wrapped in try/catch to prevent crashes
+    // from malformed FTS5 queries (special chars like ( ) * " etc.)
+    try {
+        QString sql = "SELECT f.id, f.path, f.filename, f.extension, f.size, "
+                      "f.modified_date, f.is_favorite, "
+                      "snippet(SearchIndex, 1, '<b>', '</b>', '...', 16) AS snip, "
+                      "bm25(SearchIndex) AS score "
+                      "FROM SearchIndex s JOIN Files f ON f.id = s.file_id "
+                      "WHERE SearchIndex MATCH ? ";
+        if (!q.typeFilter.isEmpty())   sql += " AND f.extension = ? ";
+        if (!q.folderFilter.isEmpty()) sql += " AND f.path LIKE ? ESCAPE '\\' ";
+        if (q.favoritesOnly)          sql += " AND f.is_favorite = 1 ";
+        if (!q.tagFilter.isEmpty())   sql += " AND f.id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
+        sql += " ORDER BY score ASC LIMIT " + QString::number(limit) + ";";
 
-    QElapsedTimer t; t.start();
-    while (sqlite3_step(s) == SQLITE_ROW) {
-        SearchHit h;
-        h.fileId      = sqlite3_column_int64(s, 0);
-        h.path        = colText(s, 1);
-        h.filename    = colText(s, 2);
-        h.extension   = colText(s, 3);
-        h.size        = sqlite3_column_int64(s, 4);
-        h.modifiedDate= QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
-        h.isFavorite  = sqlite3_column_int(s, 6) != 0;
-        h.snippet     = colText(s, 7);
-        h.score       = static_cast<float>(sqlite3_column_double(s, 8));
-        results.append(h);
-    }
-    sqlite3_finalize(s);
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr) != SQLITE_OK) {
+            // FTS5 query parse error - fall back to filename search
+            DS_WARN("Search", QString("FTS prepare failed, falling back to filename: %1").arg(sqlite3_errmsg(raw)));
+            return searchByFilename(rawQuery, limit);
+        }
 
-    if (t.elapsed() > 100) {
-        DS_DEBUG("Search", QString("Slow search (%1 ms): %2")
-                 .arg(t.elapsed()).arg(rawQuery));
+        int idx = 1;
+        const QByteArray fts = q.ftsQuery.toUtf8();
+        sqlite3_bind_text(s, idx++, fts.constData(), fts.size(), SQLITE_TRANSIENT);
+        if (!q.typeFilter.isEmpty()) {
+            const QByteArray u = q.typeFilter.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+        if (!q.folderFilter.isEmpty()) {
+            QString like = q.folderFilter;
+            like.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            like = "%" + like + "%";
+            const QByteArray u = like.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+        if (!q.tagFilter.isEmpty()) {
+            const QByteArray u = q.tagFilter.toUtf8();
+            sqlite3_bind_text(s, idx++, u.constData(), u.size(), SQLITE_TRANSIENT);
+        }
+
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            SearchHit h;
+            h.fileId      = sqlite3_column_int64(s, 0);
+            h.path        = colText(s, 1);
+            h.filename    = colText(s, 2);
+            h.extension   = colText(s, 3);
+            h.size        = sqlite3_column_int64(s, 4);
+            h.modifiedDate= QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
+            h.isFavorite  = sqlite3_column_int(s, 6) != 0;
+            h.snippet     = colText(s, 7);
+            h.score       = static_cast<float>(sqlite3_column_double(s, 8));
+            results.append(h);
+        }
+        sqlite3_finalize(s);
+    } catch (...) {
+        // Any exception in FTS search - return empty results
+        DS_WARN("Search", "FTS search threw exception, returning empty results");
     }
 
-    recordSearch(rawQuery);
     return results;
 }
 

@@ -23,6 +23,7 @@
 #include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../monitoring/FileWatcher.h"
+#include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/ThumbnailGenerator.h"
 #include "../settings/SettingsManager.h"
 
@@ -197,7 +198,8 @@ void MainWindow::buildMenus() {
     auto* indexMenu = menuBar()->addMenu("&Index");
     indexMenu->addAction("Add Folder to Index...", this, [this]{
         // Manually scan a folder and add files to the database.
-        // No Indexer thread, no OCR - just metadata + filename indexing.
+        // Also extracts text content from DOCX/XLSX/PPTX/TXT/CSV/MD
+        // so FTS5 content search works.
         const QString folder = QFileDialog::getExistingDirectory(
             this, "Select Folder to Index");
         if (folder.isEmpty()) return;
@@ -205,7 +207,11 @@ void MainWindow::buildMenus() {
         statusBar()->showMessage("Scanning " + folder + " ...");
         QApplication::processEvents();
 
+        // Get the document extractor registry for content extraction
+        auto& registry = DocumentExtractorRegistry::instance();
+
         int count = 0;
+        int contentCount = 0;
         QStringList emptyExcludes;
         FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
             FileRecord r;
@@ -217,19 +223,38 @@ void MainWindow::buildMenus() {
             r.modifiedDate = fi.lastModified();
             r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
             r.ocrStatus      = Constants::OcrStatus::kNotNeeded;
-            repo_->upsertFile(r);
+            qint64 fileId = repo_->upsertFile(r);
+
+            // Extract text content for supported document types
+            if (fileId > 0 && registry.extractorFor(r.extension)) {
+                try {
+                    auto result = registry.extractByExtension(r.path, r.extension);
+                    if (!result.text.isEmpty()) {
+                        repo_->updateContent(fileId, result.text, result.source,
+                                             Constants::IndexingStatus::kContentDone,
+                                             Constants::OcrStatus::kNotNeeded);
+                        ++contentCount;
+                    }
+                } catch (...) {
+                    // Content extraction failed - file is still indexed by filename
+                }
+            }
+
             ++count;
-            if (count % 500 == 0) {
-                statusBar()->showMessage(QString("Scanned %1 files...").arg(count));
+            if (count % 200 == 0) {
+                statusBar()->showMessage(QString("Scanned %1 files (%2 with content)...")
+                    .arg(count).arg(contentCount));
                 QApplication::processEvents();
             }
             return true;
         });
 
-        statusBar()->showMessage(QString("Indexed %1 files from %2").arg(count).arg(folder));
+        statusBar()->showMessage(QString("Indexed %1 files (%2 with content) from %3")
+            .arg(count).arg(contentCount).arg(folder));
         QMessageBox::information(this, "Indexing Complete",
-            QString("Added %1 files to the search index.\n\n"
-                    "You can now search for them by filename.").arg(count));
+            QString("Added %1 files to the search index.\n"
+                    "%2 files have extracted text content.\n\n"
+                    "You can now search by filename AND content.").arg(count).arg(contentCount));
     });
     indexMenu->addSeparator();
     indexMenu->addAction("Start Indexing", this, &MainWindow::onStartIndexing);
@@ -311,13 +336,17 @@ void MainWindow::onSearch(const QString& query) {
         resultsPane_->clear();
         return;
     }
-    QElapsedTimer t; t.start();
-    auto hits = search_->search(query, 500);
-    resultsPane_->setResults(hits);
-    statusBar()->showMessage(QString("%1 result%2 in %3 ms")
-                             .arg(hits.size())
-                             .arg(hits.size() == 1 ? "" : "s")
-                             .arg(t.elapsed()));
+    try {
+        QElapsedTimer t; t.start();
+        auto hits = search_->search(query, 500);
+        resultsPane_->setResults(hits);
+        statusBar()->showMessage(QString("%1 result%2 in %3 ms")
+                                 .arg(hits.size())
+                                 .arg(hits.size() == 1 ? "" : "s")
+                                 .arg(t.elapsed()));
+    } catch (...) {
+        statusBar()->showMessage("Search error - try a different query");
+    }
 }
 
 void MainWindow::onLiveSearchTick() {
