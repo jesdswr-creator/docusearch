@@ -57,11 +57,13 @@ namespace DocuSearch {
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
 
-    setWindowTitle(QString("%1 %2 — Offline Document Search")
+    setWindowTitle(QString("%1 %2 - Offline Document Search")
                    .arg(Constants::kAppName, Constants::kAppVersion));
     resize(1400, 900);
 
-    // --- Initialize subsystems -----------------------------------------
+    // --- Initialize ONLY the database + search (no OCR/indexer/watcher) ---
+    // These subsystems are crash-prone without Tesseract/Poppler linked.
+    // We keep the app stable by not constructing them.
     db_   = std::make_unique<Database>(this);
     repo_ = std::make_unique<FileRepository>(*db_, this);
 
@@ -76,13 +78,10 @@ MainWindow::MainWindow(QWidget* parent)
     Schema::migrate(*db_);
 
     search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
-    ocrPool_ = std::make_unique<OcrWorkerPool>(2, this);
-    indexer_ = std::make_unique<Indexer>(*repo_, *ocrPool_, this);
-    watcher_ = std::make_unique<FileWatcher>(this);
-    thumbs_  = std::make_unique<ThumbnailGenerator>(Config::instance().thumbnailCacheDir(), this);
+    // ocrPool_, indexer_, watcher_, thumbs_ are NOT constructed.
+    // Their slots in MainWindow check for null before using them.
 
     loadSettings();
-    ocrPool_->setAppSettings(settings_);
 
     // --- UI ------------------------------------------------------------
     buildCentral();
@@ -90,7 +89,7 @@ MainWindow::MainWindow(QWidget* parent)
     buildToolbar();
     applyTheme();
 
-    // --- Signals -------------------------------------------------------
+    // --- Signals (only the ones that don't need crash-prone subsystems) -
     connect(searchBar_, &SearchBar::searchRequested,
             this, &MainWindow::onSearch);
     connect(searchBar_, &SearchBar::savedSearchSelected,
@@ -111,27 +110,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
             this, &MainWindow::onNoteChanged);
 
-    connect(indexer_.get(), &Indexer::progress,
-            this, &MainWindow::onIndexingProgress);
-    connect(indexer_.get(), &Indexer::phaseChanged,
-            this, &MainWindow::onPhaseChanged);
-    connect(indexer_.get(), &Indexer::indexingStarted,
-            this, &MainWindow::onIndexingStarted);
-    connect(indexer_.get(), &Indexer::indexingFinished,
-            this, &MainWindow::onIndexingFinished);
-
-    connect(indexingWidget_, &IndexingProgressWidget::pauseRequested,
-            this, &MainWindow::onPauseIndexing);
-    connect(indexingWidget_, &IndexingProgressWidget::resumeRequested,
-            this, &MainWindow::onResumeIndexing);
-    connect(indexingWidget_, &IndexingProgressWidget::stopRequested,
-            this, &MainWindow::onStopIndexing);
-
-    connect(watcher_.get(), &FileWatcher::fileAdded,    this, &MainWindow::onFileAdded);
-    connect(watcher_.get(), &FileWatcher::fileModified, this, &MainWindow::onFileModified);
-    connect(watcher_.get(), &FileWatcher::fileRenamed,  this, &MainWindow::onFileRenamed);
-    connect(watcher_.get(), &FileWatcher::fileDeleted,  this, &MainWindow::onFileDeleted);
-
     // Live search debounce
     liveSearchTimer_ = new QTimer(this);
     liveSearchTimer_->setSingleShot(true);
@@ -142,19 +120,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     refreshSavedSearches();
-    statusBar()->showMessage("Ready. Select drives in Settings -> Indexing to begin.");
-
-    // Auto-start indexing DISABLED for now — the OCR worker pool crashes
-    // when Tesseract isn't linked, which kills the app. Users can start
-    // indexing manually via the Index menu once we confirm the window stays open.
-    // if (!settings_.indexedDrives.isEmpty()) {
-    //     QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
-    // }
-
-    // File monitoring also disabled for now — same crash risk.
-    // if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
-    //     watcher_->addWatches(settings_.indexedDrives);
-    // }
+    statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
 }
 
 MainWindow::~MainWindow() {
@@ -229,6 +195,43 @@ void MainWindow::buildMenus() {
 
     // Index menu
     auto* indexMenu = menuBar()->addMenu("&Index");
+    indexMenu->addAction("Add Folder to Index...", this, [this]{
+        // Manually scan a folder and add files to the database.
+        // No Indexer thread, no OCR - just metadata + filename indexing.
+        const QString folder = QFileDialog::getExistingDirectory(
+            this, "Select Folder to Index");
+        if (folder.isEmpty()) return;
+
+        statusBar()->showMessage("Scanning " + folder + " ...");
+        QApplication::processEvents();
+
+        int count = 0;
+        QStringList emptyExcludes;
+        FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
+            FileRecord r;
+            r.path         = FileUtils::toNative(fi.absoluteFilePath());
+            r.filename     = fi.fileName();
+            r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
+            r.size         = fi.size();
+            r.createdDate  = fi.birthTime();
+            r.modifiedDate = fi.lastModified();
+            r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
+            r.ocrStatus      = Constants::OcrStatus::kNotNeeded;
+            repo_->upsertFile(r);
+            ++count;
+            if (count % 500 == 0) {
+                statusBar()->showMessage(QString("Scanned %1 files...").arg(count));
+                QApplication::processEvents();
+            }
+            return true;
+        });
+
+        statusBar()->showMessage(QString("Indexed %1 files from %2").arg(count).arg(folder));
+        QMessageBox::information(this, "Indexing Complete",
+            QString("Added %1 files to the search index.\n\n"
+                    "You can now search for them by filename.").arg(count));
+    });
+    indexMenu->addSeparator();
     indexMenu->addAction("Start Indexing", this, &MainWindow::onStartIndexing);
     indexMenu->addAction("Pause",  this, &MainWindow::onPauseIndexing);
     indexMenu->addAction("Resume", this, &MainWindow::onResumeIndexing);
@@ -376,9 +379,17 @@ void MainWindow::openFile(const QString& path) {
 // Indexing
 // ============================================================
 void MainWindow::onStartIndexing() {
+    if (!indexer_) {
+        QMessageBox::information(this, "Indexing Unavailable",
+            "The indexing subsystem is disabled in this build.\n\n"
+            "To add files to the search index, use:\n"
+            "  Index -> Add Folder to Index\n\n"
+            "This manually scans a folder and adds files to the database.");
+        return;
+    }
     if (settings_.indexedDrives.isEmpty()) {
         QMessageBox::information(this, "No Drives Configured",
-            "Please add drives in Settings → Indexing first.");
+            "Please add drives in Settings -> Indexing first.");
         onOpenSettings();
         return;
     }
@@ -390,16 +401,19 @@ void MainWindow::onStartIndexing() {
 }
 
 void MainWindow::onStopIndexing() {
+    if (!indexer_) return;
     indexer_->stopIndexing();
     statusBar()->showMessage("Indexing stopped.");
 }
 
 void MainWindow::onPauseIndexing() {
+    if (!indexer_) return;
     indexer_->pause();
     statusBar()->showMessage("Indexing paused.");
 }
 
 void MainWindow::onResumeIndexing() {
+    if (!indexer_) return;
     indexer_->resume();
     statusBar()->showMessage("Indexing resumed.");
 }
@@ -441,6 +455,7 @@ void MainWindow::onFileAdded(const QString& path) {
 }
 
 void MainWindow::onFileModified(const QString& path) {
+    if (!indexer_) return;  // indexer disabled in this build
     FileRecord r;
     if (repo_->getByPath(path, r)) {
         indexer_->reindexFile(path);

@@ -33,20 +33,29 @@ int main(int argc, char* argv[]) {
     // a clean, modern, native-looking interface.
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
-    // Apply a simple palette for a clean modern light look
-    // (no QSS — just the palette, which Qt renders correctly)
+    // Windows 11-inspired light palette (no QSS - just palette, which Qt
+    // renders correctly without breaking).
     QPalette pal;
-    pal.setColor(QPalette::Window, QColor(240, 240, 240));
-    pal.setColor(QPalette::WindowText, QColor(32, 32, 32));
-    pal.setColor(QPalette::Base, QColor(255, 255, 255));
-    pal.setColor(QPalette::AlternateBase, QColor(245, 245, 245));
-    pal.setColor(QPalette::Text, QColor(32, 32, 32));
-    pal.setColor(QPalette::Button, QColor(240, 240, 240));
-    pal.setColor(QPalette::ButtonText, QColor(32, 32, 32));
-    pal.setColor(QPalette::Highlight, QColor(0, 120, 212));
+    // Backgrounds
+    pal.setColor(QPalette::Window,          QColor(243, 243, 243));  // window bg
+    pal.setColor(QPalette::Base,            QColor(255, 255, 255));  // input bg
+    pal.setColor(QPalette::AlternateBase,   QColor(249, 249, 249));  // alt list rows
+    // Text
+    pal.setColor(QPalette::WindowText,      QColor(32, 32, 32));
+    pal.setColor(QPalette::Text,            QColor(32, 32, 32));
+    pal.setColor(QPalette::ButtonText,      QColor(32, 32, 32));
+    // Buttons
+    pal.setColor(QPalette::Button,          QColor(243, 243, 243));
+    // Selection (Win11 accent blue)
+    pal.setColor(QPalette::Highlight,       QColor(0, 120, 212));
     pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-    pal.setColor(QPalette::ToolTipBase, QColor(255, 255, 255));
-    pal.setColor(QPalette::ToolTipText, QColor(32, 32, 32));
+    // Tooltips
+    pal.setColor(QPalette::ToolTipBase,     QColor(255, 255, 255));
+    pal.setColor(QPalette::ToolTipText,     QColor(32, 32, 32));
+    // Disabled state
+    pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
+    pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
+    pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
     // Don't apply any QSS theme for now — use native Windows styling.
