@@ -11,8 +11,6 @@
 #include <QStyleFactory>
 #include <QPalette>
 #include <QColor>
-#include <QSplashScreen>
-#include <QTimer>
 #include <QIcon>
 
 using namespace DocuSearch;
@@ -47,31 +45,16 @@ int main(int argc, char* argv[]) {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // Splash screen — keep visible during initialization
-    QPixmap splashPix(QStringLiteral(":/images/splash.png"));
-    QSplashScreen splash(splashPix);
-    splash.show();
-    splash.showMessage("Loading...", Qt::AlignBottom | Qt::AlignHCenter, QColor(100, 100, 100));
-    app.processEvents();
-
-    // Initialize logger (this takes a moment)
+    // Initialize logger
     auto& log = DocuSearch::Logger::instance();
     log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);
-    app.processEvents();
 
-    // Build main window — this opens the DB, inits schema, builds UI.
-    // The window is NOT shown yet (no w.show() here).
-    splash.showMessage("Opening database...", Qt::AlignBottom | Qt::AlignHCenter, QColor(100, 100, 100));
-    app.processEvents();
-
+    // Build and show main window directly — no splash screen.
+    // The app starts fast enough (< 2 seconds) that a splash is unnecessary
+    // and was causing freezes (splash can't repaint during MainWindow
+    // construction because the event loop isn't running yet).
     DocuSearch::MainWindow w;
-
-    // Window is fully constructed now. Show it and close splash.
-    splash.showMessage("Ready!", Qt::AlignBottom | Qt::AlignHCenter, QColor(0, 120, 212));
-    app.processEvents();
-
     w.show();
-    splash.finish(&w);
 
     return app.exec();
 }
