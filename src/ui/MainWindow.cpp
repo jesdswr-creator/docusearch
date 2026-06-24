@@ -92,9 +92,14 @@ MainWindow::MainWindow(QWidget* parent)
     buildToolbar();
     applyTheme();
     statusBar()->showMessage("Loading...");
-    QApplication::processEvents();  // let the window paint NOW
 
-    // --- Initialize DB synchronously (window is already painted) ---
+    // CRITICAL: Show the window NOW (before DB init) so it paints.
+    // main.cpp calls w.show() too, but calling it here first means
+    // the window is visible during the DB init that follows.
+    show();
+    QApplication::processEvents();  // pump paint events — window renders
+
+    // --- Initialize DB (window is already painted and visible) ---
     db_   = std::make_unique<Database>(this);
     repo_ = std::make_unique<FileRepository>(*db_, this);
 
