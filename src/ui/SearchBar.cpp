@@ -16,35 +16,23 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     layout->setSpacing(6);
 
     edit_      = new QLineEdit(this);
-    edit_->setPlaceholderText("Search files and content...  (e.g. NOC type:pdf  or  \"Executive Lounge\")");
+    edit_->setPlaceholderText("Search files, content, OCR text…  (e.g. \"Executive Lounge\" type:pdf)");
     edit_->setClearButtonEnabled(true);
-    edit_->setMinimumHeight(30);
 
     searchBtn_ = new QPushButton("Search", this);
     searchBtn_->setDefault(true);
-    searchBtn_->setMinimumHeight(30);
-    searchBtn_->setStyleSheet(
-        "QPushButton { background: #0078D4; color: white; border: none; "
-        "border-radius: 4px; padding: 6px 18px; font-size: 13px; font-weight: bold; }"
-        "QPushButton:hover { background: #0067C0; }"
-        "QPushButton:pressed { background: #0054A6; }");
 
     savedBox_  = new QComboBox(this);
-    savedBox_->setToolTip("Click to run a saved search");
-    savedBox_->addItem("-- Saved Searches --");
-    savedBox_->setMinimumHeight(30);
-    savedBox_->setStyleSheet(
-        "QComboBox { border: 1px solid #ccc; border-radius: 4px; padding: 4px 8px; }"
-        "QComboBox:hover { border-color: #0078D4; }");
+    savedBox_->setToolTip("Saved searches");
+    savedBox_->addItem("— Saved —");
 
-    // Filters button removed - all filters work via search syntax
-    // (type:pdf, folder:Railway, date:2026, tag:Urgent, etc.)
-    // See Help -> How to Search for the full syntax guide.
-    filterBtn_ = nullptr;
+    filterBtn_ = new QPushButton("Filters", this);
+    filterBtn_->setCheckable(true);
 
-    layout->addWidget(edit_, 1);
+    layout->addWidget(edit_);
     layout->addWidget(searchBtn_);
     layout->addWidget(savedBox_);
+    layout->addWidget(filterBtn_);
 
     connect(searchBtn_, &QPushButton::clicked, this, &SearchBar::onReturnPressed);
     connect(edit_, &QLineEdit::returnPressed, this, &SearchBar::onReturnPressed);
@@ -56,8 +44,9 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
             savedBox_->setCurrentIndex(0);
         }
     });
+    connect(filterBtn_, &QPushButton::toggled, this, &SearchBar::advancedFiltersToggled);
 
-    // Auto-complete from saved searches
+    // Auto-complete from saved searches / recent
     auto* completer = new QCompleter(this);
     completer->setModel(new QStringListModel(this));
     completer->setCaseSensitivity(Qt::CaseInsensitive);
@@ -71,7 +60,7 @@ void SearchBar::setPlaceholder(const QString& s) { edit_->setPlaceholderText(s);
 void SearchBar::setSavedSearches(const QStringList& names) {
     savedBox_->blockSignals(true);
     savedBox_->clear();
-    savedBox_->addItem("-- Saved Searches --");
+    savedBox_->addItem("— Saved —");
     savedBox_->addItems(names);
     savedBox_->blockSignals(false);
     auto* m = qobject_cast<QStringListModel*>(edit_->completer()->model());
@@ -84,6 +73,7 @@ void SearchBar::onReturnPressed() {
 
 void SearchBar::onTextChanged(const QString& s) {
     Q_UNUSED(s);
+    // Could emit live-search signal with debounce — left to MainWindow.
 }
 
 } // namespace DocuSearch

@@ -86,13 +86,9 @@ MainWindow::MainWindow(QWidget* parent)
     }
     setMinimumSize(800, 500);
 
-    // --- Build UI ---
-    buildCentral();
-    buildMenus();
-    buildToolbar();
-    applyTheme();
-
-    // --- Initialize DB ---
+    // --- Initialize ONLY the database + search (no OCR/indexer/watcher) ---
+    // These subsystems are crash-prone without Tesseract/Poppler linked.
+    // We keep the app stable by not constructing them.
     db_   = std::make_unique<Database>(this);
     repo_ = std::make_unique<FileRepository>(*db_, this);
 
@@ -105,20 +101,33 @@ MainWindow::MainWindow(QWidget* parent)
     }
     Schema::initialize(*db_);
     Schema::migrate(*db_);
-    search_ = std::make_unique<SearchEngine>(*db_, *repo_, this);
+
+    search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
+    // ocrPool_, indexer_, watcher_, thumbs_ are NOT constructed.
+    // Their slots in MainWindow check for null before using them.
+
     loadSettings();
 
-    // Wire up signals
+    // --- UI ------------------------------------------------------------
+    buildCentral();
+    buildMenus();
+    buildToolbar();
+    applyTheme();
+
+    // --- Signals (only the ones that don't need crash-prone subsystems) -
     connect(searchBar_, &SearchBar::searchRequested,
             this, &MainWindow::onSearch);
     connect(searchBar_, &SearchBar::savedSearchSelected,
             this, &MainWindow::onSavedSearchSelected);
+
     connect(resultsPane_, &ResultsPane::fileSelected,
             this, &MainWindow::onFileSelected);
     connect(resultsPane_, &ResultsPane::fileActivated,
             this, &MainWindow::onFileActivated);
+
     connect(previewPane_, &PreviewPane::openRequested,
             this, &MainWindow::onOpenOriginal);
+
     connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
             this, &MainWindow::onTagAdded);
     connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
@@ -126,6 +135,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
             this, &MainWindow::onNoteChanged);
 
+    // Live search debounce
     liveSearchTimer_ = new QTimer(this);
     liveSearchTimer_->setSingleShot(true);
     liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
@@ -134,16 +144,13 @@ MainWindow::MainWindow(QWidget* parent)
         liveSearchTimer_->start();
     });
 
+    // Auto-scan timer — fires every 60 seconds, rescans indexed folders.
     autoScanTimer_ = new QTimer(this);
     autoScanTimer_->setInterval(60 * 1000);
-    connect(autoScanTimer_, &QTimer::timeout, this, [this]{
-        if (contentExtractionRunning_) return;
-        autoScanIndexedFolders();
-    });
+    connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
     autoScanTimer_->start();
 
     refreshSavedSearches();
-    updateIndexStats();
     statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
 }
 
@@ -186,47 +193,30 @@ void MainWindow::buildCentral() {
     leftLay->addWidget(resultsPane_, 1);
     mainSplitter_->addWidget(leftWidget);
 
-    // Middle: preview (bottom) + tags/notes (top, moved from right pane)
-    auto* middleWidget = new QWidget(this);
-    middleWidget->setMinimumWidth(220);
-    auto* middleLay = new QVBoxLayout(middleWidget);
-    middleLay->setContentsMargins(4, 4, 4, 4);
-    middleLay->setSpacing(4);
-    // Tags/notes at top of middle pane (compact)
-    tagsNotesPane_ = new TagsNotesPane(middleWidget);
-    tagsNotesPane_->setMaximumHeight(180);
-    middleLay->addWidget(tagsNotesPane_);
-    // Preview at bottom (content text)
-    previewPane_ = new PreviewPane(middleWidget);
-    middleLay->addWidget(previewPane_, 1);
-    mainSplitter_->addWidget(middleWidget);
+    // Middle: preview
+    previewPane_ = new PreviewPane(this);
+    previewPane_->setMinimumWidth(200);
+    mainSplitter_->addWidget(previewPane_);
 
-    // Right: metadata + indexing status (narrower)
+    // Right: tabs for metadata, tags/notes, indexing
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
-    rightSplitter_->setMinimumWidth(180);
-    rightSplitter_->setMaximumWidth(280);
+    rightSplitter_->setMinimumWidth(200);
     metadataPane_   = new MetadataPane(rightSplitter_);
-    metadataPane_->setMinimumHeight(150);
+    metadataPane_->setMinimumHeight(120);
+    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
+    tagsNotesPane_->setMinimumHeight(100);
     indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
-    indexingWidget_->setMinimumHeight(100);
+    indexingWidget_->setMinimumHeight(80);
 
     rightSplitter_->addWidget(metadataPane_);
+    rightSplitter_->addWidget(tagsNotesPane_);
     rightSplitter_->addWidget(indexingWidget_);
     mainSplitter_->addWidget(rightSplitter_);
 
-    // Stretch factors: left=45, middle=35, right=20.
-    mainSplitter_->setStretchFactor(0, 45);
+    // Stretch factors: left=40, middle=35, right=25.
+    mainSplitter_->setStretchFactor(0, 40);
     mainSplitter_->setStretchFactor(1, 35);
-    mainSplitter_->setStretchFactor(2, 20);
-
-    rightSplitter_->setStretchFactor(0, 55);
-    rightSplitter_->setStretchFactor(1, 45);
-
-    // Set initial splitter sizes
-    QList<int> sizes;
-    int totalW = width();
-    sizes << int(totalW * 0.45) << int(totalW * 0.35) << int(totalW * 0.20);
-    mainSplitter_->setSizes(sizes);
+    mainSplitter_->setStretchFactor(2, 25);
 
     updateIndexStats();
 }
@@ -896,8 +886,6 @@ void MainWindow::onAbout() {
         QString("<div style='text-align:center;'>"
                 "<h2 style='color:#0078D4;'>DocuSearch %1</h2>"
                 "<p>Offline Intelligent Document Search &amp; OCR System</p>"
-                "<hr>"
-                "<p>Built with C++20, Qt 6, SQLite + FTS5</p>"
                 "<p>Completely offline. No cloud. No telemetry.</p>"
                 "<hr>"
                 "<p style='font-size:14px; color:#666;'>&#10084; Made with love by <b>MinZ</b></p>"

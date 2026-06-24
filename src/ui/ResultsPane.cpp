@@ -67,8 +67,7 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     table_->setHorizontalHeaderLabels({"Name", "Type", "Size", "Date", "Snippet"});
     table_->verticalHeader()->setVisible(false);
     table_->setWordWrap(true);
-    table_->setShowGrid(true);
-    table_->setGridStyle(Qt::SolidLine);
+    table_->setShowGrid(false);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
 
     // Header sizing: Name & Snippet stretch, others size to contents.
