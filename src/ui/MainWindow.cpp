@@ -193,30 +193,39 @@ void MainWindow::buildCentral() {
     leftLay->addWidget(resultsPane_, 1);
     mainSplitter_->addWidget(leftWidget);
 
-    // Middle: preview
-    previewPane_ = new PreviewPane(this);
-    previewPane_->setMinimumWidth(200);
-    mainSplitter_->addWidget(previewPane_);
+    // Middle: preview (top) + tags/notes (bottom)
+    auto* middleWidget = new QWidget(this);
+    middleWidget->setMinimumWidth(220);
+    auto* middleLay = new QVBoxLayout(middleWidget);
+    middleLay->setContentsMargins(4, 4, 4, 4);
+    middleLay->setSpacing(4);
+    previewPane_ = new PreviewPane(middleWidget);
+    middleLay->addWidget(previewPane_, 1);
+    tagsNotesPane_ = new TagsNotesPane(middleWidget);
+    tagsNotesPane_->setMaximumHeight(160);
+    middleLay->addWidget(tagsNotesPane_);
+    mainSplitter_->addWidget(middleWidget);
 
-    // Right: tabs for metadata, tags/notes, indexing
+    // Right: metadata + indexing status (narrower)
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
-    rightSplitter_->setMinimumWidth(200);
+    rightSplitter_->setMinimumWidth(180);
+    rightSplitter_->setMaximumWidth(300);
     metadataPane_   = new MetadataPane(rightSplitter_);
-    metadataPane_->setMinimumHeight(120);
-    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
-    tagsNotesPane_->setMinimumHeight(100);
+    metadataPane_->setMinimumHeight(150);
     indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
-    indexingWidget_->setMinimumHeight(80);
+    indexingWidget_->setMinimumHeight(100);
 
     rightSplitter_->addWidget(metadataPane_);
-    rightSplitter_->addWidget(tagsNotesPane_);
     rightSplitter_->addWidget(indexingWidget_);
     mainSplitter_->addWidget(rightSplitter_);
 
-    // Stretch factors: left=40, middle=35, right=25.
-    mainSplitter_->setStretchFactor(0, 40);
+    // Stretch factors: left=45, middle=35, right=20.
+    mainSplitter_->setStretchFactor(0, 45);
     mainSplitter_->setStretchFactor(1, 35);
-    mainSplitter_->setStretchFactor(2, 25);
+    mainSplitter_->setStretchFactor(2, 20);
+
+    rightSplitter_->setStretchFactor(0, 55);
+    rightSplitter_->setStretchFactor(1, 45);
 
     updateIndexStats();
 }
@@ -727,12 +736,19 @@ void MainWindow::autoScanIndexedFolders() {
 }
 
 void MainWindow::updateIndexStats() {
+    if (!repo_ || !indexingWidget_) return;
     const qint64 total       = repo_->totalFiles();
     const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
     const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
-    const QString msg = QString("Files: %1\nContent indexed: %2\nMetadata only: %3")
+    const QString msg = QString("Files: %1 | Content: %2 | Metadata only: %3")
                             .arg(total).arg(contentDone).arg(metaOnly);
-    if (indexingWidget_) indexingWidget_->setPhase(msg);
+    indexingWidget_->setPhase(msg);
+    // Also update the form labels inside the indexing widget
+    DocuSearch::IndexingProgress p;
+    p.filesScanned.store(total);
+    p.documentsIndexed.store(contentDone);
+    p.queueRemaining.store(metaOnly);
+    indexingWidget_->update(p);
 }
 
 // ============================================================
