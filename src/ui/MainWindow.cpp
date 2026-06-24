@@ -322,6 +322,35 @@ void MainWindow::buildMenus() {
 
     // Help menu
     auto* helpMenu = menuBar()->addMenu("&Help");
+    helpMenu->addAction("How to Search", this, [this]{
+        QMessageBox::information(this, "How to Search",
+            "<h3>Search Syntax</h3>"
+            "<table cellspacing='6'>"
+            "<tr><td><b>gold bin</b></td><td>Files containing BOTH 'gold' AND 'bin' (any order)</td></tr>"
+            "<tr><td><b>gold+bin</b></td><td>Same as above (+ = space)</td></tr>"
+            "<tr><td><b>bin gold</b></td><td>Same results as 'gold bin' (order doesn't matter)</td></tr>"
+            "<tr><td><b>\"gold bin\"</b></td><td>Exact phrase 'gold bin' in filename or content</td></tr>"
+            "<tr><td><b>gold -draft</b></td><td>Files with 'gold' but NOT 'draft'</td></tr>"
+            "<tr><td><b>rail*</b></td><td>Prefix wildcard: railway, railroad, rails, etc.</td></tr>"
+            "</table>"
+            "<h3>Filters</h3>"
+            "<table cellspacing='6'>"
+            "<tr><td><b>type:pdf</b></td><td>Only PDF files</td></tr>"
+            "<tr><td><b>type:docx</b></td><td>Only Word documents</td></tr>"
+            "<tr><td><b>type:xlsx</b></td><td>Only Excel files</td></tr>"
+            "<tr><td><b>folder:Railway</b></td><td>Only files in folders containing 'Railway'</td></tr>"
+            "<tr><td><b>date:2026</b></td><td>Only files modified in 2026</td></tr>"
+            "<tr><td><b>tag:Urgent</b></td><td>Only files tagged 'Urgent'</td></tr>"
+            "<tr><td><b>favorite:1</b></td><td>Only favorite files</td></tr>"
+            "</table>"
+            "<h3>Examples</h3>"
+            "<table cellspacing='6'>"
+            "<tr><td><b>type:pdf NOC</b></td><td>PDF files with 'NOC' in name or content</td></tr>"
+            "<tr><td><b>folder:Railway type:docx</b></td><td>Word docs in Railway folder</td></tr>"
+            "<tr><td><b>date:2026 report -draft</b></td><td>2026 files with 'report' but not 'draft'</td></tr>"
+            "</table>"
+            "<p><i>Tip: Search finds matches in both filenames AND content (after extraction).</i></p>");
+    });
     helpMenu->addAction("About DocuSearch", this, &MainWindow::onAbout);
 }
 
