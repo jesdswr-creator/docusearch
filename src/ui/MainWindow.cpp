@@ -69,7 +69,7 @@ namespace DocuSearch {
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
 
-    setWindowTitle(QString("%1 %2 - Offline Document Search")
+    setWindowTitle(QString("%1 %2 - Offline Document Search  |  by MinZ")
                    .arg(Constants::kAppName, Constants::kAppVersion));
 
     // --- Window sizing: 80% of available screen, capped at 1280x720, centered.
