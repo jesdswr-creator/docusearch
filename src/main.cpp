@@ -47,20 +47,29 @@ int main(int argc, char* argv[]) {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // Splash screen — use the embedded PNG from resources
+    // Splash screen — keep visible during initialization
     QPixmap splashPix(QStringLiteral(":/images/splash.png"));
     QSplashScreen splash(splashPix);
     splash.show();
+    splash.showMessage("Loading...", Qt::AlignBottom | Qt::AlignHCenter, QColor(100, 100, 100));
     app.processEvents();
 
-    // Initialize logger
+    // Initialize logger (this takes a moment)
     auto& log = DocuSearch::Logger::instance();
     log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);
+    app.processEvents();
 
-    // Build main window
+    // Build main window — this opens the DB, inits schema, builds UI.
+    // The window is NOT shown yet (no w.show() here).
+    splash.showMessage("Opening database...", Qt::AlignBottom | Qt::AlignHCenter, QColor(100, 100, 100));
+    app.processEvents();
+
     DocuSearch::MainWindow w;
 
-    // Show window immediately and close splash
+    // Window is fully constructed now. Show it and close splash.
+    splash.showMessage("Ready!", Qt::AlignBottom | Qt::AlignHCenter, QColor(0, 120, 212));
+    app.processEvents();
+
     w.show();
     splash.finish(&w);
 
