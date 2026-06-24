@@ -86,68 +86,67 @@ MainWindow::MainWindow(QWidget* parent)
     }
     setMinimumSize(800, 500);
 
-    // --- Build UI FIRST (before DB) so window paints immediately ---
+    // --- Build UI FIRST so window paints ---
     buildCentral();
     buildMenus();
     buildToolbar();
     applyTheme();
     statusBar()->showMessage("Loading...");
+    QApplication::processEvents();  // let the window paint NOW
 
-    // --- Defer DB init to after window is shown (prevents blank freeze) ---
-    QTimer::singleShot(0, this, [this]() {
-        db_   = std::make_unique<Database>(this);
-        repo_ = std::make_unique<FileRepository>(*db_, this);
+    // --- Initialize DB synchronously (window is already painted) ---
+    db_   = std::make_unique<Database>(this);
+    repo_ = std::make_unique<FileRepository>(*db_, this);
 
-        const QString dbPath = Config::instance().dbPath();
-        QString err;
-        if (!db_->open(dbPath, &err)) {
-            QMessageBox::critical(this, "Database Error",
-                "Failed to open database:\n" + err);
-            return;
-        }
-        Schema::initialize(*db_);
-        Schema::migrate(*db_);
-        search_ = std::make_unique<SearchEngine>(*db_, *repo_, this);
-        loadSettings();
+    const QString dbPath = Config::instance().dbPath();
+    QString err;
+    if (!db_->open(dbPath, &err)) {
+        QMessageBox::critical(this, "Database Error",
+            "Failed to open database:\n" + err);
+        return;
+    }
+    Schema::initialize(*db_);
+    Schema::migrate(*db_);
+    search_ = std::make_unique<SearchEngine>(*db_, *repo_, this);
+    loadSettings();
 
-        // Wire up signals now that DB exists
-        connect(searchBar_, &SearchBar::searchRequested,
-                this, &MainWindow::onSearch);
-        connect(searchBar_, &SearchBar::savedSearchSelected,
-                this, &MainWindow::onSavedSearchSelected);
-        connect(resultsPane_, &ResultsPane::fileSelected,
-                this, &MainWindow::onFileSelected);
-        connect(resultsPane_, &ResultsPane::fileActivated,
-                this, &MainWindow::onFileActivated);
-        connect(previewPane_, &PreviewPane::openRequested,
-                this, &MainWindow::onOpenOriginal);
-        connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
-                this, &MainWindow::onTagAdded);
-        connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
-                this, &MainWindow::onTagRemoved);
-        connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
-                this, &MainWindow::onNoteChanged);
+    // Wire up signals
+    connect(searchBar_, &SearchBar::searchRequested,
+            this, &MainWindow::onSearch);
+    connect(searchBar_, &SearchBar::savedSearchSelected,
+            this, &MainWindow::onSavedSearchSelected);
+    connect(resultsPane_, &ResultsPane::fileSelected,
+            this, &MainWindow::onFileSelected);
+    connect(resultsPane_, &ResultsPane::fileActivated,
+            this, &MainWindow::onFileActivated);
+    connect(previewPane_, &PreviewPane::openRequested,
+            this, &MainWindow::onOpenOriginal);
+    connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
+            this, &MainWindow::onTagAdded);
+    connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
+            this, &MainWindow::onTagRemoved);
+    connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
+            this, &MainWindow::onNoteChanged);
 
-        liveSearchTimer_ = new QTimer(this);
-        liveSearchTimer_->setSingleShot(true);
-        liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
-        connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
-        connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
-            liveSearchTimer_->start();
-        });
-
-        autoScanTimer_ = new QTimer(this);
-        autoScanTimer_->setInterval(60 * 1000);
-        connect(autoScanTimer_, &QTimer::timeout, this, [this]{
-            if (contentExtractionRunning_) return;
-            autoScanIndexedFolders();
-        });
-        autoScanTimer_->start();
-
-        refreshSavedSearches();
-        updateIndexStats();
-        statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
+    liveSearchTimer_ = new QTimer(this);
+    liveSearchTimer_->setSingleShot(true);
+    liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
+    connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
+    connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
+        liveSearchTimer_->start();
     });
+
+    autoScanTimer_ = new QTimer(this);
+    autoScanTimer_->setInterval(60 * 1000);
+    connect(autoScanTimer_, &QTimer::timeout, this, [this]{
+        if (contentExtractionRunning_) return;
+        autoScanIndexedFolders();
+    });
+    autoScanTimer_->start();
+
+    refreshSavedSearches();
+    updateIndexStats();
+    statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
 }
 
 MainWindow::~MainWindow() {
