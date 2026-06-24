@@ -86,72 +86,68 @@ MainWindow::MainWindow(QWidget* parent)
     }
     setMinimumSize(800, 500);
 
-    // --- Initialize ONLY the database + search (no OCR/indexer/watcher) ---
-    // These subsystems are crash-prone without Tesseract/Poppler linked.
-    // We keep the app stable by not constructing them.
-    db_   = std::make_unique<Database>(this);
-    repo_ = std::make_unique<FileRepository>(*db_, this);
-
-    const QString dbPath = Config::instance().dbPath();
-    QString err;
-    if (!db_->open(dbPath, &err)) {
-        QMessageBox::critical(this, "Database Error",
-            "Failed to open database:\n" + err);
-        return;
-    }
-    Schema::initialize(*db_);
-    Schema::migrate(*db_);
-
-    search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
-    // ocrPool_, indexer_, watcher_, thumbs_ are NOT constructed.
-    // Their slots in MainWindow check for null before using them.
-
-    loadSettings();
-
-    // --- UI ------------------------------------------------------------
+    // --- Build UI FIRST (before DB) so window paints immediately ---
     buildCentral();
     buildMenus();
     buildToolbar();
     applyTheme();
+    statusBar()->showMessage("Loading...");
 
-    // --- Signals (only the ones that don't need crash-prone subsystems) -
-    connect(searchBar_, &SearchBar::searchRequested,
-            this, &MainWindow::onSearch);
-    connect(searchBar_, &SearchBar::savedSearchSelected,
-            this, &MainWindow::onSavedSearchSelected);
+    // --- Defer DB init to after window is shown (prevents blank freeze) ---
+    QTimer::singleShot(0, this, [this]() {
+        db_   = std::make_unique<Database>(this);
+        repo_ = std::make_unique<FileRepository>(*db_, this);
 
-    connect(resultsPane_, &ResultsPane::fileSelected,
-            this, &MainWindow::onFileSelected);
-    connect(resultsPane_, &ResultsPane::fileActivated,
-            this, &MainWindow::onFileActivated);
+        const QString dbPath = Config::instance().dbPath();
+        QString err;
+        if (!db_->open(dbPath, &err)) {
+            QMessageBox::critical(this, "Database Error",
+                "Failed to open database:\n" + err);
+            return;
+        }
+        Schema::initialize(*db_);
+        Schema::migrate(*db_);
+        search_ = std::make_unique<SearchEngine>(*db_, *repo_, this);
+        loadSettings();
 
-    connect(previewPane_, &PreviewPane::openRequested,
-            this, &MainWindow::onOpenOriginal);
+        // Wire up signals now that DB exists
+        connect(searchBar_, &SearchBar::searchRequested,
+                this, &MainWindow::onSearch);
+        connect(searchBar_, &SearchBar::savedSearchSelected,
+                this, &MainWindow::onSavedSearchSelected);
+        connect(resultsPane_, &ResultsPane::fileSelected,
+                this, &MainWindow::onFileSelected);
+        connect(resultsPane_, &ResultsPane::fileActivated,
+                this, &MainWindow::onFileActivated);
+        connect(previewPane_, &PreviewPane::openRequested,
+                this, &MainWindow::onOpenOriginal);
+        connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
+                this, &MainWindow::onTagAdded);
+        connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
+                this, &MainWindow::onTagRemoved);
+        connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
+                this, &MainWindow::onNoteChanged);
 
-    connect(tagsNotesPane_, &TagsNotesPane::tagAdded,
-            this, &MainWindow::onTagAdded);
-    connect(tagsNotesPane_, &TagsNotesPane::tagRemoved,
-            this, &MainWindow::onTagRemoved);
-    connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
-            this, &MainWindow::onNoteChanged);
+        liveSearchTimer_ = new QTimer(this);
+        liveSearchTimer_->setSingleShot(true);
+        liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
+        connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
+        connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
+            liveSearchTimer_->start();
+        });
 
-    // Live search debounce
-    liveSearchTimer_ = new QTimer(this);
-    liveSearchTimer_->setSingleShot(true);
-    liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
-    connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
-    connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
-        liveSearchTimer_->start();
+        autoScanTimer_ = new QTimer(this);
+        autoScanTimer_->setInterval(60 * 1000);
+        connect(autoScanTimer_, &QTimer::timeout, this, [this]{
+            if (contentExtractionRunning_) return;
+            autoScanIndexedFolders();
+        });
+        autoScanTimer_->start();
+
+        refreshSavedSearches();
+        updateIndexStats();
+        statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
     });
-
-    // Auto-scan timer — fires every 60 seconds, rescans indexed folders.
-    autoScanTimer_ = new QTimer(this);
-    autoScanTimer_->setInterval(60 * 1000);
-    connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
-    autoScanTimer_->start();
-
-    refreshSavedSearches();
-    statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
 }
 
 MainWindow::~MainWindow() {
