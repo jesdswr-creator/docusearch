@@ -193,30 +193,47 @@ void MainWindow::buildCentral() {
     leftLay->addWidget(resultsPane_, 1);
     mainSplitter_->addWidget(leftWidget);
 
-    // Middle: preview
-    previewPane_ = new PreviewPane(this);
-    previewPane_->setMinimumWidth(200);
-    mainSplitter_->addWidget(previewPane_);
+    // Middle: preview (bottom) + tags/notes (top, moved from right pane)
+    auto* middleWidget = new QWidget(this);
+    middleWidget->setMinimumWidth(220);
+    auto* middleLay = new QVBoxLayout(middleWidget);
+    middleLay->setContentsMargins(4, 4, 4, 4);
+    middleLay->setSpacing(4);
+    // Tags/notes at top of middle pane (compact)
+    tagsNotesPane_ = new TagsNotesPane(middleWidget);
+    tagsNotesPane_->setMaximumHeight(180);
+    middleLay->addWidget(tagsNotesPane_);
+    // Preview at bottom (content text)
+    previewPane_ = new PreviewPane(middleWidget);
+    middleLay->addWidget(previewPane_, 1);
+    mainSplitter_->addWidget(middleWidget);
 
-    // Right: tabs for metadata, tags/notes, indexing
+    // Right: metadata + indexing status (narrower)
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
-    rightSplitter_->setMinimumWidth(200);
+    rightSplitter_->setMinimumWidth(180);
+    rightSplitter_->setMaximumWidth(280);
     metadataPane_   = new MetadataPane(rightSplitter_);
-    metadataPane_->setMinimumHeight(120);
-    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
-    tagsNotesPane_->setMinimumHeight(100);
+    metadataPane_->setMinimumHeight(150);
     indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
-    indexingWidget_->setMinimumHeight(80);
+    indexingWidget_->setMinimumHeight(100);
 
     rightSplitter_->addWidget(metadataPane_);
-    rightSplitter_->addWidget(tagsNotesPane_);
     rightSplitter_->addWidget(indexingWidget_);
     mainSplitter_->addWidget(rightSplitter_);
 
-    // Stretch factors: left=40, middle=35, right=25.
-    mainSplitter_->setStretchFactor(0, 40);
+    // Stretch factors: left=45, middle=35, right=20.
+    mainSplitter_->setStretchFactor(0, 45);
     mainSplitter_->setStretchFactor(1, 35);
-    mainSplitter_->setStretchFactor(2, 25);
+    mainSplitter_->setStretchFactor(2, 20);
+
+    rightSplitter_->setStretchFactor(0, 55);
+    rightSplitter_->setStretchFactor(1, 45);
+
+    // Set initial splitter sizes
+    QList<int> sizes;
+    int totalW = width();
+    sizes << int(totalW * 0.45) << int(totalW * 0.35) << int(totalW * 0.20);
+    mainSplitter_->setSizes(sizes);
 
     updateIndexStats();
 }
@@ -854,11 +871,16 @@ void MainWindow::onToggleTheme() {
 
 void MainWindow::onAbout() {
     QMessageBox::about(this, "About DocuSearch",
-        QString("<h3>%1 %2</h3>"
-                "<p>Offline Intelligent Document Search &amp; OCR System.</p>"
-                "<p>Built with C++20, Qt 6, SQLite + FTS5, Tesseract OCR, and Poppler.</p>"
-                "<p>Completely offline. No cloud. No telemetry.</p>")
-        .arg(Constants::kAppName, Constants::kAppVersion));
+        QString("<div style='text-align:center;'>"
+                "<h2 style='color:#0078D4;'>DocuSearch %1</h2>"
+                "<p>Offline Intelligent Document Search &amp; OCR System</p>"
+                "<hr>"
+                "<p>Built with C++20, Qt 6, SQLite + FTS5</p>"
+                "<p>Completely offline. No cloud. No telemetry.</p>"
+                "<hr>"
+                "<p style='font-size:14px; color:#666;'>&#10084; Made with love by <b>MinZ</b></p>"
+                "</div>")
+        .arg(Constants::kAppVersion));
 }
 
 void MainWindow::onExportCsv() {
