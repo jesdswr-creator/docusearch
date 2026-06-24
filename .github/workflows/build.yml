@@ -126,15 +126,6 @@ jobs:
           Get-ChildItem -Path "build\bin\Release" | Where-Object {
               $_.Name -notlike "tst_*"
           } | Copy-Item -Destination $stagingDir -Recurse -Force
-
-          # Copy the high-res icon PNG alongside the exe so Windows can use
-          # it for large icon view in Explorer
-          Copy-Item "resources\icons\DocuSearch-256.png" "$stagingDir\DocuSearch.png" -Force
-
-          # Create a desktop.ini so the folder shows the icon in large view
-          "[.ShellClassInfo]`r`nIconResource=DocuSearch.exe,0`r`n" | Out-File -FilePath "$stagingDir\desktop.ini" -Encoding ASCII -NoNewline
-          (Get-Item "$stagingDir\desktop.ini").Attributes = 'Hidden'
-
           Compress-Archive -Path "$stagingDir\*" -DestinationPath $portableZip -CompressionLevel Optimal
           Write-Host "Created portable ZIP: $portableZip"
           Write-Host "Contents:"
