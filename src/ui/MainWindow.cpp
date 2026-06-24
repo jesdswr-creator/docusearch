@@ -86,20 +86,13 @@ MainWindow::MainWindow(QWidget* parent)
     }
     setMinimumSize(800, 500);
 
-    // --- Build UI FIRST so window paints ---
+    // --- Build UI ---
     buildCentral();
     buildMenus();
     buildToolbar();
     applyTheme();
-    statusBar()->showMessage("Loading...");
 
-    // CRITICAL: Show the window NOW (before DB init) so it paints.
-    // main.cpp calls w.show() too, but calling it here first means
-    // the window is visible during the DB init that follows.
-    show();
-    QApplication::processEvents();  // pump paint events — window renders
-
-    // --- Initialize DB (window is already painted and visible) ---
+    // --- Initialize DB ---
     db_   = std::make_unique<Database>(this);
     repo_ = std::make_unique<FileRepository>(*db_, this);
 

@@ -49,10 +49,7 @@ int main(int argc, char* argv[]) {
     auto& log = DocuSearch::Logger::instance();
     log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);
 
-    // Build and show main window directly — no splash screen.
-    // The app starts fast enough (< 2 seconds) that a splash is unnecessary
-    // and was causing freezes (splash can't repaint during MainWindow
-    // construction because the event loop isn't running yet).
+    // Build and show main window — simple, no splash, no processEvents tricks
     DocuSearch::MainWindow w;
     w.show();
 
