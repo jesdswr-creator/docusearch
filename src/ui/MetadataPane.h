@@ -1,5 +1,9 @@
 #pragma once
 
+// ============================================================
+// MetadataPane.h — File metadata display (scrollable)
+// ============================================================
+
 #include <QWidget>
 #include <QLabel>
 #include <QFormLayout>
@@ -24,6 +28,10 @@ private:
     QLabel* hash_;
     QLabel* status_;
     QLabel* ocrStatus_;
+
+    QString humanizeStatus(const QString& s) const;
+    QString colorForStatus(const QString& s) const;
+    void styleLabel(QLabel* lbl);
 };
 
 } // namespace DocuSearch

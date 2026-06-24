@@ -70,6 +70,9 @@ private slots:
     void onAbout();
     void onExportCsv();
     void onDetectDuplicates();
+    void onAddFolder();
+    void onExtract();
+    void autoScanIndexedFolders();
 
 private:
     void buildMenus();
@@ -80,6 +83,11 @@ private:
     void saveSettings();
     void refreshSavedSearches();
     void openFile(const QString& path);
+
+public:
+    // Update indexing widget with file counts. Q_INVOKABLE so it can be
+    // called safely via QMetaObject::invokeMethod from worker threads.
+    Q_INVOKABLE void updateIndexStats();
 
     // Owned subsystems
     std::unique_ptr<Database>       db_;
@@ -100,10 +108,12 @@ private:
     QSplitter*        mainSplitter_    = nullptr;
     QSplitter*        rightSplitter_   = nullptr;
     QTimer*           liveSearchTimer_ = nullptr;
+    QTimer*           autoScanTimer_   = nullptr;
     QString           pendingQuery_;
 
     AppSettings       settings_;
     bool              darkMode_ = true;
+    bool              contentExtractionRunning_ = false;
 };
 
 } // namespace DocuSearch

@@ -28,6 +28,8 @@
 #include "../settings/SettingsManager.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -50,6 +52,15 @@
 #include <QPixmap>
 #include <QFuture>
 #include <QtConcurrent>
+#include <QInputDialog>
+#include <QPalette>
+#include <QColor>
+#include <QDir>
+#include <QFileInfo>
+#include <QSet>
+#include <QElapsedTimer>
+
+#include <sqlite3.h>
 
 #include <memory>
 
@@ -60,7 +71,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     setWindowTitle(QString("%1 %2 - Offline Document Search")
                    .arg(Constants::kAppName, Constants::kAppVersion));
-    resize(1400, 900);
+
+    // --- Window sizing: 80% of available screen, capped at 1280x720, centered.
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen) {
+        const QRect avail = screen->availableGeometry();
+        int w = qMin<int>(1280, int(avail.width()  * 0.8));
+        int h = qMin<int>(720,  int(avail.height() * 0.8));
+        resize(w, h);
+        move(avail.x() + (avail.width()  - w) / 2,
+             avail.y() + (avail.height() - h) / 2);
+    } else {
+        resize(1280, 720);
+    }
+    setMinimumSize(800, 500);
 
     // --- Initialize ONLY the database + search (no OCR/indexer/watcher) ---
     // These subsystems are crash-prone without Tesseract/Poppler linked.
@@ -120,11 +144,18 @@ MainWindow::MainWindow(QWidget* parent)
         liveSearchTimer_->start();
     });
 
+    // Auto-scan timer — fires every 60 seconds, rescans indexed folders.
+    autoScanTimer_ = new QTimer(this);
+    autoScanTimer_->setInterval(60 * 1000);
+    connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
+    autoScanTimer_->start();
+
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
 }
 
 MainWindow::~MainWindow() {
+    if (autoScanTimer_) autoScanTimer_->stop();
     if (indexer_) indexer_->stopIndexing();
     if (ocrPool_) ocrPool_->shutdown();
     if (watcher_) watcher_->stop();
@@ -133,6 +164,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::closeEvent(QCloseEvent* e) {
     saveSettings();
+    if (autoScanTimer_) autoScanTimer_->stop();
     if (indexer_ && indexer_->isRunning()) {
         const auto rc = QMessageBox::question(
             this, "Indexing in progress",
@@ -152,6 +184,7 @@ void MainWindow::buildCentral() {
 
     // Left: search bar + results
     auto* leftWidget = new QWidget(this);
+    leftWidget->setMinimumWidth(250);
     auto* leftLay = new QVBoxLayout(leftWidget);
     leftLay->setContentsMargins(8, 8, 8, 8);
     searchBar_ = new SearchBar(leftWidget);
@@ -162,22 +195,30 @@ void MainWindow::buildCentral() {
 
     // Middle: preview
     previewPane_ = new PreviewPane(this);
+    previewPane_->setMinimumWidth(200);
     mainSplitter_->addWidget(previewPane_);
 
     // Right: tabs for metadata, tags/notes, indexing
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
+    rightSplitter_->setMinimumWidth(200);
     metadataPane_   = new MetadataPane(rightSplitter_);
+    metadataPane_->setMinimumHeight(120);
     tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
+    tagsNotesPane_->setMinimumHeight(100);
     indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
+    indexingWidget_->setMinimumHeight(80);
 
     rightSplitter_->addWidget(metadataPane_);
     rightSplitter_->addWidget(tagsNotesPane_);
     rightSplitter_->addWidget(indexingWidget_);
     mainSplitter_->addWidget(rightSplitter_);
 
-    mainSplitter_->setStretchFactor(0, 5);
-    mainSplitter_->setStretchFactor(1, 3);
-    mainSplitter_->setStretchFactor(2, 2);
+    // Stretch factors: left=40, middle=35, right=25.
+    mainSplitter_->setStretchFactor(0, 40);
+    mainSplitter_->setStretchFactor(1, 35);
+    mainSplitter_->setStretchFactor(2, 25);
+
+    updateIndexStats();
 }
 
 void MainWindow::buildMenus() {
@@ -190,77 +231,62 @@ void MainWindow::buildMenus() {
         });
     fileMenu->addAction("Export Results as CSV…", QKeySequence::Save,
         this, &MainWindow::onExportCsv);
+    fileMenu->addAction("Save Current Search...", this, [this]{
+        const QString q = searchBar_->text().trimmed();
+        if (q.isEmpty()) {
+            QMessageBox::information(this, "Save Search",
+                "Type a search query first.");
+            return;
+        }
+        bool ok = false;
+        const QString name = QInputDialog::getText(this,
+            "Save Current Search", "Name:",
+            QLineEdit::Normal, QString(), &ok).trimmed();
+        if (!ok || name.isEmpty()) return;
+        repo_->saveSearch(name, q);
+        refreshSavedSearches();
+        statusBar()->showMessage("Saved search: " + name, 3000);
+    });
     fileMenu->addSeparator();
     fileMenu->addAction("Quit", QKeySequence::Quit,
         qApp, &QApplication::quit);
 
     // Index menu
     auto* indexMenu = menuBar()->addMenu("&Index");
-    indexMenu->addAction("Add Folder to Index...", this, [this]{
-        // Manually scan a folder and add files to the database.
-        // Also extracts text content from DOCX/XLSX/PPTX/TXT/CSV/MD
-        // so FTS5 content search works.
-        const QString folder = QFileDialog::getExistingDirectory(
-            this, "Select Folder to Index");
-        if (folder.isEmpty()) return;
-
-        statusBar()->showMessage("Scanning " + folder + " ...");
-        QApplication::processEvents();
-
-        // Get the document extractor registry for content extraction
-        auto& registry = DocumentExtractorRegistry::instance();
-
-        int count = 0;
-        int contentCount = 0;
-        QStringList emptyExcludes;
-        FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
-            FileRecord r;
-            r.path         = FileUtils::toNative(fi.absoluteFilePath());
-            r.filename     = fi.fileName();
-            r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
-            r.size         = fi.size();
-            r.createdDate  = fi.birthTime();
-            r.modifiedDate = fi.lastModified();
-            r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
-            r.ocrStatus      = Constants::OcrStatus::kNotNeeded;
-            qint64 fileId = repo_->upsertFile(r);
-
-            // Extract text content for supported document types
-            if (fileId > 0 && registry.extractorFor(r.extension)) {
-                try {
-                    auto result = registry.extractByExtension(r.path, r.extension);
-                    if (!result.text.isEmpty()) {
-                        repo_->updateContent(fileId, result.text, result.source,
-                                             Constants::IndexingStatus::kContentDone,
-                                             Constants::OcrStatus::kNotNeeded);
-                        ++contentCount;
-                    }
-                } catch (...) {
-                    // Content extraction failed - file is still indexed by filename
-                }
-            }
-
-            ++count;
-            if (count % 200 == 0) {
-                statusBar()->showMessage(QString("Scanned %1 files (%2 with content)...")
-                    .arg(count).arg(contentCount));
-                QApplication::processEvents();
-            }
-            return true;
-        });
-
-        statusBar()->showMessage(QString("Indexed %1 files (%2 with content) from %3")
-            .arg(count).arg(contentCount).arg(folder));
-        QMessageBox::information(this, "Indexing Complete",
-            QString("Added %1 files to the search index.\n"
-                    "%2 files have extracted text content.\n\n"
-                    "You can now search by filename AND content.").arg(count).arg(contentCount));
-    });
+    indexMenu->addAction("Add Folder to Index...", this, [this]{ onAddFolder(); });
+    indexMenu->addAction("Extract Content Now", this, [this]{ onExtract(); });
     indexMenu->addSeparator();
-    indexMenu->addAction("Start Indexing", this, &MainWindow::onStartIndexing);
-    indexMenu->addAction("Pause",  this, &MainWindow::onPauseIndexing);
-    indexMenu->addAction("Resume", this, &MainWindow::onResumeIndexing);
-    indexMenu->addAction("Stop",   this, &MainWindow::onStopIndexing);
+    indexMenu->addAction("Clear Index...", this, [this]{
+        const auto rc = QMessageBox::question(this, "Clear Index",
+            "This will permanently delete ALL files, content, tags, and notes "
+            "from the database.\n\nAre you sure?",
+            QMessageBox::Yes | QMessageBox::No);
+        if (rc != QMessageBox::Yes) return;
+        db_->exec("DELETE FROM Files;");
+        db_->exec("DELETE FROM DocumentText;");
+        db_->exec("DELETE FROM Tags;");
+        db_->exec("DELETE FROM Notes;");
+        db_->exec("DELETE FROM SearchIndex;");
+        db_->exec("DELETE FROM IndexingLog;");
+        db_->exec("VACUUM;");
+        resultsPane_->clear();
+        updateIndexStats();
+        statusBar()->showMessage("Index cleared.", 5000);
+    });
+    indexMenu->addAction("Index Statistics", this, [this]{
+        const qint64 total       = repo_->totalFiles();
+        const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
+        const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
+        const qint64 failed      = repo_->countByStatus(Constants::IndexingStatus::kFailed);
+        QMessageBox::information(this, "Index Statistics",
+            QString("Files: %1\n"
+                    "Content indexed: %2\n"
+                    "Metadata only: %3\n"
+                    "Failed: %4\n\n"
+                    "Database: %5")
+                .arg(total).arg(contentDone).arg(metaOnly).arg(failed)
+                .arg(Config::instance().dbPath()));
+    });
     indexMenu->addSeparator();
     indexMenu->addAction("Detect Duplicates", this, &MainWindow::onDetectDuplicates);
 
@@ -268,6 +294,10 @@ void MainWindow::buildMenus() {
     auto* viewMenu = menuBar()->addMenu("&View");
     viewMenu->addAction("Toggle Dark/Light Theme", QKeySequence("F11"),
         this, &MainWindow::onToggleTheme);
+    viewMenu->addAction("Show Favorites Only", this, [this]{
+        searchBar_->setText("favorite:1");
+        onSearch("favorite:1");
+    });
 
     // Tools menu
     auto* toolsMenu = menuBar()->addMenu("&Tools");
@@ -283,17 +313,13 @@ void MainWindow::buildToolbar() {
     tb->setMovable(false);
     tb->setIconSize(QSize(20, 20));
 
-    auto* startAct = new QAction(style()->standardIcon(QStyle::SP_MediaPlay), "Index", this);
-    connect(startAct, &QAction::triggered, this, &MainWindow::onStartIndexing);
-    tb->addAction(startAct);
+    auto* addFolderAct = new QAction(style()->standardIcon(QStyle::SP_DirOpenIcon), "Add Folder", this);
+    connect(addFolderAct, &QAction::triggered, this, [this]{ onAddFolder(); });
+    tb->addAction(addFolderAct);
 
-    auto* pauseAct = new QAction(style()->standardIcon(QStyle::SP_MediaPause), "Pause", this);
-    connect(pauseAct, &QAction::triggered, this, &MainWindow::onPauseIndexing);
-    tb->addAction(pauseAct);
-
-    auto* stopAct = new QAction(style()->standardIcon(QStyle::SP_MediaStop), "Stop", this);
-    connect(stopAct, &QAction::triggered, this, &MainWindow::onStopIndexing);
-    tb->addAction(stopAct);
+    auto* extractAct = new QAction(style()->standardIcon(QStyle::SP_DialogSaveButton), "Extract", this);
+    connect(extractAct, &QAction::triggered, this, [this]{ onExtract(); });
+    tb->addAction(extractAct);
 
     tb->addSeparator();
 
@@ -304,12 +330,44 @@ void MainWindow::buildToolbar() {
     auto* themeAct = new QAction(style()->standardIcon(QStyle::SP_DesktopIcon), "Theme", this);
     connect(themeAct, &QAction::triggered, this, &MainWindow::onToggleTheme);
     tb->addAction(themeAct);
+
+    auto* dupesAct = new QAction(style()->standardIcon(QStyle::SP_BrowserReload), "Duplicates", this);
+    connect(dupesAct, &QAction::triggered, this, &MainWindow::onDetectDuplicates);
+    tb->addAction(dupesAct);
 }
 
 void MainWindow::applyTheme() {
-    // Theme disabled for now — the QSS was causing a blank white window.
-    // Using native Windows styling instead. Re-enable once the QSS is fixed.
-    // Theme::apply(settings_.darkMode ? Theme::Mode::Dark : Theme::Mode::Light);
+    // Apply the initial palette based on saved darkMode_.
+    QPalette pal;
+    if (darkMode_) {
+        pal.setColor(QPalette::Window,          QColor(0x20, 0x20, 0x20));
+        pal.setColor(QPalette::Base,            QColor(0x2A, 0x2A, 0x2A));
+        pal.setColor(QPalette::AlternateBase,   QColor(0x26, 0x26, 0x26));
+        pal.setColor(QPalette::WindowText,      QColor(0xE0, 0xE0, 0xE0));
+        pal.setColor(QPalette::Text,            QColor(0xE0, 0xE0, 0xE0));
+        pal.setColor(QPalette::ButtonText,      QColor(0xE0, 0xE0, 0xE0));
+        pal.setColor(QPalette::Button,          QColor(0x2A, 0x2A, 0x2A));
+        pal.setColor(QPalette::Highlight,       QColor(0x00, 0x78, 0xD4));
+        pal.setColor(QPalette::HighlightedText, QColor(0xFF, 0xFF, 0xFF));
+        pal.setColor(QPalette::ToolTipBase,     QColor(0x40, 0x40, 0x40));
+        pal.setColor(QPalette::ToolTipText,     QColor(0xE0, 0xE0, 0xE0));
+    } else {
+        pal.setColor(QPalette::Window,          QColor(0xF3, 0xF3, 0xF3));
+        pal.setColor(QPalette::Base,            QColor(0xFF, 0xFF, 0xFF));
+        pal.setColor(QPalette::AlternateBase,   QColor(0xF9, 0xF9, 0xF9));
+        pal.setColor(QPalette::WindowText,      QColor(0x20, 0x20, 0x20));
+        pal.setColor(QPalette::Text,            QColor(0x20, 0x20, 0x20));
+        pal.setColor(QPalette::ButtonText,      QColor(0x20, 0x20, 0x20));
+        pal.setColor(QPalette::Button,          QColor(0xF3, 0xF3, 0xF3));
+        pal.setColor(QPalette::Highlight,       QColor(0x00, 0x78, 0xD4));
+        pal.setColor(QPalette::HighlightedText, QColor(0xFF, 0xFF, 0xFF));
+        pal.setColor(QPalette::ToolTipBase,     QColor(0xFF, 0xFF, 0xFF));
+        pal.setColor(QPalette::ToolTipText,     QColor(0x20, 0x20, 0x20));
+    }
+    pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
+    pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
+    pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
+    QApplication::setPalette(pal);
 }
 
 void MainWindow::loadSettings() {
@@ -363,30 +421,33 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     }
     previewPane_->setFilePath(path);
 
-    // Generate thumbnail in background
-    const QString ext = FileUtils::extensionOf(path);
-    if (Constants::kImageExtensions.contains(ext) || ext == "pdf") {
-        (void)QtConcurrent::run([this, path, fileId]{
-            QImage img = thumbs_->thumbnail(path, 512);
-            QMetaObject::invokeMethod(this, [this, img]{
-                previewPane_->setThumbnail(QPixmap::fromImage(img));
-            }, Qt::QueuedConnection);
-        });
-    } else {
-        previewPane_->setThumbnail(QPixmap());
-    }
+    // Thumbnail generator (thumbs_) is not constructed in this build — just
+    // clear any existing preview rather than crashing on a null pointer.
+    previewPane_->setThumbnail(QPixmap());
 
-    // Lazy index: if file isn't fully indexed, do it now.
+    // Load extracted text from the DocumentText table via a direct
+    // SQLite query (avoids depending on the null indexer_).
+    QString extracted;
     if (fileId != 0) {
-        (void)QtConcurrent::run([this, fileId]{
-            QString text = indexer_->lazyIndex(fileId);
-            if (!text.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, text]{
-                    previewPane_->setExtractedText(text);
-                }, Qt::QueuedConnection);
+        sqlite3* raw = db_->raw();
+        if (raw) {
+            sqlite3_stmt* s = nullptr;
+            if (sqlite3_prepare_v2(raw,
+                    "SELECT extracted_text FROM DocumentText WHERE file_id = ?1;",
+                    -1, &s, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(s, 1, fileId);
+                if (sqlite3_step(s) == SQLITE_ROW) {
+                    const unsigned char* t = sqlite3_column_text(s, 0);
+                    if (t) extracted = QString::fromUtf8(
+                                          reinterpret_cast<const char*>(t));
+                }
+                sqlite3_finalize(s);
             }
-        });
+        }
     }
+    previewPane_->setExtractedText(extracted.isEmpty()
+        ? "No content extracted for this file."
+        : extracted);
 }
 
 void MainWindow::onFileActivated(qint64 fileId, const QString& path) {
@@ -405,7 +466,248 @@ void MainWindow::openFile(const QString& path) {
 }
 
 // ============================================================
-// Indexing
+// Folder scan + content extraction
+// ============================================================
+void MainWindow::onAddFolder() {
+    const QString folder = QFileDialog::getExistingDirectory(
+        this, "Select Folder to Index");
+    if (folder.isEmpty()) return;
+
+    statusBar()->showMessage("Scanning " + folder + " ...");
+    QApplication::processEvents();
+
+    // Get the document extractor registry for content extraction
+    auto& registry = DocumentExtractorRegistry::instance();
+
+    int count = 0;
+    int contentCount = 0;
+    QStringList emptyExcludes;
+    FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
+        FileRecord r;
+        r.path         = FileUtils::toNative(fi.absoluteFilePath());
+        r.filename     = fi.fileName();
+        r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
+        r.size         = fi.size();
+        r.createdDate  = fi.birthTime();
+        r.modifiedDate = fi.lastModified();
+        r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
+        // Quick scan: pending for documents/images, not_needed otherwise.
+        if (Constants::kDocumentExtensions.contains(r.extension) ||
+            Constants::kImageExtensions.contains(r.extension)) {
+            r.ocrStatus = Constants::OcrStatus::kPending;
+        } else {
+            r.ocrStatus = Constants::OcrStatus::kNotNeeded;
+        }
+        qint64 fileId = repo_->upsertFile(r);
+
+        // Extract text content for supported document types
+        if (fileId > 0 && registry.extractorFor(r.extension)) {
+            try {
+                auto result = registry.extractByExtension(r.path, r.extension);
+                if (!result.text.isEmpty()) {
+                    repo_->updateContent(fileId, result.text, result.source,
+                                         Constants::IndexingStatus::kContentDone,
+                                         Constants::OcrStatus::kNotNeeded);
+                    ++contentCount;
+                }
+            } catch (...) {
+                // Failed extraction — mark file so it can be re-tried later.
+                repo_->updateStatus(fileId, Constants::IndexingStatus::kFailed);
+            }
+        }
+
+        ++count;
+        if (count % 200 == 0) {
+            statusBar()->showMessage(QString("Scanned %1 files (%2 with content)...")
+                .arg(count).arg(contentCount));
+            QApplication::processEvents();
+        }
+        return true;
+    });
+
+    updateIndexStats();
+    statusBar()->showMessage(QString("Indexed %1 files (%2 with content) from %3")
+        .arg(count).arg(contentCount).arg(folder));
+    QMessageBox::information(this, "Indexing Complete",
+        QString("Added %1 files to the search index.\n"
+                "%2 files have extracted text content.\n\n"
+                "You can now search by filename AND content.").arg(count).arg(contentCount));
+}
+
+void MainWindow::onExtract() {
+    if (contentExtractionRunning_) {
+        statusBar()->showMessage("Content extraction already running.");
+        return;
+    }
+
+    // Gather files needing content extraction on the main thread.
+    struct TodoItem { qint64 fileId; QString path; QString ext; };
+    QList<TodoItem> todo;
+    sqlite3* raw = db_->raw();
+    if (raw) {
+        sqlite3_stmt* s = nullptr;
+        // Re-extract any file that isn't content_done (this re-tries failed).
+        // Include PDF/DOC/XLS/PPT (plus the other supported extensions).
+        const char* sql =
+            "SELECT id, path, extension FROM Files "
+            "WHERE indexing_status != 'content_done' "
+            "AND extension IN ("
+            "'pdf','doc','docx',"
+            "'xls','xlsx','xlsm',"
+            "'ppt','pptx',"
+            "'txt','csv','md','rtf') "
+            "ORDER BY id;";
+        if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(s) == SQLITE_ROW) {
+                TodoItem it;
+                it.fileId = sqlite3_column_int64(s, 0);
+                const unsigned char* p = sqlite3_column_text(s, 1);
+                const unsigned char* e = sqlite3_column_text(s, 2);
+                it.path = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
+                it.ext  = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
+                todo.append(it);
+            }
+            sqlite3_finalize(s);
+        }
+    }
+
+    if (todo.isEmpty()) {
+        statusBar()->showMessage("No files need content extraction.", 3000);
+        return;
+    }
+
+    contentExtractionRunning_ = true;
+    statusBar()->showMessage(
+        QString("Extracting content from %1 files...").arg(todo.size()));
+
+    (void)QtConcurrent::run([this, todo]{
+        auto& registry = DocumentExtractorRegistry::instance();
+        int done = 0, failed = 0;
+        for (const auto& item : todo) {
+            try {
+                auto result = registry.extractByExtension(item.path, item.ext);
+                if (!result.text.isEmpty()) {
+                    repo_->updateContent(item.fileId, result.text, result.source,
+                                         Constants::IndexingStatus::kContentDone,
+                                         Constants::OcrStatus::kNotNeeded);
+                    ++done;
+                } else {
+                    repo_->updateStatus(item.fileId,
+                                        Constants::IndexingStatus::kFailed);
+                    ++failed;
+                }
+            } catch (...) {
+                // Failed extraction — mark file as failed so it can be re-tried.
+                repo_->updateStatus(item.fileId,
+                                    Constants::IndexingStatus::kFailed);
+                ++failed;
+            }
+        }
+
+        QMetaObject::invokeMethod(this, [this, done, failed]{
+            contentExtractionRunning_ = false;
+            updateIndexStats();
+            statusBar()->showMessage(
+                QString("Extracted content for %1 files (%2 failed).")
+                    .arg(done).arg(failed), 5000);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::autoScanIndexedFolders() {
+    // Crash guard: skip if content extraction is running.
+    if (contentExtractionRunning_) return;
+
+    // Gather unique top-level folders from indexed file paths.
+    QSet<QString> folders;
+    sqlite3* raw = db_->raw();
+    if (raw) {
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(raw, "SELECT path FROM Files;",
+                               -1, &s, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(s) == SQLITE_ROW) {
+                const unsigned char* t = sqlite3_column_text(s, 0);
+                if (!t) continue;
+                const QString path = QString::fromUtf8(
+                    reinterpret_cast<const char*>(t));
+                const QFileInfo fi(path);
+                const QString absPath = fi.absolutePath();
+                // Top-level folder: first 2 path segments.
+                // Windows: "D:/Documents/sub" -> "D:/Documents"
+                // Unix:    "/home/user/docs"  -> "/home/user"
+                QStringList parts = absPath.split('/', Qt::SkipEmptyParts);
+                QString top;
+                if (parts.size() >= 2) {
+                    if (absPath.startsWith('/'))
+                        top = "/" + parts[0] + "/" + parts[1];
+                    else
+                        top = parts[0] + "/" + parts[1];
+                } else if (!absPath.isEmpty()) {
+                    top = absPath;
+                }
+                if (!top.isEmpty())
+                    folders.insert(QDir::toNativeSeparators(top));
+            }
+            sqlite3_finalize(s);
+        }
+    }
+    if (folders.isEmpty()) return;
+
+    const QStringList folderList(folders.begin(), folders.end());
+
+    (void)QtConcurrent::run([this, folderList]{
+        int newFiles = 0, updatedFiles = 0;
+        for (const auto& folder : folderList) {
+            QStringList emptyExcludes;
+            FileUtils::walkDirectory(folder, emptyExcludes,
+                [&](const QFileInfo& fi) -> bool {
+                    const QString path = FileUtils::toNative(fi.absoluteFilePath());
+                    FileRecord existing;
+                    const bool isNew = !repo_->getByPath(path, existing);
+                    FileRecord r;
+                    r.path         = path;
+                    r.filename     = fi.fileName();
+                    r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
+                    r.size         = fi.size();
+                    r.createdDate  = fi.birthTime();
+                    r.modifiedDate = fi.lastModified();
+                    r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
+                    // Quick scan: pending for documents/images, not_needed otherwise.
+                    if (Constants::kDocumentExtensions.contains(r.extension) ||
+                        Constants::kImageExtensions.contains(r.extension)) {
+                        r.ocrStatus = Constants::OcrStatus::kPending;
+                    } else {
+                        r.ocrStatus = Constants::OcrStatus::kNotNeeded;
+                    }
+                    qint64 fileId = repo_->upsertFile(r);
+                    if (fileId > 0) {
+                        if (isNew) ++newFiles;
+                        else       ++updatedFiles;
+                    }
+                    return true;
+                });
+        }
+
+        QMetaObject::invokeMethod(this, [this, newFiles, updatedFiles]{
+            statusBar()->showMessage(
+                QString("Auto-scan: %1 new, %2 updated")
+                    .arg(newFiles).arg(updatedFiles), 5000);
+            updateIndexStats();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::updateIndexStats() {
+    const qint64 total       = repo_->totalFiles();
+    const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
+    const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
+    const QString msg = QString("Files: %1\nContent indexed: %2\nMetadata only: %3")
+                            .arg(total).arg(contentDone).arg(metaOnly);
+    if (indexingWidget_) indexingWidget_->setPhase(msg);
+}
+
+// ============================================================
+// Indexing (legacy slots — indexer disabled in this build)
 // ============================================================
 void MainWindow::onStartIndexing() {
     if (!indexer_) {
@@ -534,23 +836,18 @@ void MainWindow::onOpenSettings() {
     SettingsDialog dlg(settings_, this);
     if (dlg.exec() == QDialog::Accepted) {
         settings_ = dlg.result();
+        darkMode_ = settings_.darkMode;
         saveSettings();
         applyTheme();
-        ocrPool_->setAppSettings(settings_);
-        if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
-            watcher_->stop();
-            watcher_->addWatches(settings_.indexedDrives);
-        }
-        // Restart indexing with new settings if currently running
-        if (indexer_->isRunning()) {
-            indexer_->stopIndexing();
-            QTimer::singleShot(500, this, &MainWindow::onStartIndexing);
-        }
+        // ocrPool_/watcher_/indexer_ are not constructed in this build —
+        // skip calling them.
+        updateIndexStats();
     }
 }
 
 void MainWindow::onToggleTheme() {
-    settings_.darkMode = !settings_.darkMode;
+    darkMode_ = !darkMode_;
+    settings_.darkMode = darkMode_;
     saveSettings();
     applyTheme();
 }

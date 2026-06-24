@@ -1,5 +1,5 @@
 // ============================================================
-// ResultsPane.cpp
+// ResultsPane.cpp — QTableWidget-based results list
 // ============================================================
 
 #include "ResultsPane.h"
@@ -8,13 +8,45 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileInfo>
+#include <QHeaderView>
+#include <QFont>
+#include <QBrush>
+#include <QColor>
 
 namespace DocuSearch {
 
 namespace {
-// Each list item carries the SearchHit as Qt::UserRole + 1.
+// Each Name cell carries the fileId + path as Qt::UserRole + 1 / + 2.
 const int kRoleFileId = Qt::UserRole + 1;
 const int kRolePath   = Qt::UserRole + 2;
+
+// Extension -> brand color (Office / common colors).
+const QHash<QString, QString> kExtColor = {
+    {"pdf",  "#EB4034"},   // red
+    {"doc",  "#2B579A"},   // blue
+    {"docx", "#2B579A"},
+    {"xls",  "#216746"},   // green
+    {"xlsx", "#216746"},
+    {"xlsm", "#216746"},
+    {"ppt",  "#E36C0A"},   // orange
+    {"pptx", "#E36C0A"},
+    {"txt",  "#808080"},   // gray
+    {"csv",  "#808080"},
+    {"md",   "#808080"},
+    {"rtf",  "#808080"},
+    {"jpg",  "#7030A0"},   // purple (image)
+    {"jpeg", "#7030A0"},
+    {"png",  "#7030A0"},
+    {"tif",  "#7030A0"},
+    {"tiff", "#7030A0"},
+    {"bmp",  "#7030A0"},
+    {"gif",  "#7030A0"},
+    {"webp", "#7030A0"},
+};
+
+QString humanSize(qint64 bytes) {
+    return Utils::formatFileSize(bytes);
+}
 }
 
 ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
@@ -26,22 +58,37 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     countLabel_->setObjectName("subtitleLabel");
     v->addWidget(countLabel_);
 
-    list_ = new QListWidget(this);
-    list_->setAlternatingRowColors(true);
-    list_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    list_->setSelectionMode(QAbstractItemView::SingleSelection);
-    list_->setUniformItemSizes(false);
-    list_->setWordWrap(true);
-    list_->setContextMenuPolicy(Qt::CustomContextMenu);
+    table_ = new QTableWidget(this);
+    table_->setColumnCount(ColCount);
+    table_->setAlternatingRowColors(true);
+    table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table_->setHorizontalHeaderLabels({"Name", "Type", "Size", "Date", "Snippet"});
+    table_->verticalHeader()->setVisible(false);
+    table_->setWordWrap(true);
+    table_->setShowGrid(false);
+    table_->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    v->addWidget(list_);
+    // Header sizing: Name & Snippet stretch, others size to contents.
+    auto* hh = table_->horizontalHeader();
+    hh->setStretchLastSection(false);
+    hh->setSectionResizeMode(ColName,    QHeaderView::Stretch);
+    hh->setSectionResizeMode(ColType,    QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(ColSize,    QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(ColDate,    QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(ColSnippet, QHeaderView::Stretch);
+    hh->setHighlightSections(false);
 
-    connect(list_, &QListWidget::itemClicked,     this, &ResultsPane::onItemClicked);
-    connect(list_, &QListWidget::itemActivated,   this, &ResultsPane::onItemActivated);
+    v->addWidget(table_);
+
+    connect(table_, &QTableWidget::cellClicked,    this, &ResultsPane::onCellClicked);
+    connect(table_, &QTableWidget::cellDoubleClicked,
+            this, &ResultsPane::onCellActivated);
 }
 
 void ResultsPane::setResults(const QList<SearchHit>& hits) {
-    list_->clear();
+    table_->setRowCount(0);
     current_.clear();
     appendResults(hits);
     countLabel_->setText(QString("%1 result%2").arg(hits.size())
@@ -50,60 +97,111 @@ void ResultsPane::setResults(const QList<SearchHit>& hits) {
 
 void ResultsPane::appendResults(const QList<SearchHit>& hits) {
     for (const auto& h : hits) {
-        auto* item = new QListWidgetItem(list_);
-
-        QString display = QString("<b style='font-size:14px;'>%1</b>"
-                                  " <span style='color:#888; font-size:11px;'>[%2]</span>"
-                                  "<br><span style='color:#aaa; font-size:11px;'>%3</span>"
-                                  "<br><span style='color:#666; font-size:11px;'>%4 · %5</span>")
-            .arg(h.filename.toHtmlEscaped(),
-                 h.extension.toUpper(),
-                 h.path.toHtmlEscaped(),
-                 Utils::formatFileSize(h.size),
-                 h.modifiedDate.toString("yyyy-MM-dd"));
-
-        if (!h.snippet.isEmpty()) {
-            display += "<br><span style='color:#888; font-size:11px;'>" +
-                       h.snippet.toHtmlEscaped() + "</span>";
-        }
-
-        item->setText(display);
-        item->setData(kRoleFileId, h.fileId);
-        item->setData(kRolePath,   h.path);
-        item->setToolTip(h.path);
-        QSize sz = item->sizeHint();
-        sz.setHeight(h.snippet.isEmpty() ? 72 : 100);
-        item->setSizeHint(sz);
+        const int row = table_->rowCount();
+        table_->insertRow(row);
+        populateRow(row, h);
         current_.append(h);
     }
 }
 
+void ResultsPane::populateRow(int row, const SearchHit& h) {
+    // --- Name (col 0) — bold Segoe UI, carries fileId+path in UserRole ---
+    auto* nameItem = new QTableWidgetItem(h.filename);
+    QFont nameFont("Segoe UI", 10);
+    nameFont.setBold(true);
+    nameItem->setFont(nameFont);
+    nameItem->setData(kRoleFileId, h.fileId);
+    nameItem->setData(kRolePath,   h.path);
+    nameItem->setToolTip(h.path);
+    table_->setItem(row, ColName, nameItem);
+
+    // --- Type (col 1) — color-coded by extension ---
+    auto* typeItem = new QTableWidgetItem(h.extension.toUpper());
+    QFont typeFont("Segoe UI", 9);
+    typeFont.setBold(true);
+    typeItem->setFont(typeFont);
+    typeItem->setForeground(QBrush(QColor(colorForExtension(h.extension))));
+    typeItem->setTextAlignment(Qt::AlignCenter);
+    table_->setItem(row, ColType, typeItem);
+
+    // --- Size (col 2) — right-aligned, gray ---
+    auto* sizeItem = new QTableWidgetItem(humanSize(h.size));
+    sizeItem->setForeground(QBrush(QColor("#808080")));
+    sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    QFont sizeFont("Segoe UI", 9);
+    sizeItem->setFont(sizeFont);
+    table_->setItem(row, ColSize, sizeItem);
+
+    // --- Date (col 3) — centered, gray, yyyy-MM-dd ---
+    auto* dateItem = new QTableWidgetItem(h.modifiedDate.toString("yyyy-MM-dd"));
+    dateItem->setForeground(QBrush(QColor("#808080")));
+    dateItem->setTextAlignment(Qt::AlignCenter);
+    dateItem->setFont(sizeFont);
+    table_->setItem(row, ColDate, dateItem);
+
+    // --- Snippet (col 4) — strip <b></b>, truncate 150, gray ---
+    QString snip = stripBoldTags(h.snippet);
+    if (snip.size() > 150) snip = snip.left(150) + "…";
+    auto* snipItem = new QTableWidgetItem(snip);
+    snipItem->setForeground(QBrush(QColor("#808080")));
+    QFont snipFont("Segoe UI", 9);
+    snipItem->setFont(snipFont);
+    table_->setItem(row, ColSnippet, snipItem);
+
+    // Row height: 52 if there's a snippet, else 36.
+    table_->setRowHeight(row, h.snippet.isEmpty() ? 36 : 52);
+}
+
 void ResultsPane::clear() {
-    list_->clear();
+    table_->setRowCount(0);
     current_.clear();
     countLabel_->setText("No results");
 }
 
 qint64 ResultsPane::selectedFileId() const {
-    auto* cur = list_->currentItem();
-    return cur ? cur->data(kRoleFileId).toLongLong() : 0;
+    const int row = table_->currentRow();
+    if (row < 0) return 0;
+    auto* it = table_->item(row, ColName);
+    return it ? it->data(kRoleFileId).toLongLong() : 0;
 }
 
 QString ResultsPane::selectedPath() const {
-    auto* cur = list_->currentItem();
-    return cur ? cur->data(kRolePath).toString() : QString();
+    const int row = table_->currentRow();
+    if (row < 0) return QString();
+    auto* it = table_->item(row, ColName);
+    return it ? it->data(kRolePath).toString() : QString();
 }
 
-void ResultsPane::onItemClicked(QListWidgetItem* item) {
-    const qint64 id = item->data(kRoleFileId).toLongLong();
-    const QString path = item->data(kRolePath).toString();
-    emit fileSelected(id, path);
+void ResultsPane::onCellClicked(int row, int /*col*/) {
+    auto* it = table_->item(row, ColName);
+    if (!it) return;
+    emit fileSelected(it->data(kRoleFileId).toLongLong(),
+                      it->data(kRolePath).toString());
 }
 
-void ResultsPane::onItemActivated(QListWidgetItem* item) {
-    const qint64 id = item->data(kRoleFileId).toLongLong();
-    const QString path = item->data(kRolePath).toString();
-    emit fileActivated(id, path);
+void ResultsPane::onCellActivated(int row, int /*col*/) {
+    auto* it = table_->item(row, ColName);
+    if (!it) return;
+    emit fileActivated(it->data(kRoleFileId).toLongLong(),
+                       it->data(kRolePath).toString());
+}
+
+QString ResultsPane::colorForExtension(const QString& ext) const {
+    auto it = kExtColor.constFind(ext.toLower());
+    return it == kExtColor.constEnd() ? "#808080" : it.value();
+}
+
+QString ResultsPane::humanizeSize(qint64 bytes) const {
+    return humanSize(bytes);
+}
+
+QString ResultsPane::stripBoldTags(const QString& s) const {
+    QString out = s;
+    out.remove("<b>");
+    out.remove("</b>");
+    out.remove("<B>");
+    out.remove("</B>");
+    return out;
 }
 
 } // namespace DocuSearch

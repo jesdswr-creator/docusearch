@@ -1,8 +1,12 @@
 #pragma once
 
+// ============================================================
+// ResultsPane.h — QTableWidget-based results list
+// ============================================================
+
 #include <QWidget>
-#include <QListWidget>
-#include <QListWidgetItem>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QLabel>
 #include <QList>
 #include "../core/Types.h"
@@ -26,13 +30,20 @@ signals:
     void fileActivated(qint64 fileId, const QString& path);
 
 private slots:
-    void onItemClicked(QListWidgetItem* item);
-    void onItemActivated(QListWidgetItem* item);
+    void onCellClicked(int row, int col);
+    void onCellActivated(int row, int col);
 
 private:
-    QListWidget* list_;
-    QLabel*      countLabel_;
+    enum Column { ColName = 0, ColType, ColSize, ColDate, ColSnippet, ColCount };
+
+    QTableWidget* table_;
+    QLabel*       countLabel_;
     QList<SearchHit> current_;
+
+    void populateRow(int row, const SearchHit& h);
+    QString colorForExtension(const QString& ext) const;
+    QString humanizeSize(qint64 bytes) const;
+    QString stripBoldTags(const QString& s) const;
 };
 
 } // namespace DocuSearch
