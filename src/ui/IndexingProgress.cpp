@@ -37,7 +37,7 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
     v->setContentsMargins(8, 8, 8, 8);
     v->setSpacing(6);
 
-    // Section header — blue.
+    // Section header - blue.
     phaseLabel_ = new QLabel("Idle", inner);
     phaseLabel_->setObjectName("titleLabel");
     QFont headerFont("Segoe UI", 11);
@@ -61,7 +61,7 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
     ocrLabel_     = new QLabel("0", inner);
     queueLabel_   = new QLabel("0", inner);
     errorsLabel_  = new QLabel("0", inner);
-    etaLabel_     = new QLabel("—", inner);
+    etaLabel_     = new QLabel("-", inner);
 
     applyLabelFont(scannedLabel_);
     applyLabelFont(indexedLabel_);
@@ -89,7 +89,7 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
 
     v->addWidget(gb);
 
-    // Pause/Stop buttons — hidden because the indexer subsystem is disabled.
+    // Pause/Stop buttons - hidden because the indexer subsystem is disabled.
     auto* h = new QHBoxLayout();
     h->addStretch();
     pauseBtn_ = new QPushButton("Pause", inner);
@@ -120,7 +120,7 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
 }
 
 void IndexingProgressWidget::setPhase(const QString& phase) {
-    // phase may contain newlines (from updateIndexStats) — preserve them.
+    // phase may contain newlines (from updateIndexStats) - preserve them.
     phaseLabel_->setText(phase);
 }
 
@@ -134,9 +134,9 @@ void IndexingProgressWidget::update(const DocuSearch::IndexingProgress& p) {
 
     // ETA estimation: very rough
     if (p.queueRemaining.load() > 0 && p.documentsIndexed.load() > 0) {
-        etaLabel_->setText("estimating…");
+        etaLabel_->setText("estimating...");
     } else {
-        etaLabel_->setText("—");
+        etaLabel_->setText("-");
     }
 
     if (p.paused.load()) {

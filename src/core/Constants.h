@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Constants.h — Application-wide compile-time constants
+// Constants.h - Application-wide compile-time constants
 // ============================================================
 
 #include <QString>

@@ -89,7 +89,7 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
         }
     }
 #endif
-    // DOCX/XLSX/PPTX — skip thumbnails for now; UI shows a file-type icon.
+    // DOCX/XLSX/PPTX - skip thumbnails for now; UI shows a file-type icon.
 
     if (img.isNull()) return {};
 

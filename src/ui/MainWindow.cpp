@@ -144,7 +144,7 @@ MainWindow::MainWindow(QWidget* parent)
         liveSearchTimer_->start();
     });
 
-    // Auto-scan timer — fires every 60 seconds, rescans indexed folders.
+    // Auto-scan timer - fires every 60 seconds, rescans indexed folders.
     autoScanTimer_ = new QTimer(this);
     autoScanTimer_->setInterval(60 * 1000);
     connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
@@ -220,9 +220,9 @@ void MainWindow::buildCentral() {
     mainSplitter_->addWidget(rightSplitter_);
 
     // Stretch factors: left=45, middle=35, right=20.
-    mainSplitter_->setStretchFactor(0, 45);
-    mainSplitter_->setStretchFactor(1, 35);
-    mainSplitter_->setStretchFactor(2, 20);
+    mainSplitter_->setStretchFactor(0, 60);
+    mainSplitter_->setStretchFactor(1, 25);
+    mainSplitter_->setStretchFactor(2, 15);
 
     rightSplitter_->setStretchFactor(0, 55);
     rightSplitter_->setStretchFactor(1, 45);
@@ -233,12 +233,12 @@ void MainWindow::buildCentral() {
 void MainWindow::buildMenus() {
     // File menu
     auto* fileMenu = menuBar()->addMenu("&File");
-    fileMenu->addAction("Open File…", QKeySequence::Open,
+    fileMenu->addAction("Open File...", QKeySequence::Open,
         this, [this]{
             const QString p = QFileDialog::getOpenFileName(this, "Open file");
             if (!p.isEmpty()) openFile(p);
         });
-    fileMenu->addAction("Export Results as CSV…", QKeySequence::Save,
+    fileMenu->addAction("Export Results as CSV...", QKeySequence::Save,
         this, &MainWindow::onExportCsv);
     fileMenu->addAction("Save Current Search...", this, [this]{
         const QString q = searchBar_->text().trimmed();
@@ -310,7 +310,7 @@ void MainWindow::buildMenus() {
 
     // Tools menu
     auto* toolsMenu = menuBar()->addMenu("&Tools");
-    toolsMenu->addAction("Settings…", this, &MainWindow::onOpenSettings);
+    toolsMenu->addAction("Settings...", this, &MainWindow::onOpenSettings);
 
     // Help menu
     auto* helpMenu = menuBar()->addMenu("&Help");
@@ -459,7 +459,7 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     }
     previewPane_->setFilePath(path);
 
-    // Thumbnail generator (thumbs_) is not constructed in this build — just
+    // Thumbnail generator (thumbs_) is not constructed in this build - just
     // clear any existing preview rather than crashing on a null pointer.
     previewPane_->setThumbnail(QPixmap());
 
@@ -549,7 +549,7 @@ void MainWindow::onAddFolder() {
                     ++contentCount;
                 }
             } catch (...) {
-                // Failed extraction — mark file so it can be re-tried later.
+                // Failed extraction - mark file so it can be re-tried later.
                 repo_->updateStatus(fileId, Constants::IndexingStatus::kFailed);
             }
         }
@@ -635,7 +635,7 @@ void MainWindow::onExtract() {
                     ++failed;
                 }
             } catch (...) {
-                // Failed extraction — mark file as failed so it can be re-tried.
+                // Failed extraction - mark file as failed so it can be re-tried.
                 repo_->updateStatus(item.fileId,
                                     Constants::IndexingStatus::kFailed);
                 ++failed;
@@ -752,7 +752,7 @@ void MainWindow::updateIndexStats() {
 }
 
 // ============================================================
-// Indexing (legacy slots — indexer disabled in this build)
+// Indexing (legacy slots - indexer disabled in this build)
 // ============================================================
 void MainWindow::onStartIndexing() {
     if (!indexer_) {
@@ -767,6 +767,10 @@ void MainWindow::onStartIndexing() {
         QMessageBox::information(this, "No Drives Configured",
             "Please add drives in Settings -> Indexing first.");
         onOpenSettings();
+        return;
+    }
+    if (!indexer_) {
+        statusBar()->showMessage("Indexer not available. Use Index -> Add Folder.");
         return;
     }
     if (indexer_->isRunning()) {
@@ -804,7 +808,7 @@ void MainWindow::onPhaseChanged(const QString& phase) {
 }
 
 void MainWindow::onIndexingStarted() {
-    statusBar()->showMessage("Indexing started…");
+    statusBar()->showMessage("Indexing started...");
 }
 
 void MainWindow::onIndexingFinished() {
@@ -884,7 +888,7 @@ void MainWindow::onOpenSettings() {
         darkMode_ = settings_.darkMode;
         saveSettings();
         applyTheme();
-        // ocrPool_/watcher_/indexer_ are not constructed in this build —
+        // ocrPool_/watcher_/indexer_ are not constructed in this build -
         // skip calling them.
         updateIndexStats();
     }

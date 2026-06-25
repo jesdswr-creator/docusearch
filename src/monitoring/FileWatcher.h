@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// FileWatcher.h — Windows ReadDirectoryChangesW-based recursive watcher
+// FileWatcher.h - Windows ReadDirectoryChangesW-based recursive watcher
 // ============================================================
 
 #include <QObject>

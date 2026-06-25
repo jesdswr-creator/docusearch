@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// ResultsPane.h — QTableWidget-based results list
+// ResultsPane.h - QTableWidget-based results list
 // ============================================================
 
 #include <QWidget>

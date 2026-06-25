@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// OcrEngine.h — Tesseract wrapper (lazy-init per worker thread)
+// OcrEngine.h - Tesseract wrapper (lazy-init per worker thread)
 // ============================================================
 
 #include <QString>

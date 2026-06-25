@@ -138,7 +138,7 @@ QString Indexer::lazyIndex(qint64 fileId) {
 void Indexer::reindexFile(const QString& path) {
     FileRecord r;
     if (!repo_.getByPath(path, r)) {
-        // New file — insert via metadata indexer's pattern
+        // New file - insert via metadata indexer's pattern
         const QFileInfo fi(path);
         if (!fi.exists()) return;
         r.path         = FileUtils::toNative(path);
@@ -210,7 +210,7 @@ void Indexer::onOcrCompleted(qint64 fileId, const QString& ocrText, bool ok) {
 
 void Indexer::onCpuSampleTick() {
     // Sample CPU; pause OCR if above threshold. Resume automatically when below.
-    // (CPU sampling is done inside OcrWorkerPool — here we just trigger a check.)
+    // (CPU sampling is done inside OcrWorkerPool - here we just trigger a check.)
     // We use a simple heuristic: leave detailed CPU sampling to the OCR pool.
 }
 

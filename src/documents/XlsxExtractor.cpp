@@ -1,11 +1,11 @@
 // ============================================================
-// XlsxExtractor.cpp — read ALL sheets from .xlsx/.xlsm
+// XlsxExtractor.cpp - read ALL sheets from .xlsx/.xlsm
 // ============================================================
 //
 // Strategy:
 //   1. Extract the entire XLSX ZIP to a temp dir in ONE PowerShell call
 //      (much faster than one call per inner file).
-//   2. Parse xl/workbook.xml for the ordered list of sheets — each sheet
+//   2. Parse xl/workbook.xml for the ordered list of sheets - each sheet
 //      has a name and an r:id (relationship id).
 //   3. Parse xl/_rels/workbook.xml.rels for the r:id -> file path map
 //      (so we handle non-standard sheet ordering / names).

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// QueryParser.h — Parse advanced search queries into FTS5 SQL
+// QueryParser.h - Parse advanced search queries into FTS5 SQL
 // ============================================================
 
 #include "../core/Types.h"
@@ -26,7 +26,7 @@ struct ParsedQuery {
     QString dateFilter;      // e.g., "2026" -> year filter
     QString sizeMin;
     QString sizeMax;
-    QString tagFilter;       // tag:<name> — file must have this tag
+    QString tagFilter;       // tag:<name> - file must have this tag
     bool    favoritesOnly = false;
     bool    ocrOnly       = false;
     bool    valid         = true;

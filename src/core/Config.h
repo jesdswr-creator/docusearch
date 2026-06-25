@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Config.h — Persistent application configuration (QSettings wrapper)
+// Config.h - Persistent application configuration (QSettings wrapper)
 // ============================================================
 
 #include <QObject>

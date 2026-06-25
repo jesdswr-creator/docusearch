@@ -4,7 +4,7 @@
 
 namespace DocuSearch {
 
-// Microsoft Excel .xlsx — read shared strings + sheet cells.
+// Microsoft Excel .xlsx - read shared strings + sheet cells.
 class XlsxExtractor : public IDocumentExtractor {
 public:
     QStringList supportedExtensions() const override;

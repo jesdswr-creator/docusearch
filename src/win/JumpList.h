@@ -1,13 +1,13 @@
 #pragma once
 
 // ============================================================
-// JumpList.h — Native Windows 7+ taskbar jump list
+// JumpList.h - Native Windows 7+ taskbar jump list
 // ============================================================
 //
 // Qt6 dropped the QWinJumpList helper from Qt5::WindowsExtras, so we
 // implement the same functionality directly against the Win32
 // ICustomDestinationList COM interface. This works on Windows 7, 8,
-// 10, and 11 — including the modern Windows 11 taskbar.
+// 10, and 11 - including the modern Windows 11 taskbar.
 //
 // Usage:
 //   JumpList jl;
@@ -42,7 +42,7 @@ public:
     // Insert a separator between tasks.
     void addSeparator();
 
-    // Begin a "Recent" category — files added via addRecentFile()
+    // Begin a "Recent" category - files added via addRecentFile()
     // will appear here. Calling this is optional; if you skip it,
     // only the Tasks list is shown.
     void enableRecentCategory();

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// MainWindow.h — Top-level window tying all modules together
+// MainWindow.h - Top-level window tying all modules together
 // ============================================================
 
 #include <QMainWindow>

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// PriorityScheduler.h — Determines file processing order
+// PriorityScheduler.h - Determines file processing order
 // ============================================================
 
 #include <QObject>

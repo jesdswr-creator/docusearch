@@ -1,5 +1,5 @@
 // ============================================================
-// Schema.cpp — Full schema for DocuSearch v1
+// Schema.cpp - Full schema for DocuSearch v1
 // ============================================================
 
 #include "Schema.h"

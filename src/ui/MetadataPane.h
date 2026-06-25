@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// MetadataPane.h — File metadata display (scrollable)
+// MetadataPane.h - File metadata display (scrollable)
 // ============================================================
 
 #include <QWidget>

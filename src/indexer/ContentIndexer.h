@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// ContentIndexer.h — Phase 2: extract text + queue OCR
+// ContentIndexer.h - Phase 2: extract text + queue OCR
 // ============================================================
 
 #include <QObject>

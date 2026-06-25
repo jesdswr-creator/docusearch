@@ -4,7 +4,7 @@
 
 namespace DocuSearch {
 
-// PowerPoint .pptx — read ppt/slides/slideN.xml text runs.
+// PowerPoint .pptx - read ppt/slides/slideN.xml text runs.
 class PptxExtractor : public IDocumentExtractor {
 public:
     QStringList supportedExtensions() const override;

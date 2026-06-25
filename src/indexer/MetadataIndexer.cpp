@@ -47,7 +47,7 @@ void MetadataIndexer::scan(const QStringList& roots, const QStringList& excludes
             // Skip excluded subtrees
             if (FileUtils::isUnderAny(absPath, excludes)) {
                 if (info.isDir()) {
-                    // QDirIterator doesn't expose skip — we just continue and rely on
+                    // QDirIterator doesn't expose skip - we just continue and rely on
                     // the prefix check to skip files inside.
                     continue;
                 }

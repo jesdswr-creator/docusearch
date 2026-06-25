@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Schema.h — Database schema creation & migrations
+// Schema.h - Database schema creation & migrations
 // ============================================================
 
 #include <QString>

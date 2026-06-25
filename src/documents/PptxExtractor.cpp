@@ -1,5 +1,5 @@
 // ============================================================
-// PptxExtractor.cpp — read ppt/slides/slideN.xml <a:t> runs
+// PptxExtractor.cpp - read ppt/slides/slideN.xml <a:t> runs
 // ============================================================
 
 #include "PptxExtractor.h"

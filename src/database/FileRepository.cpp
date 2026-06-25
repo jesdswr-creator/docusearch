@@ -235,7 +235,7 @@ bool FileRepository::getById(qint64 id, FileRecord& out) {
 qint64 FileRepository::nextPendingFile(QString& outPath, QString& outExt) {
     sqlite3* raw = db_.raw();
     if (!raw) return 0;
-    // Files with content_done OR ocr_done status are considered "in progress" — skip them.
+    // Files with content_done OR ocr_done status are considered "in progress" - skip them.
     // Prefer: pending files, oldest first.
     sqlite3_stmt* s = nullptr;
     sqlite3_prepare_v2(raw,

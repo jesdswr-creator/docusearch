@@ -1,9 +1,9 @@
 // ============================================================
-// main.cpp — Clean, minimal entry point for DocuSearch
+// main.cpp - Clean, minimal entry point for DocuSearch
 // ============================================================
 // Stripped down to the bare minimum to get a WORKING window.
 // No diagnostic console, no watchdog, no heavy logging.
-// Just: QApplication → MainWindow → show → exec.
+// Just: QApplication -> MainWindow -> show -> exec.
 // ============================================================
 
 #include "../core/Config.h"
@@ -15,6 +15,7 @@
 #include <QStyleFactory>
 #include <QPalette>
 #include <QColor>
+#include <QIcon>
 
 using namespace DocuSearch;
 
@@ -27,8 +28,9 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
+    app.setWindowIcon(QIcon(QStringLiteral(":/icons/DocuSearch-256.png")));
 
-    // Use Fusion style — modern cross-platform look. We DON'T apply any QSS
+    // Use Fusion style - modern cross-platform look. We DON'T apply any QSS
     // theme (the QSS was causing the blank window). Fusion without QSS gives
     // a clean, modern, native-looking interface.
     QApplication::setStyle(QStyleFactory::create("Fusion"));
@@ -58,7 +60,7 @@ int main(int argc, char* argv[]) {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // Don't apply any QSS theme for now — use native Windows styling.
+    // Don't apply any QSS theme for now - use native Windows styling.
     // We can re-enable themes once the basic window works.
     // auto& log = DocuSearch::Logger::instance();
     // log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);

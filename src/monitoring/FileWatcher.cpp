@@ -1,5 +1,5 @@
 // ============================================================
-// FileWatcher.cpp — Windows ReadDirectoryChangesW implementation
+// FileWatcher.cpp - Windows ReadDirectoryChangesW implementation
 // ============================================================
 
 #include "FileWatcher.h"
@@ -151,10 +151,10 @@ void FileWatcher::workerLoop(WatchCtx* ctx) {
         if (bytesReturned == 0) continue;
 
         // Iterate FILE_NOTIFY_INFORMATION records. Each record has:
-        //   NextEntryOffset (DWORD) — byte offset to the next record, 0 = last
+        //   NextEntryOffset (DWORD) - byte offset to the next record, 0 = last
         //   Action              (DWORD)
-        //   FileNameLength      (DWORD) — in bytes
-        //   FileName[]          (WCHAR[]) — NOT null-terminated
+        //   FileNameLength      (DWORD) - in bytes
+        //   FileName[]          (WCHAR[]) - NOT null-terminated
         // For renames, Windows emits an OLD_NAME record immediately followed by a
         // NEW_NAME record. We pair them up so callers see a single renamed() signal.
         BYTE* p = reinterpret_cast<BYTE*>(ctx->buffer.data());
@@ -176,7 +176,7 @@ void FileWatcher::workerLoop(WatchCtx* ctx) {
                 break;
             case FILE_ACTION_RENAMED_OLD_NAME: {
                 // The next record in this buffer should be the matching NEW_NAME.
-                // If there is no next record (buffer ended on OLD_NAME — rare),
+                // If there is no next record (buffer ended on OLD_NAME - rare),
                 // treat as a delete of the old path.
                 if (nextOffset == 0) {
                     emit fileDeleted(full);

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Logger.h — Thread-safe, asynchronous, file + UI sink logger
+// Logger.h - Thread-safe, asynchronous, file + UI sink logger
 // ============================================================
 
 #include <QObject>
@@ -52,7 +52,7 @@ public:
 
     void shutdown();
 
-    // Logging API — thread-safe, non-blocking (enqueues)
+    // Logging API - thread-safe, non-blocking (enqueues)
     void log(LogLevel level, const QString& category, const QString& message);
 
     // Convenience
@@ -93,7 +93,7 @@ private:
     static QString levelToString(LogLevel l);
 };
 
-// Convenience macros — short to use
+// Convenience macros - short to use
 #define DS_TRACE(cat, msg) ::DocuSearch::Logger::instance().trace(cat, msg)
 #define DS_DEBUG(cat, msg) ::DocuSearch::Logger::instance().debug(cat, msg)
 #define DS_INFO(cat, msg)  ::DocuSearch::Logger::instance().info (cat, msg)

@@ -27,7 +27,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     pathLabel_->setWordWrap(true);
     v->addWidget(pathLabel_);
 
-    // Extracted text — main content area (no thumbnail box — saves space)
+    // Extracted text - main content area (no thumbnail box - saves space)
     textEdit_ = new QTextEdit(this);
     textEdit_->setReadOnly(true);
     textEdit_->setPlaceholderText("Extracted text will appear here after content indexing.");
@@ -53,7 +53,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
 void PreviewPane::setThumbnail(const QPixmap& pix) {
     Q_UNUSED(pix);
-    // Thumbnails disabled — preview shows text only
+    // Thumbnails disabled - preview shows text only
 }
 
 void PreviewPane::setExtractedText(const QString& text) {

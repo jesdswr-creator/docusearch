@@ -1,5 +1,5 @@
 // ============================================================
-// Logger.cpp — Async file+UI logger implementation
+// Logger.cpp - Async file+UI logger implementation
 // ============================================================
 
 #include "Logger.h"
@@ -51,7 +51,7 @@ void Logger::init(const QString& logDir, LogLevel minLevel, bool mirrorToStderr)
     workerThread_.start();
     QMetaObject::invokeMethod(this, [this]{ this->workerLoop(); }, Qt::QueuedConnection);
 
-    info("Logger", QString("Logging started — file: %1").arg(fileName));
+    info("Logger", QString("Logging started - file: %1").arg(fileName));
 }
 
 void Logger::shutdown() {

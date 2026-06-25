@@ -16,7 +16,7 @@ public:
     // Returns the extractor for `ext` (lowercase, no dot) or nullptr.
     IDocumentExtractor* extractorFor(const QString& ext) const;
 
-    // Convenience — calls extractorFor and returns result. If no extractor,
+    // Convenience - calls extractorFor and returns result. If no extractor,
     // returns an empty result with needsOcr=true for image types.
     ExtractionResult extractByExtension(const QString& path, const QString& ext) const;
 

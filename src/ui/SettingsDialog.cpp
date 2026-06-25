@@ -23,7 +23,7 @@ namespace DocuSearch {
 
 SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     : QDialog(parent), current_(current) {
-    setWindowTitle("Settings — DocuSearch");
+    setWindowTitle("Settings - DocuSearch");
     setMinimumWidth(640);
     setMinimumHeight(560);
 
@@ -43,8 +43,8 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     drvLay->addWidget(drivesList_);
     auto* drvRow = new QHBoxLayout();
     driveInput_ = new QLineEdit(this);
-    driveInput_->setPlaceholderText("e.g., D:\\  (or click Browse…)");
-    auto* browseBtn = new QPushButton("Browse…", this);
+    driveInput_->setPlaceholderText("e.g., D:\\  (or click Browse...)");
+    auto* browseBtn = new QPushButton("Browse...", this);
     auto* addDrvBtn = new QPushButton("Add", this);
     auto* rmDrvBtn  = new QPushButton("Remove", this);
     drvRow->addWidget(driveInput_);
@@ -63,7 +63,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     auto* exRow = new QHBoxLayout();
     excludeInput_ = new QLineEdit(this);
     excludeInput_->setPlaceholderText("e.g., D:\\Movies");
-    auto* browseExBtn = new QPushButton("Browse…", this);
+    auto* browseExBtn = new QPushButton("Browse...", this);
     auto* addExBtn = new QPushButton("Add", this);
     auto* rmExBtn  = new QPushButton("Remove", this);
     exRow->addWidget(excludeInput_);
@@ -127,7 +127,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
-    auto* tdBrowse = new QPushButton("Browse…", this);
+    auto* tdBrowse = new QPushButton("Browse...", this);
     auto* tdRow = new QHBoxLayout();
     tdRow->addWidget(tessdataEdit_);
     tdRow->addWidget(tdBrowse);
@@ -172,7 +172,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     auto* bkTab = new QWidget(this);
     auto* bkLay = new QVBoxLayout(bkTab);
     auto* backupBtn = new QPushButton("Backup Now", this);
-    auto* restoreBtn = new QPushButton("Restore from File…", this);
+    auto* restoreBtn = new QPushButton("Restore from File...", this);
     auto* vacuumBtn  = new QPushButton("Vacuum Database (compact)", this);
     bkLay->addWidget(backupBtn);
     bkLay->addWidget(restoreBtn);
@@ -293,7 +293,7 @@ void SettingsDialog::onSaveSearch() {
     const QString name = savedNameEdit_->text().trimmed();
     const QString query = savedQueryEdit_->text().trimmed();
     if (name.isEmpty() || query.isEmpty()) return;
-    // We emit via signal — MainWindow will persist via FileRepository
+    // We emit via signal - MainWindow will persist via FileRepository
     // For now, add to list locally:
     auto* item = new QListWidgetItem(name);
     item->setData(Qt::UserRole, query);
@@ -308,7 +308,7 @@ void SettingsDialog::onDeleteSearch() {
 }
 
 void SettingsDialog::onBackupNow() {
-    // Defer to MainWindow via signal — but here we just open a save dialog
+    // Defer to MainWindow via signal - but here we just open a save dialog
     const QString path = QFileDialog::getExistingDirectory(this, "Backup destination");
     if (path.isEmpty()) return;
     BackupManager bm;

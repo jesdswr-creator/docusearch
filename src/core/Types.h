@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Types.h — Common value types used across modules
+// Types.h - Common value types used across modules
 // ============================================================
 
 #include <QDateTime>

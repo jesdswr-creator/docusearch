@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// FileUtils.h — File-system helpers (cross-platform core, Win specials)
+// FileUtils.h - File-system helpers (cross-platform core, Win specials)
 // ============================================================
 
 #include <QString>

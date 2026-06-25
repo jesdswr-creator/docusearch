@@ -65,7 +65,7 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             continue;
         }
 
-        // Bare word — could be term or AND/OR/NOT
+        // Bare word - could be term or AND/OR/NOT
         int start = i;
         while (i < n && !s[i].isSpace()) ++i;
         QString tok = s.mid(start, i - start);
@@ -76,11 +76,11 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             // Pass through to FTS5
             ftsTokens.append(tok);
         } else if (tok.startsWith('-')) {
-            // Exclusion — convert to FTS5 NOT syntax
+            // Exclusion - convert to FTS5 NOT syntax
             ftsTokens.append("NOT");
             ftsTokens.append(Utils::fts5Quote(tok.mid(1)));
         } else if (tok.contains('*')) {
-            // Prefix wildcard — FTS5 supports "prefix*"
+            // Prefix wildcard - FTS5 supports "prefix*"
             ftsTokens.append(tok);  // bare token with * works in FTS5
         } else {
             ftsTokens.append(Utils::fts5Quote(tok));
@@ -111,11 +111,11 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             q.ocrOnly = true;
         } else if (field == "tag") {
             // Tag filtering is applied as a sub-join against the Tags table in
-            // SearchEngine (Tags are NOT in the FTS5 index — they live in a
+            // SearchEngine (Tags are NOT in the FTS5 index - they live in a
             // separate normalized table with UNIQUE(file_id, tag)).
             if (!val.isEmpty()) q.tagFilter = val;
         } else {
-            // Unknown field — treat as a regular term
+            // Unknown field - treat as a regular term
             if (!q.ftsQuery.isEmpty()) q.ftsQuery += " ";
             q.ftsQuery += Utils::fts5Quote(val);
         }

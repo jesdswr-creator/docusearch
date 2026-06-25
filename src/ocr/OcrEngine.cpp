@@ -44,7 +44,7 @@ bool OcrEngine::init() {
     DS_INFO("OCR", QString("Tesseract ready (lang=%1, psm=%2)").arg(language_).arg(psm_));
     return true;
 #else
-    DS_WARN("OCR", "Built without Tesseract — OCR unavailable");
+    DS_WARN("OCR", "Built without Tesseract - OCR unavailable");
     return false;
 #endif
 }

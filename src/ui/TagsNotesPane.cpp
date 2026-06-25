@@ -1,5 +1,5 @@
 // ============================================================
-// TagsNotesPane.cpp — Compact tags + notes side-by-side
+// TagsNotesPane.cpp - Compact tags + notes side-by-side
 // ============================================================
 
 #include "TagsNotesPane.h"

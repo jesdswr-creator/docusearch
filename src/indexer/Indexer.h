@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Indexer.h — Top-level orchestrator combining metadata + content
+// Indexer.h - Top-level orchestrator combining metadata + content
 // ============================================================
 
 #include <QObject>

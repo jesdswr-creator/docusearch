@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// OcrWorkerPool.h — Thread-pool for background OCR with CPU throttling
+// OcrWorkerPool.h - Thread-pool for background OCR with CPU throttling
 // ============================================================
 
 #include <QObject>

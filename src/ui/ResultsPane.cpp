@@ -1,5 +1,5 @@
 // ============================================================
-// ResultsPane.cpp — QTableWidget-based results list
+// ResultsPane.cpp - QTableWidget-based results list
 // ============================================================
 
 #include "ResultsPane.h"
@@ -106,7 +106,7 @@ void ResultsPane::appendResults(const QList<SearchHit>& hits) {
 }
 
 void ResultsPane::populateRow(int row, const SearchHit& h) {
-    // --- Name (col 0) — bold Segoe UI, carries fileId+path in UserRole ---
+    // --- Name (col 0) - bold Segoe UI, carries fileId+path in UserRole ---
     auto* nameItem = new QTableWidgetItem(h.filename);
     QFont nameFont("Segoe UI", 10);
     nameFont.setBold(true);
@@ -116,7 +116,7 @@ void ResultsPane::populateRow(int row, const SearchHit& h) {
     nameItem->setToolTip(h.path);
     table_->setItem(row, ColName, nameItem);
 
-    // --- Type (col 1) — color-coded by extension ---
+    // --- Type (col 1) - color-coded by extension ---
     auto* typeItem = new QTableWidgetItem(h.extension.toUpper());
     QFont typeFont("Segoe UI", 9);
     typeFont.setBold(true);
@@ -125,7 +125,7 @@ void ResultsPane::populateRow(int row, const SearchHit& h) {
     typeItem->setTextAlignment(Qt::AlignCenter);
     table_->setItem(row, ColType, typeItem);
 
-    // --- Size (col 2) — right-aligned, gray ---
+    // --- Size (col 2) - right-aligned, gray ---
     auto* sizeItem = new QTableWidgetItem(humanSize(h.size));
     sizeItem->setForeground(QBrush(QColor("#808080")));
     sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -133,16 +133,16 @@ void ResultsPane::populateRow(int row, const SearchHit& h) {
     sizeItem->setFont(sizeFont);
     table_->setItem(row, ColSize, sizeItem);
 
-    // --- Date (col 3) — centered, gray, yyyy-MM-dd ---
+    // --- Date (col 3) - centered, gray, yyyy-MM-dd ---
     auto* dateItem = new QTableWidgetItem(h.modifiedDate.toString("yyyy-MM-dd"));
     dateItem->setForeground(QBrush(QColor("#808080")));
     dateItem->setTextAlignment(Qt::AlignCenter);
     dateItem->setFont(sizeFont);
     table_->setItem(row, ColDate, dateItem);
 
-    // --- Snippet (col 4) — strip <b></b>, truncate 150, gray ---
+    // --- Snippet (col 4) - strip <b></b>, truncate 150, gray ---
     QString snip = stripBoldTags(h.snippet);
-    if (snip.size() > 150) snip = snip.left(150) + "…";
+    if (snip.size() > 150) snip = snip.left(150) + "...";
     auto* snipItem = new QTableWidgetItem(snip);
     snipItem->setForeground(QBrush(QColor("#808080")));
     QFont snipFont("Segoe UI", 9);

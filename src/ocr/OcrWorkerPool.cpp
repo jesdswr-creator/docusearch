@@ -166,7 +166,7 @@ void OcrWorkerPool::workerLoop(int workerId) {
             lastCpuSample = readSystemCpuUsage();
             cpuTimer.restart();
             if (settings_.pauseOnHeavyLoad && lastCpuSample > settings_.cpuPauseThresholdPct) {
-                DS_DEBUG("OCR", QString("CPU %1%% > threshold %2%% — pausing worker %3")
+                DS_DEBUG("OCR", QString("CPU %1%% > threshold %2%% - pausing worker %3")
                          .arg(lastCpuSample).arg(settings_.cpuPauseThresholdPct).arg(workerId));
                 QThread::msleep(2000);
                 continue;
@@ -195,7 +195,7 @@ void OcrWorkerPool::workerLoop(int workerId) {
                 text = engine.ocrFile(task.path);
                 if (!text.isEmpty()) ok = true;
             } else {
-                // Render first page of PDF to image — requires Poppler-Qt.
+                // Render first page of PDF to image - requires Poppler-Qt.
                 // Skipped here; mark as not-needed.
                 ok = false;
             }

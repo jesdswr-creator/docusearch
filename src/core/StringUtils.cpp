@@ -45,13 +45,13 @@ QString snippetAround(const QString& text, const QString& match,
     if (idx < 0) {
         // No match found, return the head.
         return text.left(std::min<int>(text.size(), before + after)) +
-               (text.size() > before + after ? "…" : "");
+               (text.size() > before + after ? "..." : "");
     }
     int start = std::max(0, idx - before);
     int end   = std::min<int>(text.size(), idx + match.size() + after);
     QString snippet = text.mid(start, end - start);
-    if (start > 0)     snippet.prepend("…");
-    if (end < text.size()) snippet.append("…");
+    if (start > 0)     snippet.prepend("...");
+    if (end < text.size()) snippet.append("...");
     return snippet;
 }
 

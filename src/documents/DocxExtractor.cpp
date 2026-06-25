@@ -1,5 +1,5 @@
 // ============================================================
-// DocxExtractor.cpp — read word/document.xml from .docx (ZIP)
+// DocxExtractor.cpp - read word/document.xml from .docx (ZIP)
 // ============================================================
 
 #include "DocxExtractor.h"
@@ -44,7 +44,7 @@ QByteArray tryQtZipExtract(const QString& zipPath, const QString& innerPath) {
 }
 
 QByteArray extractInnerFromZip(const QString& zipPath, const QString& innerPath) {
-    // Try Qt's built-in JlCompress (via QuaZIP) — not bundled here.
+    // Try Qt's built-in JlCompress (via QuaZIP) - not bundled here.
     // Fallback: shell out to unzip (Windows users can install 7-Zip's unzip.exe
     // or use the bundled InfoZIP unzip.exe shipped with the installer).
     QTemporaryDir tmpDir;

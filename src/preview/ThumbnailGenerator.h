@@ -15,7 +15,7 @@ public:
     explicit ThumbnailGenerator(const QString& cacheDir, QObject* parent = nullptr);
 
     // Returns a thumbnail for `path`. May be empty if generation failed.
-    // Synchronous — call from worker thread.
+    // Synchronous - call from worker thread.
     QImage thumbnail(const QString& path, int maxSize);
 
     // Clear cached thumbnails.

@@ -103,10 +103,10 @@ QString ContentIndexer::processNow(qint64 fileId) {
     if (!repo_.getById(fileId, r)) return {};
     if (r.indexingStatus == Constants::IndexingStatus::kContentDone &&
         r.ocrStatus      == Constants::OcrStatus::kDone) {
-        // Already indexed — return existing text.
+        // Already indexed - return existing text.
         // Fetch from DocumentText via repo
         // (getById doesn't load text; we fetch explicitly via a small SQL.)
-        // For simplicity, return empty here — UI will show snippet from FTS.
+        // For simplicity, return empty here - UI will show snippet from FTS.
         return {};
     }
 

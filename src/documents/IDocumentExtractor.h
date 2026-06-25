@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// IDocumentExtractor.h — Common interface for text extractors
+// IDocumentExtractor.h - Common interface for text extractors
 // ============================================================
 
 #include <QString>

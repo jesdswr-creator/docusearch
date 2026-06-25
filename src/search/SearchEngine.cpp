@@ -55,7 +55,7 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
         while (i < n && s[i].isSpace()) ++i;
         if (i >= n) break;
         if (s[i] == '"') {
-            // Quoted phrase — keep contents as a single token.
+            // Quoted phrase - keep contents as a single token.
             ++i;
             int start = i;
             while (i < n && s[i] != '"') ++i;
@@ -69,7 +69,7 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
             if (!tok.isEmpty()) words.append(tok);
         }
     }
-    // FTS5 boolean operators don't apply to filename LIKE matching — drop them.
+    // FTS5 boolean operators don't apply to filename LIKE matching - drop them.
     words.removeAll("AND");
     words.removeAll("OR");
     words.removeAll("NOT");
@@ -85,7 +85,7 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
     const QStringList words = splitSearchWords(rawQuery);
 
     // ---------------------------------------------------------------
-    // Filename search — always run. Generates one LIKE ? per word,
+    // Filename search - always run. Generates one LIKE ? per word,
     // all ANDed, so "A B" and "A+B" both match filenames containing
     // both words in any order.
     // ---------------------------------------------------------------
@@ -130,14 +130,14 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
         }
     }
 
-    // If there's no FTS5 query, we're done — return filename hits.
+    // If there's no FTS5 query, we're done - return filename hits.
     if (q.ftsQuery.isEmpty()) {
         return filenameHits;
     }
 
     // ---------------------------------------------------------------
-    // FTS5 content search — use empty snippet markers ('', '') so
-    // results don't contain HTML like <b>…</b>.
+    // FTS5 content search - use empty snippet markers ('', '') so
+    // results don't contain HTML like <b>...</b>.
     // ---------------------------------------------------------------
     QList<SearchHit> ftsHits;
     try {
@@ -177,7 +177,7 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
             }
             sqlite3_finalize(s);
         } else {
-            // FTS5 query parse error — fall back silently to filename hits.
+            // FTS5 query parse error - fall back silently to filename hits.
             DS_WARN("Search", QString("FTS prepare failed, filename-only: %1")
                                 .arg(sqlite3_errmsg(raw)));
         }

@@ -34,15 +34,15 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     auto* form = new QFormLayout(gb);
     form->setLabelAlignment(Qt::AlignRight);
 
-    filename_ = new QLabel("—", gb);  filename_->setWordWrap(true);
-    path_     = new QLabel("—", gb);  path_->setWordWrap(true);
-    ext_      = new QLabel("—", gb);
-    size_     = new QLabel("—", gb);
-    created_  = new QLabel("—", gb);
-    modified_ = new QLabel("—", gb);
-    hash_     = new QLabel("—", gb);  hash_->setWordWrap(true);
-    status_   = new QLabel("—", gb);
-    ocrStatus_= new QLabel("—", gb);
+    filename_ = new QLabel("-", gb);  filename_->setWordWrap(true);
+    path_     = new QLabel("-", gb);  path_->setWordWrap(true);
+    ext_      = new QLabel("-", gb);
+    size_     = new QLabel("-", gb);
+    created_  = new QLabel("-", gb);
+    modified_ = new QLabel("-", gb);
+    hash_     = new QLabel("-", gb);  hash_->setWordWrap(true);
+    status_   = new QLabel("-", gb);
+    ocrStatus_= new QLabel("-", gb);
 
     styleLabel(filename_);
     styleLabel(path_);
@@ -78,7 +78,7 @@ void MetadataPane::setRecord(const FileRecord& r) {
     size_->setText(Utils::formatFileSize(r.size));
     created_->setText(r.createdDate.toString("yyyy-MM-dd hh:mm"));
     modified_->setText(r.modifiedDate.toString("yyyy-MM-dd hh:mm"));
-    hash_->setText(r.hash.isEmpty() ? "—" : r.hash);
+    hash_->setText(r.hash.isEmpty() ? "-" : r.hash);
 
     const QString idxText  = humanizeStatus(r.indexingStatus);
     const QString ocrText  = humanizeStatus(r.ocrStatus);
@@ -91,7 +91,7 @@ void MetadataPane::setRecord(const FileRecord& r) {
 void MetadataPane::styleLabel(QLabel* lbl) {
     QFont f = lbl->font();
     f.setFamily("Segoe UI");
-    f.setPointSize(12);
+    f.setPointSize(9);
     lbl->setFont(f);
 }
 
@@ -109,7 +109,7 @@ QString MetadataPane::humanizeStatus(const QString& s) const {
     if (s == Constants::OcrStatus::kRunning)           return "Running";
     if (s == Constants::IndexingStatus::kSkipped)      return "Skipped";
     if (s == "done")                                    return "Done";
-    return s.isEmpty() ? "—" : s;
+    return s.isEmpty() ? "-" : s;
 }
 
 QString MetadataPane::colorForStatus(const QString& s) const {

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// MetadataIndexer.h — Phase 1: fast recursive file metadata scan
+// MetadataIndexer.h - Phase 1: fast recursive file metadata scan
 // ============================================================
 
 #include <QObject>

@@ -32,3 +32,5 @@ certs/
 *.appxupload
 *.msixbundle
 CMakeUserPresets.json
+upload/
+upload/

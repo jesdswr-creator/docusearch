@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// FileRepository.h — Data-access layer for Files/Tags/Notes/FTS
+// FileRepository.h - Data-access layer for Files/Tags/Notes/FTS
 // ============================================================
 
 #include <QObject>

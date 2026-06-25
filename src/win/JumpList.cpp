@@ -1,5 +1,5 @@
 // ============================================================
-// JumpList.cpp — Native Win32 ICustomDestinationList wrapper
+// JumpList.cpp - Native Win32 ICustomDestinationList wrapper
 // ============================================================
 //
 // Implements the Windows shell jump-list API. We use the "Tasks"
@@ -75,7 +75,7 @@ static com_ptr<IShellLinkW> makeShellLink(const QString& args) {
     }
     com_ptr<IShellLinkW> link(raw);
 
-    // Path to DocuSearch.exe — derived from the running process
+    // Path to DocuSearch.exe - derived from the running process
     wchar_t exePath[MAX_PATH] = {0};
     ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     if (FAILED(link->SetPath(exePath))) return nullptr;
@@ -191,7 +191,7 @@ bool JumpList::commit() {
             if (t.isSeparator) {
                 IShellLinkW* sepLink = nullptr;
                 // Create a "separator" by adding a link with the special
-                // separator property — we use IShellLinkW with empty args
+                // separator property - we use IShellLinkW with empty args
                 // and set System.AppUserModel.IsDestListSeparator = TRUE.
                 if (FAILED(::CoCreateInstance(CLSID_ShellLink, nullptr,
                                                CLSCTX_INPROC_SERVER,

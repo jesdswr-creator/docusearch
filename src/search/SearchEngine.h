@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// SearchEngine.h — Run parsed queries against SQLite FTS5
+// SearchEngine.h - Run parsed queries against SQLite FTS5
 // ============================================================
 
 #include <QObject>

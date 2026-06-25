@@ -1,21 +1,21 @@
 // ============================================================
-// Theme.cpp — Dark/Light QSS (Windows 11 Edition)
+// Theme.cpp - Dark/Light QSS (Windows 11 Edition)
 // ============================================================
 //
 // The QSS below follows the Windows 11 Fluent Design language:
 //
 //   * 8 px corner radius on all interactive surfaces (buttons,
-//     inputs, list items, group boxes) — matches the OS chrome.
+//     inputs, list items, group boxes) - matches the OS chrome.
 //   * Mica-inspired background tints (subtle translucency look
 //     without true Mica since Qt QSS can't paint outside the
-//     client area — the Mica backdrop itself is enabled in
+//     client area - the Mica backdrop itself is enabled in
 //     main.cpp via DwmSetWindowAttribute).
 //   * Accent button style with the Windows 11 accent blue (#005FB8).
 //   * 1 px hairline borders in low-contrast system colors.
 //   * Hover/pressed states that fade rather than flip.
-//   * Scrollbars are thin (10 px), flat, and rounded — the same
+//   * Scrollbars are thin (10 px), flat, and rounded - the same
 //     style used by Windows 11 File Explorer.
-//   * Tab underline is 2 px accent — the same as Settings and
+//   * Tab underline is 2 px accent - the same as Settings and
 //     Edge on Windows 11.
 // ============================================================
 
@@ -34,7 +34,7 @@ namespace {
 //   Accent press: #003D92 / #29A0FF
 const char* kDarkQss = R"(
 /* ============================================================
-   DocuSearch — Windows 11 Dark Theme
+   DocuSearch - Windows 11 Dark Theme
    ============================================================ */
 * {
     font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;
@@ -269,7 +269,7 @@ QScrollBar::add-page,  QScrollBar::sub-page { background: none; height: 0; width
 
 const char* kLightQss = R"(
 /* ============================================================
-   DocuSearch — Windows 11 Light Theme
+   DocuSearch - Windows 11 Light Theme
    ============================================================ */
 * {
     font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;

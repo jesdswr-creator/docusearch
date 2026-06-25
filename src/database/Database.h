@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// Database.h — RAII SQLite wrapper with WAL, FTS5, thread-safe
+// Database.h - RAII SQLite wrapper with WAL, FTS5, thread-safe
 // ============================================================
 
 #include <QObject>
@@ -37,7 +37,7 @@ public:
     bool commit();
     bool rollback();
 
-    // Returns the raw sqlite3* — use sparingly.
+    // Returns the raw sqlite3* - use sparingly.
     sqlite3* raw() { return db_; }
 
     // Path of currently open DB

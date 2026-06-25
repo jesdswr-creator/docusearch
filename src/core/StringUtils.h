@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// StringUtils.h — Common string utilities
+// StringUtils.h - Common string utilities
 // ============================================================
 
 #include <QString>
@@ -42,10 +42,10 @@ struct ParsedQueryParts {
 };
 ParsedQueryParts splitFieldTerms(const QString& raw);
 
-// Levenshtein distance — used for fuzzy duplicate detection.
+// Levenshtein distance - used for fuzzy duplicate detection.
 int levenshtein(const QString& a, const QString& b);
 
-// Jaccard similarity (0..1) of word sets — used for filename similarity.
+// Jaccard similarity (0..1) of word sets - used for filename similarity.
 double jaccardSimilarity(const QString& a, const QString& b);
 
 // Read a file fully into a QString (UTF-8). Returns empty on failure.

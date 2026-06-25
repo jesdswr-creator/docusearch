@@ -1,5 +1,5 @@
 // ============================================================
-// PdfExtractor.cpp — uses poppler-cpp when available
+// PdfExtractor.cpp - uses poppler-cpp when available
 // ============================================================
 
 #include "PdfExtractor.h"

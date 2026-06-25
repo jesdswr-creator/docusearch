@@ -39,7 +39,7 @@ IDocumentExtractor* DocumentExtractorRegistry::extractorFor(const QString& ext) 
 
 ExtractionResult DocumentExtractorRegistry::extractByExtension(const QString& path,
                                                                const QString& ext) const {
-    // For image types we don't extract directly — OCR will handle them.
+    // For image types we don't extract directly - OCR will handle them.
     static const QSet<QString> kImages = {"jpg","jpeg","png","tif","tiff","bmp","gif","webp"};
     if (kImages.contains(ext.toLower())) {
         ExtractionResult r;

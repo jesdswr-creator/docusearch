@@ -1,5 +1,5 @@
 // ============================================================
-// TextExtractor.cpp — txt, csv, md, rtf (simple), log
+// TextExtractor.cpp - txt, csv, md, rtf (simple), log
 // ============================================================
 
 #include "TextExtractor.h"
@@ -27,7 +27,7 @@ ExtractionResult TextExtractor::extract(const QString& path) {
     s.setEncoding(QStringConverter::Utf8);
     QString text = s.readAll();
 
-    // RTF: very small strip — remove control words
+    // RTF: very small strip - remove control words
     const QString ext = FileUtils::extensionOf(path);
     if (ext == "rtf") {
         text.remove(QRegularExpression("\\\\[a-zA-Z]+-?\\d+ ?"));
