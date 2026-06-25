@@ -1,5 +1,5 @@
 // ============================================================
-// TagsNotesPane.cpp - Compact tags + notes side-by-side
+// TagsNotesPane.cpp - Tags (top) + Notes (bottom), stacked vertically
 // ============================================================
 
 #include "TagsNotesPane.h"
@@ -13,7 +13,11 @@
 namespace DocuSearch {
 
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
-    auto* outer = new QHBoxLayout(this);
+    // Vertical layout: Tags on top, Notes below. The right-hand pane is
+    // narrow (180-280 px), so stacking vertically gives each widget the
+    // full pane width and avoids the cramped side-by-side look where
+    // the tag list and the notes editor were both squeezed to ~80 px.
+    auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
@@ -25,10 +29,9 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
         "QListWidget, QTextEdit, QLineEdit { font-size: 11px; "
         "  border: 1px solid #ddd; border-radius: 3px; }";
 
-    // Tags (left) - stretch=1, equal to Notes
+    // ---- Tags (top) ----
     auto* tagBox = new QGroupBox("Tags", this);
     tagBox->setStyleSheet(groupStyle);
-    tagBox->setMinimumWidth(120);
     auto* tagLay = new QVBoxLayout(tagBox);
     tagLay->setContentsMargins(4, 4, 4, 4);
     tagLay->setSpacing(2);
@@ -53,26 +56,30 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
 
     tagList_ = new QListWidget(tagBox);
     tagList_->setSelectionMode(QAbstractItemView::SingleSelection);
-    // No maximum height - let the list fill the available vertical space
-    // in the group box (issue #3).
+    // Give the tag list a reasonable minimum height so it's usable,
+    // but let the Notes box below get the majority of vertical space.
+    tagList_->setMinimumHeight(60);
     tagList_->setStyleSheet(fieldStyle);
     tagLay->addWidget(tagList_, 1);
 
     outer->addWidget(tagBox, 1);
 
-    // Notes (right) - stretch=1, equal to Tags (issue #3)
+    // ---- Notes (bottom) ----
+    // Notes gets a larger stretch factor (2) so it gets more vertical
+    // space than Tags (1) - users typically write longer notes than
+    // they have tags.
     auto* noteBox = new QGroupBox("Notes", this);
     noteBox->setStyleSheet(groupStyle);
-    noteBox->setMinimumWidth(120);
     auto* noteLay = new QVBoxLayout(noteBox);
     noteLay->setContentsMargins(4, 4, 4, 4);
     noteLay->setSpacing(2);
     noteEdit_ = new QTextEdit(noteBox);
     noteEdit_->setPlaceholderText("Add notes...");
     noteEdit_->setStyleSheet(fieldStyle);
+    noteEdit_->setMinimumHeight(60);
     noteLay->addWidget(noteEdit_, 1);
 
-    outer->addWidget(noteBox, 1);
+    outer->addWidget(noteBox, 2);
 
     connect(addTagBtn_, &QPushButton::clicked, this, &TagsNotesPane::onAddTag);
     connect(rmTagBtn_,  &QPushButton::clicked, this, &TagsNotesPane::onRemoveTag);

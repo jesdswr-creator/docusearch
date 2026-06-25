@@ -7,7 +7,19 @@
       "name": "sqlite3",
       "features": ["fts5"]
     },
-    "zlib"
+    "zlib",
+    {
+      "name": "leptonica",
+      "features": ["jpeg", "png", "tiff", "openjpeg", "zlib"]
+    },
+    {
+      "name": "tesseract",
+      "features": ["jpeg", "png", "tiff"]
+    },
+    {
+      "name": "poppler",
+      "features": ["jpeg", "png", "zlib", "openjpeg"]
+    }
   ],
   "features": {
     "tests": {
