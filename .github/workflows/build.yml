@@ -146,24 +146,19 @@ jobs:
           Write-Host "Contents:"
           Get-ChildItem $stagingDir | Format-Table Name
 
-      - name: Harvest build output with WiX heat
+      - name: Harvest build output (generate DocuSearch.Harvest.wxs)
         shell: pwsh
         run: |
-          $env:Path += ";$env:USERPROFILE\.dotnet\tools"
-          $harvestOut = "installer\DocuSearch.Harvest.wxs"
-          # Harvest everything in build\bin\Release (Qt DLLs, plugins, themes, etc.)
-          # -cg HarvestedFiles    ComponentGroup name to emit
-          # -dr BinFolder         DirectoryRef to attach files to (ProgramFiles\DocuSearch\bin)
-          # -sreg                 Skip registry harvesting (no .reg files here)
-          # -srd                  Suppress the root directory wrapper (we use BinFolder directly)
-          # -var var.BuildOutputDir  Use $(var.BuildOutputDir) for Source paths
-          # -t installer\heat-filter.xsl  Exclude DocuSearch.exe (already in main wxs)
-          & wix heat dir "build\bin\Release" -o $harvestOut `
-            -cg HarvestedFiles -dr BinFolder `
-            -sreg -srd -var var.BuildOutputDir `
-            -t installer\heat-filter.xsl
-          Write-Host "=== Harvested file: $harvestOut ==="
-          Get-Content $harvestOut | Select-Object -First 30
+          # Generate a WiX v4 fragment file enumerating every file in
+          # build\bin\Release (Qt DLLs, plugins, themes) so the MSI
+          # bundles them. We do this in PowerShell rather than
+          # `wix heat dir` because in WiX v4.0.5 heat is not a built-in
+          # subcommand of the wix CLI (it requires installing the
+          # WixToolset.Heat.wixext extension separately, adding CI flakiness).
+          & pwsh -File scripts\generate-harvest.ps1
+          if (-not (Test-Path "installer\DocuSearch.Harvest.wxs")) {
+            throw "Harvest file was not generated"
+          }
 
       - name: Build MSI installer (WiX v4)
         shell: pwsh
