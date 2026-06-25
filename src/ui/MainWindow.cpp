@@ -145,10 +145,13 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     // Auto-scan timer - fires every 60 seconds, rescans indexed folders.
-    autoScanTimer_ = new QTimer(this);
-    autoScanTimer_->setInterval(60 * 1000);
-    connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
-    autoScanTimer_->start();
+    // Auto-scan timer DISABLED — was causing random crashes because
+    // SQLite connections are not thread-safe across QtConcurrent::run
+    // and the main thread. Users can manually re-scan via Index menu.
+    // autoScanTimer_ = new QTimer(this);
+    // autoScanTimer_->setInterval(60 * 1000);
+    // connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
+    // autoScanTimer_->start();
 
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
@@ -715,47 +718,49 @@ void MainWindow::onExtract() {
         contentExtractionRunning_ = true;
         statusBar()->showMessage(
             QString("Extracting content from %1 files...").arg(todo.size()));
+        QApplication::processEvents();
 
-        // Capture raw owning pointers (guarded) so the background thread can
-        // safely access repo_ without racing the main thread's destructor.
+        // Run extraction on the MAIN THREAD (not QtConcurrent) to avoid
+        // SQLite thread-safety crashes. Call processEvents() between files
+        // to keep the UI responsive.
         FileRepository* repoPtr = repo_.get();
-        (void)QtConcurrent::run([this, repoPtr, todo]{
-            auto& registry = DocumentExtractorRegistry::instance();
-            int done = 0, failed = 0;
-            for (const auto& item : todo) {
-                try {
-                    auto result = registry.extractByExtension(item.path, item.ext);
-                    if (!result.text.isEmpty()) {
-                        if (repoPtr)
-                            repoPtr->updateContent(item.fileId, result.text, result.source,
-                                                   Constants::IndexingStatus::kContentDone,
-                                                   Constants::OcrStatus::kNotNeeded);
-                        ++done;
-                    } else {
-                        if (repoPtr)
-                            repoPtr->updateStatus(item.fileId,
-                                                  Constants::IndexingStatus::kFailed);
-                        ++failed;
-                    }
-                } catch (...) {
-                    // Failed extraction - mark file as failed so it can be re-tried.
-                    try {
-                        if (repoPtr)
-                            repoPtr->updateStatus(item.fileId,
-                                                  Constants::IndexingStatus::kFailed);
-                    } catch (...) {}
+        auto& registry = DocumentExtractorRegistry::instance();
+        int done = 0, failed = 0;
+        for (const auto& item : todo) {
+            try {
+                auto result = registry.extractByExtension(item.path, item.ext);
+                if (!result.text.isEmpty()) {
+                    if (repoPtr)
+                        repoPtr->updateContent(item.fileId, result.text, result.source,
+                                               Constants::IndexingStatus::kContentDone,
+                                               Constants::OcrStatus::kNotNeeded);
+                    ++done;
+                } else {
+                    if (repoPtr)
+                        repoPtr->updateStatus(item.fileId,
+                                              Constants::IndexingStatus::kFailed);
                     ++failed;
                 }
+            } catch (...) {
+                try {
+                    if (repoPtr)
+                        repoPtr->updateStatus(item.fileId,
+                                              Constants::IndexingStatus::kFailed);
+                } catch (...) {}
+                ++failed;
             }
-
-            QMetaObject::invokeMethod(this, [this, done, failed]{
-                contentExtractionRunning_ = false;
-                updateIndexStats();
+            if ((done + failed) % 20 == 0) {
                 statusBar()->showMessage(
-                    QString("Extracted content for %1 files (%2 failed).")
-                        .arg(done).arg(failed), 5000);
-            }, Qt::QueuedConnection);
-        });
+                    QString("Extracting: %1/%2...").arg(done + failed).arg(todo.size()));
+                QApplication::processEvents();
+            }
+        }
+
+        contentExtractionRunning_ = false;
+        updateIndexStats();
+        statusBar()->showMessage(
+            QString("Extracted content for %1 files (%2 failed).")
+                .arg(done).arg(failed), 5000);
     } catch (...) {
         contentExtractionRunning_ = false;
         statusBar()->showMessage("Content extraction failed.", 5000);
