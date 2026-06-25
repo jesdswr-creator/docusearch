@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QList>
 #include "../core/Types.h"
 
@@ -36,6 +37,13 @@ signals:
 private:
     Database&       db_;
     FileRepository& repo_;
+
+    // Split a raw query into filename LIKE words:
+    //   - strips field:value filters
+    //   - replaces '+' with space (A+B == A B)
+    //   - tokenizes respecting quoted phrases
+    //   - drops FTS5 boolean operators (AND/OR/NOT)
+    QStringList splitSearchWords(const QString& raw);
 };
 
 } // namespace DocuSearch
