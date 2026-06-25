@@ -18,6 +18,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QLabel>
+#include <sqlite3.h>
 
 namespace DocuSearch {
 
@@ -220,8 +221,29 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
 
 void SettingsDialog::populateSavedSearches() {
     savedList_->clear();
-    // Defer to FileRepository at MainWindow level; here we just show whatever
-    // current settings pass in.
+    // Load saved searches from the database
+    sqlite3* raw = nullptr;
+    // We need access to the database - get it from Config path
+    QString dbPath = Config::instance().dbPath();
+    if (sqlite3_open_v2(dbPath.toUtf8().constData(), &raw,
+                        SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        return;
+    }
+    sqlite3_stmt* s = nullptr;
+    if (sqlite3_prepare_v2(raw, "SELECT search_name, search_query FROM SavedSearches ORDER BY search_name;",
+                           -1, &s, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            const unsigned char* name = sqlite3_column_text(s, 0);
+            const unsigned char* query = sqlite3_column_text(s, 1);
+            if (name && query) {
+                auto* item = new QListWidgetItem(QString::fromUtf8(reinterpret_cast<const char*>(name)));
+                item->setData(Qt::UserRole, QString::fromUtf8(reinterpret_cast<const char*>(query)));
+                savedList_->addItem(item);
+            }
+        }
+        sqlite3_finalize(s);
+    }
+    sqlite3_close(raw);
 }
 
 AppSettings SettingsDialog::result() const {

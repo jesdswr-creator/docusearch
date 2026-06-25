@@ -16,6 +16,7 @@
 #include "../core/Constants.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
+#include "../core/StringUtils.h"
 #include "../database/Database.h"
 #include "../database/Schema.h"
 #include "../database/FileRepository.h"
