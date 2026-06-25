@@ -160,24 +160,42 @@ void MainWindow::buildCentral() {
     leftLay->addWidget(resultsPane_, 1);
     mainSplitter_->addWidget(leftWidget);
 
-    // Middle: preview
-    previewPane_ = new PreviewPane(this);
-    mainSplitter_->addWidget(previewPane_);
+    // Middle: preview (top) + tags/notes (bottom)
+    auto* middleWidget = new QWidget(this);
+    middleWidget->setMinimumWidth(200);
+    auto* middleLay = new QVBoxLayout(middleWidget);
+    middleLay->setContentsMargins(4, 4, 4, 4);
+    middleLay->setSpacing(4);
+    previewPane_ = new PreviewPane(middleWidget);
+    middleLay->addWidget(previewPane_, 3);
+    tagsNotesPane_ = new TagsNotesPane(middleWidget);
+    tagsNotesPane_->setMaximumHeight(200);
+    tagsNotesPane_->setMinimumHeight(120);
+    middleLay->addWidget(tagsNotesPane_, 1);
+    mainSplitter_->addWidget(middleWidget);
 
-    // Right: tabs for metadata, tags/notes, indexing
+    // Right: metadata + indexing (narrow)
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
+    rightSplitter_->setMinimumWidth(160);
+    rightSplitter_->setMaximumWidth(260);
     metadataPane_   = new MetadataPane(rightSplitter_);
-    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
+    metadataPane_->setMinimumHeight(140);
     indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
+    indexingWidget_->setMinimumHeight(80);
 
     rightSplitter_->addWidget(metadataPane_);
-    rightSplitter_->addWidget(tagsNotesPane_);
     rightSplitter_->addWidget(indexingWidget_);
     mainSplitter_->addWidget(rightSplitter_);
 
-    mainSplitter_->setStretchFactor(0, 5);
-    mainSplitter_->setStretchFactor(1, 3);
-    mainSplitter_->setStretchFactor(2, 2);
+    // Results 60%, middle 25%, right 15%
+    mainSplitter_->setStretchFactor(0, 60);
+    mainSplitter_->setStretchFactor(1, 25);
+    mainSplitter_->setStretchFactor(2, 15);
+
+    rightSplitter_->setStretchFactor(0, 55);
+    rightSplitter_->setStretchFactor(1, 45);
+
+    updateIndexStats();
 }
 
 void MainWindow::buildMenus() {
@@ -354,38 +372,43 @@ void MainWindow::onLiveSearchTick() {
 }
 
 void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
-    FileRecord r;
-    if (fileId != 0 && repo_->getById(fileId, r)) {
-        metadataPane_->setRecord(r);
-        tagsNotesPane_->setFileId(fileId);
-        tagsNotesPane_->setTags(r.tags);
-        tagsNotesPane_->setNote(r.note);
-    }
-    previewPane_->setFilePath(path);
+    try {
+        FileRecord r;
+        if (fileId != 0 && repo_ && repo_->getById(fileId, r)) {
+            metadataPane_->setRecord(r);
+            tagsNotesPane_->setFileId(fileId);
+            tagsNotesPane_->setTags(r.tags);
+            tagsNotesPane_->setNote(r.note);
+        }
+        previewPane_->setFilePath(path);
 
-    // Generate thumbnail in background
-    const QString ext = FileUtils::extensionOf(path);
-    if (Constants::kImageExtensions.contains(ext) || ext == "pdf") {
-        (void)QtConcurrent::run([this, path, fileId]{
-            QImage img = thumbs_->thumbnail(path, 512);
-            QMetaObject::invokeMethod(this, [this, img]{
-                previewPane_->setThumbnail(QPixmap::fromImage(img));
-            }, Qt::QueuedConnection);
-        });
-    } else {
-        previewPane_->setThumbnail(QPixmap());
-    }
-
-    // Lazy index: if file isn't fully indexed, do it now.
-    if (fileId != 0) {
-        (void)QtConcurrent::run([this, fileId]{
-            QString text = indexer_->lazyIndex(fileId);
-            if (!text.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, text]{
-                    previewPane_->setExtractedText(text);
-                }, Qt::QueuedConnection);
+        // Load extracted text from DB for preview
+        if (fileId != 0 && db_) {
+            auto* raw = db_->raw();
+            if (raw) {
+                sqlite3_stmt* s = nullptr;
+                if (sqlite3_prepare_v2(raw, "SELECT extracted_text FROM DocumentText WHERE file_id = ?;",
+                                       -1, &s, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_int64(s, 1, fileId);
+                    if (sqlite3_step(s) == SQLITE_ROW) {
+                        const unsigned char* t = sqlite3_column_text(s, 0);
+                        if (t) {
+                            QString text = QString::fromUtf8(reinterpret_cast<const char*>(t));
+                            if (text.size() > 50000) text = text.left(50000) + "\n\n... (truncated)";
+                            previewPane_->setExtractedText(text);
+                        } else {
+                            previewPane_->setExtractedText("No content extracted. Use Index -> Extract Content.");
+                        }
+                    } else {
+                        previewPane_->setExtractedText("No content extracted. Use Index -> Extract Content.");
+                    }
+                    sqlite3_finalize(s);
+                }
             }
-        });
+        }
+        previewPane_->setThumbnail(QPixmap());
+    } catch (...) {
+        // Silently ignore errors from file selection
     }
 }
 

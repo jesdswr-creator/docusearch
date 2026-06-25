@@ -1,5 +1,5 @@
 // ============================================================
-// TagsNotesPane.cpp
+// TagsNotesPane.cpp — Compact tags + notes side-by-side
 // ============================================================
 
 #include "TagsNotesPane.h"
@@ -8,22 +8,33 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QKeyEvent>
+#include <QScrollArea>
 
 namespace DocuSearch {
 
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(8, 8, 8, 8);
+    auto* outer = new QHBoxLayout(this);
+    outer->setContentsMargins(4, 4, 4, 4);
+    outer->setSpacing(4);
 
-    // Tags
+    // Tags (left)
     auto* tagBox = new QGroupBox("Tags", this);
+    tagBox->setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; margin-top: 8px; padding-top: 4px; }");
     auto* tagLay = new QVBoxLayout(tagBox);
+    tagLay->setSpacing(2);
 
     auto* inputRow = new QHBoxLayout();
+    inputRow->setSpacing(2);
     tagInput_ = new QLineEdit(this);
-    tagInput_->setPlaceholderText("Add tag (e.g. Urgent, VIP, Pending…)");
+    tagInput_->setPlaceholderText("Add tag...");
+    tagInput_->setMaximumHeight(24);
     addTagBtn_ = new QPushButton("Add", this);
-    rmTagBtn_  = new QPushButton("Remove", this);
+    addTagBtn_->setMaximumHeight(24);
+    addTagBtn_->setStyleSheet("QPushButton { font-size: 11px; padding: 2px 8px; }");
+    rmTagBtn_  = new QPushButton("X", this);
+    rmTagBtn_->setMaximumHeight(24);
+    rmTagBtn_->setMaximumWidth(28);
+    rmTagBtn_->setStyleSheet("QPushButton { font-size: 11px; padding: 2px 4px; }");
     inputRow->addWidget(tagInput_);
     inputRow->addWidget(addTagBtn_);
     inputRow->addWidget(rmTagBtn_);
@@ -31,18 +42,23 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
 
     tagList_ = new QListWidget(this);
     tagList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    tagList_->setMaximumHeight(80);
+    tagList_->setStyleSheet("QListWidget { font-size: 11px; border: 1px solid #ddd; border-radius: 3px; }");
     tagLay->addWidget(tagList_);
 
     outer->addWidget(tagBox, 1);
 
-    // Notes
+    // Notes (right)
     auto* noteBox = new QGroupBox("Notes", this);
+    noteBox->setStyleSheet("QGroupBox { font-size: 11px; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; margin-top: 8px; padding-top: 4px; }");
     auto* noteLay = new QVBoxLayout(noteBox);
+    noteLay->setSpacing(2);
     noteEdit_ = new QTextEdit(this);
-    noteEdit_->setPlaceholderText("Add notes for this file…");
-    noteEdit_->setMaximumHeight(150);
+    noteEdit_->setPlaceholderText("Add notes...");
+    noteEdit_->setStyleSheet("QTextEdit { font-size: 11px; border: 1px solid #ddd; border-radius: 3px; }");
     noteLay->addWidget(noteEdit_);
-    outer->addWidget(noteBox, 1);
+
+    outer->addWidget(noteBox, 2);
 
     connect(addTagBtn_, &QPushButton::clicked, this, &TagsNotesPane::onAddTag);
     connect(rmTagBtn_,  &QPushButton::clicked, this, &TagsNotesPane::onRemoveTag);
@@ -74,7 +90,6 @@ QString TagsNotesPane::note() const { return noteEdit_->toPlainText(); }
 void TagsNotesPane::onAddTag() {
     const QString t = tagInput_->text().trimmed();
     if (t.isEmpty() || fileId_ == 0) return;
-    // Avoid duplicates
     for (int i = 0; i < tagList_->count(); ++i) {
         if (tagList_->item(i)->text() == t) {
             tagInput_->clear();
