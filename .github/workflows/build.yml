@@ -141,12 +141,35 @@ jobs:
           Write-Host "Contents:"
           Get-ChildItem $stagingDir | Format-Table Name
 
+      - name: Build MSI installer (WiX v4, no UI extension)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:Path += ";$env:USERPROFILE\.dotnet\tools"
+          $wxsFile = "installer\DocuSearch.wxs"
+          $msiOut = Join-Path (Get-Location) "dist\DocuSearch-Setup-1.0.0.0.msi"
+          if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" | Out-Null }
+          try {
+            wix build $wxsFile -o $msiOut -d "BuildOutputDir=build\bin\Release"
+            Write-Host "MSI created: $msiOut"
+          } catch {
+            Write-Host "WiX build failed - MSI not produced. Portable ZIP is still available."
+          }
+
       - name: Upload portable ZIP (the main deliverable)
         uses: actions/upload-artifact@v5
         with:
           name: DocuSearch-portable
           path: dist/DocuSearch-1.0.0.0-portable.zip
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload MSI installer (if built)
+        uses: actions/upload-artifact@v5
+        with:
+          name: DocuSearch-Setup-msi
+          path: dist/DocuSearch-Setup-1.0.0.0.msi
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload bare exe folder (debugging)

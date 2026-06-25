@@ -144,14 +144,15 @@ MainWindow::MainWindow(QWidget* parent)
         liveSearchTimer_->start();
     });
 
-    // Auto-scan timer - fires every 60 seconds, rescans indexed folders.
-    // Auto-scan timer DISABLED — was causing random crashes because
-    // SQLite connections are not thread-safe across QtConcurrent::run
-    // and the main thread. Users can manually re-scan via Index menu.
-    // autoScanTimer_ = new QTimer(this);
-    // autoScanTimer_->setInterval(60 * 1000);
-    // connect(autoScanTimer_, &QTimer::timeout, this, &MainWindow::autoScanIndexedFolders);
-    // autoScanTimer_->start();
+    // Auto-scan timer: 1 hour interval, runs on MAIN THREAD (no QtConcurrent).
+    // Scans indexed folders for new/modified files. processEvents() keeps UI responsive.
+    autoScanTimer_ = new QTimer(this);
+    autoScanTimer_->setInterval(3600 * 1000);  // 1 hour
+    connect(autoScanTimer_, &QTimer::timeout, this, [this]{
+        if (contentExtractionRunning_) return;
+        autoScanIndexedFolders();
+    });
+    autoScanTimer_->start();
 
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
@@ -196,50 +197,40 @@ void MainWindow::buildCentral() {
     leftLay->addWidget(resultsPane_, 1);
     mainSplitter_->addWidget(leftWidget);
 
-    // Middle: preview (top) + tags/notes (bottom) - 25% of width, min 200px
-    auto* middleWidget = new QWidget(this);
-    middleWidget->setMinimumWidth(200);
-    auto* middleLay = new QVBoxLayout(middleWidget);
-    middleLay->setContentsMargins(4, 4, 4, 4);
-    middleLay->setSpacing(4);
-    previewPane_ = new PreviewPane(middleWidget);
-    middleLay->addWidget(previewPane_, 1);
-    tagsNotesPane_ = new TagsNotesPane(middleWidget);
-    tagsNotesPane_->setMinimumHeight(120);
-    tagsNotesPane_->setMaximumHeight(200);
-    middleLay->addWidget(tagsNotesPane_);
-    mainSplitter_->addWidget(middleWidget);
+    // Middle: preview only (25% of width, min 200px)
+    previewPane_ = new PreviewPane(this);
+    previewPane_->setMinimumWidth(200);
+    mainSplitter_->addWidget(previewPane_);
 
-    // Right: metadata + indexing status (15% of width, min 160px, max 280px)
-    // The rightSplitter itself enforces a slightly wider minimum (180px)
-    // so the inner widgets never collapse below readable size in a
-    // minimized window.
+    // Right: metadata (top) + tags/notes (bottom) - 15% of width
     rightSplitter_ = new QSplitter(Qt::Vertical, this);
     rightSplitter_->setMinimumWidth(180);
     rightSplitter_->setMaximumWidth(280);
     metadataPane_   = new MetadataPane(rightSplitter_);
     metadataPane_->setMinimumWidth(160);
     metadataPane_->setMinimumHeight(150);
-    indexingWidget_ = new IndexingProgressWidget(rightSplitter_);
-    indexingWidget_->setMinimumWidth(160);
-    indexingWidget_->setMinimumHeight(120);
+    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
+    tagsNotesPane_->setMinimumWidth(160);
+    tagsNotesPane_->setMinimumHeight(120);
 
     rightSplitter_->addWidget(metadataPane_);
-    rightSplitter_->addWidget(indexingWidget_);
+    rightSplitter_->addWidget(tagsNotesPane_);
     mainSplitter_->addWidget(rightSplitter_);
+
+    // Indexing widget exists but is NOT added to any layout (invisible).
+    // Stats are shown via Index -> Index Statistics menu instead.
+    indexingWidget_ = new IndexingProgressWidget(this);
+    indexingWidget_->setVisible(false);
 
     // Stretch factors: left=60, middle=25, right=15.
     mainSplitter_->setStretchFactor(0, 60);
     mainSplitter_->setStretchFactor(1, 25);
     mainSplitter_->setStretchFactor(2, 15);
 
-    rightSplitter_->setStretchFactor(0, 55);
-    rightSplitter_->setStretchFactor(1, 45);
+    rightSplitter_->setStretchFactor(0, 60);
+    rightSplitter_->setStretchFactor(1, 40);
 
-    // --- Explicit initial splitter sizes (issue #2 / #5) ---------------
-    // Distribute the horizontal splitter proportionally to the window
-    // width: 60% / 25% / 15%, clamped to each pane's min/max so a small
-    // (minimized) window never produces a weird distribution.
+    // Explicit initial sizes
     const int w = width() > 0 ? width() : 1280;
     QList<int> hSizes;
     hSizes << qBound(300, int(w * 0.60), w)
@@ -247,11 +238,10 @@ void MainWindow::buildCentral() {
            << qBound(160, int(w * 0.15), 280);
     mainSplitter_->setSizes(hSizes);
 
-    // Distribute the vertical right splitter 55% / 45% based on height.
     const int h = height() > 0 ? height() : 720;
     QList<int> vSizes;
-    vSizes << qMax(150, int(h * 0.55))
-           << qMax(120, int(h * 0.45));
+    vSizes << qMax(150, int(h * 0.60))
+           << qMax(120, int(h * 0.40));
     rightSplitter_->setSizes(vSizes);
 
     updateIndexStats();
@@ -335,14 +325,32 @@ void MainWindow::buildMenus() {
             const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
             const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
             const qint64 failed      = repo_->countByStatus(Constants::IndexingStatus::kFailed);
+            const qint64 tags        = repo_->getAllTags().size();
+            const qint64 saved       = repo_->savedSearches().size();
+            const QString dbPath     = Config::instance().dbPath();
+            qint64 dbSize = 0;
+            {
+                QFile f(dbPath);
+                if (f.exists()) dbSize = f.size();
+            }
+            QString dbSizeStr = Utils::formatFileSize(dbSize);
+
             QMessageBox::information(this, "Index Statistics",
-                QString("Files: %1\n"
-                        "Content indexed: %2\n"
-                        "Metadata only: %3\n"
-                        "Failed: %4\n\n"
-                        "Database: %5")
+                QString("<table cellspacing='4'>"
+                        "<tr><td><b>Total files:</b></td><td>%1</td></tr>"
+                        "<tr><td><b>Content indexed:</b></td><td>%2</td></tr>"
+                        "<tr><td><b>Metadata only:</b></td><td>%3</td></tr>"
+                        "<tr><td><b>Failed:</b></td><td>%4</td></tr>"
+                        "<tr><td>&nbsp;</td><td></td></tr>"
+                        "<tr><td><b>Tags:</b></td><td>%5</td></tr>"
+                        "<tr><td><b>Saved searches:</b></td><td>%6</td></tr>"
+                        "<tr><td>&nbsp;</td><td></td></tr>"
+                        "<tr><td><b>Database:</b></td><td>%7</td></tr>"
+                        "<tr><td><b>DB size:</b></td><td>%8</td></tr>"
+                        "</table>")
                     .arg(total).arg(contentDone).arg(metaOnly).arg(failed)
-                    .arg(Config::instance().dbPath()));
+                    .arg(tags).arg(saved)
+                    .arg(dbPath).arg(dbSizeStr));
         } catch (...) {
             statusBar()->showMessage("Statistics failed.", 3000);
         }
@@ -476,7 +484,19 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
+
+    // Apply to QApplication so ALL widgets (including tags/notes/preview) get it
     QApplication::setPalette(pal);
+
+    // Force-update all child widgets to pick up the new palette immediately.
+    // Some widgets (QTextEdit, QListWidget, QGroupBox) cache their palette
+    // and don't repaint unless explicitly told.
+    const auto widgets = findChildren<QWidget*>();
+    for (QWidget* w : widgets) {
+        w->setPalette(pal);
+        w->update();
+    }
+    update();
 }
 
 void MainWindow::loadSettings() {
@@ -769,7 +789,6 @@ void MainWindow::onExtract() {
 
 void MainWindow::autoScanIndexedFolders() {
     if (!repo_ || !db_) return;
-    // Crash guard: skip if content extraction is running.
     if (contentExtractionRunning_) return;
 
     try {
@@ -787,9 +806,6 @@ void MainWindow::autoScanIndexedFolders() {
                         reinterpret_cast<const char*>(t));
                     const QFileInfo fi(path);
                     const QString absPath = fi.absolutePath();
-                    // Top-level folder: first 2 path segments.
-                    // Windows: "D:/Documents/sub" -> "D:/Documents"
-                    // Unix:    "/home/user/docs"  -> "/home/user"
                     QStringList parts = absPath.split('/', Qt::SkipEmptyParts);
                     QString top;
                     if (parts.size() >= 2) {
@@ -809,58 +825,52 @@ void MainWindow::autoScanIndexedFolders() {
         if (folders.isEmpty()) return;
 
         const QStringList folderList(folders.begin(), folders.end());
+        statusBar()->showMessage("Auto-scanning for new files...");
 
-        // Capture the repo raw pointer so the worker thread doesn't have to
-        // touch repo_ (and race the main thread) directly.
-        FileRepository* repoPtr = repo_.get();
-        (void)QtConcurrent::run([this, repoPtr, folderList]{
-            int newFiles = 0, updatedFiles = 0;
-            for (const auto& folder : folderList) {
-                try {
-                    QStringList emptyExcludes;
-                    FileUtils::walkDirectory(folder, emptyExcludes,
-                        [&](const QFileInfo& fi) -> bool {
-                            const QString path = FileUtils::toNative(fi.absoluteFilePath());
-                            FileRecord existing;
-                            const bool isNew = repoPtr && !repoPtr->getByPath(path, existing);
-                            FileRecord r;
-                            r.path         = path;
-                            r.filename     = fi.fileName();
-                            r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
-                            r.size         = fi.size();
-                            r.createdDate  = fi.birthTime();
-                            r.modifiedDate = fi.lastModified();
-                            r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
-                            // Quick scan: pending for documents/images, not_needed otherwise.
-                            if (Constants::kDocumentExtensions.contains(r.extension) ||
-                                Constants::kImageExtensions.contains(r.extension)) {
-                                r.ocrStatus = Constants::OcrStatus::kPending;
-                            } else {
-                                r.ocrStatus = Constants::OcrStatus::kNotNeeded;
-                            }
-                            if (!repoPtr) return true;
-                            qint64 fileId = repoPtr->upsertFile(r);
-                            if (fileId > 0) {
-                                if (isNew) ++newFiles;
-                                else       ++updatedFiles;
-                            }
-                            return true;
-                        });
-                } catch (...) {
-                    // Single-folder failure shouldn't abort the whole scan.
-                }
-            }
+        // Run on MAIN THREAD (no QtConcurrent) to avoid SQLite thread-safety issues.
+        int newFiles = 0, updatedFiles = 0;
+        int processed = 0;
+        for (const auto& folder : folderList) {
+            try {
+                QStringList emptyExcludes;
+                FileUtils::walkDirectory(folder, emptyExcludes,
+                    [&](const QFileInfo& fi) -> bool {
+                        const QString path = FileUtils::toNative(fi.absoluteFilePath());
+                        FileRecord existing;
+                        const bool isNew = repo_->getByPath(path, existing);
+                        FileRecord r;
+                        r.path         = path;
+                        r.filename     = fi.fileName();
+                        r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
+                        r.size         = fi.size();
+                        r.createdDate  = fi.birthTime();
+                        r.modifiedDate = fi.lastModified();
+                        r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
+                        if (Constants::kDocumentExtensions.contains(r.extension) ||
+                            Constants::kImageExtensions.contains(r.extension)) {
+                            r.ocrStatus = Constants::OcrStatus::kPending;
+                        } else {
+                            r.ocrStatus = Constants::OcrStatus::kNotNeeded;
+                        }
+                        qint64 fileId = repo_->upsertFile(r);
+                        if (fileId > 0) {
+                            if (isNew) ++newFiles;
+                            else       ++updatedFiles;
+                        }
+                        ++processed;
+                        if (processed % 200 == 0) {
+                            statusBar()->showMessage(
+                                QString("Auto-scan: %1 new, %2 updated...").arg(newFiles).arg(updatedFiles));
+                            QApplication::processEvents();
+                        }
+                        return true;
+                    });
+            } catch (...) {}
+        }
 
-            QMetaObject::invokeMethod(this, [this, newFiles, updatedFiles]{
-                statusBar()->showMessage(
-                    QString("Auto-scan: %1 new, %2 updated")
-                        .arg(newFiles).arg(updatedFiles), 5000);
-                updateIndexStats();
-            }, Qt::QueuedConnection);
-        });
-    } catch (...) {
-        // Auto-scan must never crash the UI - it runs on a timer.
-    }
+        statusBar()->showMessage(
+            QString("Auto-scan: %1 new, %2 updated").arg(newFiles).arg(updatedFiles), 5000);
+    } catch (...) {}
 }
 
 void MainWindow::updateIndexStats() {
