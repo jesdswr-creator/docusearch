@@ -134,9 +134,12 @@ foreach ($f in $filteredFiles) {
 }
 
 # Build the directory tree. We need to nest <Directory> elements properly
-# according to the path hierarchy. To keep things simple, we sort dirs by
-# depth (shallowest first) and emit each as a child of its parent.
-$sortedDirs = $dirIds.Keys | Sort-Object { ($_ -split '/').Count }, $_
+# according to the path hierarchy. We sort dirs by depth (shallowest first)
+# and then alphabetically so the output is deterministic.
+# Note: each Sort-Object criterion MUST be a script block (or a property
+# name string). A bare `$_` is not valid here - PowerShell 7 rejects it
+# with "The value of a parameter was null".
+$sortedDirs = $dirIds.Keys | Sort-Object { ($_ -split '/').Count }, { $_ }
 
 # Map: rel dir -> its parent rel dir (or "" for top-level subdirs)
 function Get-ParentDir {
