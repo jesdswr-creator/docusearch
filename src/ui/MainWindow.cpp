@@ -1090,7 +1090,7 @@ void MainWindow::onNoteChanged(qint64 fileId, const QString& note) {
 void MainWindow::onOpenSettings() {
     if (!repo_ || !db_) return;
     try {
-        SettingsDialog dlg(settings_, repo_, db_, this);
+        SettingsDialog dlg(settings_, repo_.get(), db_.get(), this);
 
         // Apply button: persist + live-apply without closing the dialog.
         // This lets the user change theme/threads and see the effect
