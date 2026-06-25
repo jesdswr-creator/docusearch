@@ -56,9 +56,10 @@
     <MajorUpgrade
         DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed. The installer will now exit." />
 
-    <!-- Embed the standard WiX UI (license + feature tree + install dir) -->
+    <!-- Embed the standard WiX UI (license + feature tree + install dir).
+         In WiX v4 only <ui:WixUI> is needed; <ui:WixUIRef> for
+         WixUI_Common is invalid and was a WiX v3 idiom. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
-    <ui:WixUIRef Id="WixUI_Common" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
 
     <!-- Per-machine install -->
@@ -155,10 +156,15 @@
 
     <!-- ============================================================
          Optional Desktop shortcut (controlled by INSTALLDESKTOPSHORTCUT)
+         WiX v4: a Component's condition is expressed via the Condition
+         attribute on the <Component> element itself, not as a child
+         <Condition> element. The condition is evaluated at install time
+         and the component is skipped if it evaluates to false.
          ============================================================ -->
     <DirectoryRef Id="DesktopFolder">
-      <Component Id="ApplicationShortcutDesktop" Guid="A1B2C3D4-4444-5555-6666-777788889999">
-        <Condition>INSTALLDESKTOPSHORTCUT = 1</Condition>
+      <Component Id="ApplicationShortcutDesktop"
+                 Guid="A1B2C3D4-4444-5555-6666-777788889999"
+                 Condition="INSTALLDESKTOPSHORTCUT = 1">
         <Shortcut Id="ApplicationDesktopShortcut"
                   Name="$(var.ProductName)"
                   Description="Launch $(var.ProductName)"
@@ -303,23 +309,18 @@
           SourceFile="$(var.BuildOutputDir)\DocuSearch.exe" />
 
     <!-- ============================================================
-         Custom action: clean up the user database on uninstall
-         (we don't auto-delete on upgrade so the user keeps their index)
+         Custom action: clean up the user database on uninstall.
+         We don't auto-delete on upgrade so the user keeps their index.
+
+         WiX v4: the inline CDATA VBScript syntax from WiX v3 is no
+         longer supported. A Script="vbscript" custom action MUST
+         reference an external .vbs file via ScriptSourceFile.
          ============================================================ -->
     <CustomAction Id="CleanupUserDb"
                   Script="vbscript"
-                  Execute="deferred">
-      <![CDATA[
-        On Error Resume Next
-        Dim appData, dbPath
-        appData = Session.Property("AppDataFolder")
-        If appData = "" Then appData = CreateObject("Shell.Application").Namespace(&H1C).Self.Path
-        dbPath = appData & "\DocuSearch\docusearch.db"
-        If CreateObject("Scripting.FileSystemObject").FileExists(dbPath) Then
-          CreateObject("Scripting.FileSystemObject").DeleteFile dbPath, True
-        End If
-      ]]>
-    </CustomAction>
+                  ScriptSourceFile="installer\CleanupUserDb.vbs"
+                  Execute="deferred"
+                  Return="check" />
 
     <InstallExecuteSequence>
       <Custom Action="CleanupUserDb"
