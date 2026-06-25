@@ -5,6 +5,7 @@
 #include "SettingsDialog.h"
 #include "../core/Constants.h"
 #include "../database/FileRepository.h"
+#include "../database/Database.h"
 #include "../backup/BackupManager.h"
 #include "../core/Config.h"
 
@@ -18,12 +19,24 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <sqlite3.h>
 
 namespace DocuSearch {
 
-SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
-    : QDialog(parent), current_(current) {
+// Role used to store the SavedSearches row id on each QListWidgetItem.
+// We need the id so the Delete button can call repo_->deleteSearch(id).
+static constexpr int kSearchIdRole = Qt::UserRole + 1;
+// And the query text in a second role for display/edit.
+static constexpr int kSearchQueryRole = Qt::UserRole + 2;
+
+SettingsDialog::SettingsDialog(const AppSettings& current,
+                               FileRepository* repo,
+                               Database* db,
+                               QWidget* parent)
+    : QDialog(parent), current_(current), repo_(repo), db_(db) {
     setWindowTitle("Settings - DocuSearch");
     setMinimumWidth(640);
     setMinimumHeight(560);
@@ -125,6 +138,9 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
+    // Only show the OCR tab if Tesseract was actually compiled in.
+    // When OCR is stubbed out, configuring tessdata path / language has
+    // no effect and would mislead the user.
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
@@ -135,10 +151,24 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     ocrLay->addRow("Tessdata path", tdRow);
 
     langCombo_ = new QComboBox(this);
-    langCombo_->addItems({"eng", "eng+hin", "eng+chi_sim", "chi_sim", "fra", "deu", "spa", "ita", "por", "rus", "jpn", "kor"});
+    langCombo_->setEditable(true);
+    populateLangCombo();
     langCombo_->setCurrentText(current_.ocrLanguage);
     ocrLay->addRow("OCR language", langCombo_);
+#ifdef DOCUSEARCH_HAS_TESSERACT
     tabs->addTab(ocrTab, "OCR");
+#else
+    // OCR compiled out: replace the tab with an informational label.
+    auto* ocrInfo = new QLabel(
+        "OCR is not available in this build.\n\n"
+        "Tesseract was not linked at compile time, so the OCR features "
+        "are stubbed out. Document text extraction still works for "
+        ".docx / .xlsx / .pptx / .pdf (text-layer) and plain text files.",
+        this);
+    ocrInfo->setWordWrap(true);
+    ocrLay->addRow(ocrInfo);
+    tabs->addTab(ocrTab, "OCR (unavailable)");
+#endif
 
     // -------- Appearance tab --------
     auto* appTab = new QWidget(this);
@@ -153,26 +183,38 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     auto* savTab = new QWidget(this);
     auto* savLay = new QVBoxLayout(savTab);
     savedList_ = new QListWidget(this);
+    savedList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    savLay->addWidget(new QLabel("Existing saved searches:", this));
     savLay->addWidget(savedList_);
     auto* savForm = new QFormLayout();
     savedNameEdit_  = new QLineEdit(this);
+    savedNameEdit_->setPlaceholderText("e.g., Invoices 2024");
     savedQueryEdit_ = new QLineEdit(this);
+    savedQueryEdit_->setPlaceholderText("e.g., invoice type:pdf date:>2024-01-01");
     savForm->addRow("Name",  savedNameEdit_);
     savForm->addRow("Query", savedQueryEdit_);
     savLay->addLayout(savForm);
     auto* savRow = new QHBoxLayout();
     auto* addSavBtn = new QPushButton("Save", this);
-    auto* rmSavBtn  = new QPushButton("Delete", this);
+    auto* rmSavBtn  = new QPushButton("Delete Selected", this);
     savRow->addWidget(addSavBtn);
     savRow->addWidget(rmSavBtn);
     savRow->addStretch();
     savLay->addLayout(savRow);
+    savLay->addWidget(new QLabel(
+        "Tip: saving a search with an existing name will overwrite it.", this));
     tabs->addTab(savTab, "Saved Searches");
 
     // -------- Backup / Restore tab --------
     auto* bkTab = new QWidget(this);
     auto* bkLay = new QVBoxLayout(bkTab);
-    auto* backupBtn = new QPushButton("Backup Now", this);
+    auto* bkHelp = new QLabel(
+        "Back up the search index (database file) to a .zip archive.\n"
+        "Restore will overwrite your current database - the app must "
+        "restart afterwards.", this);
+    bkHelp->setWordWrap(true);
+    bkLay->addWidget(bkHelp);
+    auto* backupBtn = new QPushButton("Backup Now...", this);
     auto* restoreBtn = new QPushButton("Restore from File...", this);
     auto* vacuumBtn  = new QPushButton("Vacuum Database (compact)", this);
     bkLay->addWidget(backupBtn);
@@ -188,8 +230,11 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
     outer->addWidget(btns);
     connect(btns, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(btns, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(btns->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-            this, [this]{ /* emit apply signal */ });
+    // Apply button: emit settingsApplied so MainWindow can persist +
+    // live-apply the new settings without closing the dialog.
+    if (auto* applyBtn = btns->button(QDialogButtonBox::Apply)) {
+        connect(applyBtn, &QPushButton::clicked, this, &SettingsDialog::onApply);
+    }
 
     // Wire up actions
     connect(browseBtn, &QPushButton::clicked, this, [this]{
@@ -216,34 +261,46 @@ SettingsDialog::SettingsDialog(const AppSettings& current, QWidget* parent)
         if (!d.isEmpty()) tessdataEdit_->setText(d);
     });
 
+    // Clicking a saved search loads it into the name/query editors so
+    // the user can edit it (saving with the same name overwrites).
+    connect(savedList_, &QListWidget::itemClicked, this, [this](QListWidgetItem* item){
+        savedNameEdit_->setText(item->text());
+        savedQueryEdit_->setText(item->data(kSearchQueryRole).toString());
+    });
+
     populateSavedSearches();
+}
+
+void SettingsDialog::populateLangCombo() {
+    // Common Tesseract language packs. The combo is editable so the
+    // user can also type a custom combination (e.g., "eng+chi_sim+hin").
+    langCombo_->clear();
+    langCombo_->addItems({"eng", "eng+hin", "eng+chi_sim", "chi_sim",
+                          "chi_tra", "fra", "deu", "spa", "ita",
+                          "por", "rus", "jpn", "kor", "ara", "hin"});
 }
 
 void SettingsDialog::populateSavedSearches() {
     savedList_->clear();
-    // Load saved searches from the database
-    sqlite3* raw = nullptr;
-    // We need access to the database - get it from Config path
-    QString dbPath = Config::instance().dbPath();
-    if (sqlite3_open_v2(dbPath.toUtf8().constData(), &raw,
-                        SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    if (!repo_) {
+        // No repository (e.g., running in a unit test). Show nothing.
         return;
     }
-    sqlite3_stmt* s = nullptr;
-    if (sqlite3_prepare_v2(raw, "SELECT search_name, search_query FROM SavedSearches ORDER BY search_name;",
-                           -1, &s, nullptr) == SQLITE_OK) {
-        while (sqlite3_step(s) == SQLITE_ROW) {
-            const unsigned char* name = sqlite3_column_text(s, 0);
-            const unsigned char* query = sqlite3_column_text(s, 1);
-            if (name && query) {
-                auto* item = new QListWidgetItem(QString::fromUtf8(reinterpret_cast<const char*>(name)));
-                item->setData(Qt::UserRole, QString::fromUtf8(reinterpret_cast<const char*>(query)));
-                savedList_->addItem(item);
-            }
-        }
-        sqlite3_finalize(s);
+    // repo_->savedSearches() returns QList<{id, name}>. We pull the
+    // query for each via savedSearchQuery(id) so the user can re-edit.
+    auto list = repo_->savedSearches();
+    for (const auto& p : list) {
+        const qint64 id = p.first;
+        const QString& name = p.second;
+        const QString query = repo_->savedSearchQuery(id);
+        auto* item = new QListWidgetItem(name);
+        item->setData(kSearchIdRole,    id);
+        item->setData(kSearchQueryRole, query);
+        // Tooltip shows the query so the user can preview without clicking.
+        item->setToolTip(query.isEmpty() ? QStringLiteral("(empty query)")
+                                          : query);
+        savedList_->addItem(item);
     }
-    sqlite3_close(raw);
 }
 
 AppSettings SettingsDialog::result() const {
@@ -266,7 +323,7 @@ AppSettings SettingsDialog::result() const {
     s.hashLargeFiles       = hashFilesCheck_->isChecked();
     s.monitorFileChanges   = monitorCheck_->isChecked();
     s.tessdataPath         = tessdataEdit_->text().trimmed();
-    s.ocrLanguage          = langCombo_->currentText();
+    s.ocrLanguage          = langCombo_->currentText().trimmed();
     s.darkMode             = darkModeCheck_->isChecked();
     return s;
 }
@@ -314,31 +371,90 @@ void SettingsDialog::onRemoveExcludedExt() {
 void SettingsDialog::onSaveSearch() {
     const QString name = savedNameEdit_->text().trimmed();
     const QString query = savedQueryEdit_->text().trimmed();
-    if (name.isEmpty() || query.isEmpty()) return;
-    // We emit via signal - MainWindow will persist via FileRepository
-    // For now, add to list locally:
-    auto* item = new QListWidgetItem(name);
-    item->setData(Qt::UserRole, query);
-    savedList_->addItem(item);
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, "Save Search",
+            "Please enter a name for this saved search.");
+        return;
+    }
+    if (query.isEmpty()) {
+        QMessageBox::warning(this, "Save Search",
+            "Please enter a search query to save.");
+        return;
+    }
+    if (!repo_) {
+        QMessageBox::warning(this, "Save Search",
+            "Database is not available - changes cannot be saved.");
+        return;
+    }
+    // saveSearch uses INSERT ... ON CONFLICT(search_name) DO UPDATE,
+    // so saving with an existing name will overwrite the previous query.
+    const qint64 id = repo_->saveSearch(name, query);
+    if (id == 0) {
+        QMessageBox::warning(this, "Save Search",
+            "Failed to save the search to the database.");
+        return;
+    }
+    // Refresh the list from the DB so the new/updated entry appears
+    // with the correct id and tooltip.
+    populateSavedSearches();
+    // Select the just-saved entry so the user gets visual feedback.
+    const auto matches = savedList_->findItems(name, Qt::MatchExactly);
+    if (!matches.isEmpty()) {
+        savedList_->setCurrentItem(matches.first());
+    }
     savedNameEdit_->clear();
     savedQueryEdit_->clear();
 }
 
 void SettingsDialog::onDeleteSearch() {
     auto* cur = savedList_->currentItem();
-    if (cur) delete cur;
+    if (!cur) {
+        QMessageBox::information(this, "Delete Search",
+            "Select a saved search to delete first.");
+        return;
+    }
+    const QString name = cur->text();
+    const auto rc = QMessageBox::question(
+        this, "Delete Search",
+        QStringLiteral("Delete saved search \"%1\"?").arg(name),
+        QMessageBox::Yes | QMessageBox::No);
+    if (rc != QMessageBox::Yes) return;
+
+    if (repo_) {
+        const qint64 id = cur->data(kSearchIdRole).toLongLong();
+        if (id > 0) {
+            repo_->deleteSearch(id);
+        }
+    }
+    populateSavedSearches();
+}
+
+void SettingsDialog::onApply() {
+    // Emit the signal so MainWindow can persist + live-apply.
+    // MainWindow is responsible for calling saveSettings(), applyTheme(),
+    // updateIndexStats(), etc., and for showing a status-bar message.
+    emit settingsApplied(result());
 }
 
 void SettingsDialog::onBackupNow() {
-    // Defer to MainWindow via signal - but here we just open a save dialog
     const QString path = QFileDialog::getExistingDirectory(this, "Backup destination");
     if (path.isEmpty()) return;
+
+    // Force SQLite to flush the WAL into the main .db file before zipping.
+    // Otherwise the zipped .db would be missing the most recent writes.
+    if (db_) {
+        db_->exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+
     BackupManager bm;
     const QString out = bm.backup(Config::instance().dbPath(), path);
     if (!out.isEmpty())
-        QMessageBox::information(this, "Backup", "Backup created:\n" + out);
+        QMessageBox::information(this, "Backup",
+            "Backup created:\n" + out);
     else
-        QMessageBox::warning(this, "Backup", "Backup failed.");
+        QMessageBox::warning(this, "Backup",
+            "Backup failed. Check that the database is not in use and "
+            "that you have write permission to the destination folder.");
 }
 
 void SettingsDialog::onRestoreNow() {
@@ -347,20 +463,49 @@ void SettingsDialog::onRestoreNow() {
     if (path.isEmpty()) return;
     QMessageBox::StandardButton rc = QMessageBox::question(
         this, "Restore",
-        "Restoring will overwrite your current database. Continue?",
+        "Restoring will overwrite your current database.\n"
+        "The application must be restarted after restore.\n\n"
+        "Continue?",
         QMessageBox::Yes | QMessageBox::No);
     if (rc != QMessageBox::Yes) return;
 
-    BackupManager bm;
-    if (bm.restore(path, Config::instance().dbPath()))
-        QMessageBox::information(this, "Restore", "Restore successful. Please restart.");
-    else
-        QMessageBox::warning(this, "Restore", "Restore failed.");
+    // We can't safely overwrite the .db file while Database holds it
+    // open. Emit a signal so MainWindow can:
+    //   1. Close the database
+    //   2. Let BackupManager overwrite the file
+    //   3. Reopen the database
+    //   4. Refresh the UI
+    // MainWindow will show the success/failure message.
+    emit restoreRequested(path);
 }
 
 void SettingsDialog::onVacuumDb() {
-    // Defer to MainWindow
-    QMessageBox::information(this, "Vacuum", "Vacuum will run when you click Apply.");
+    if (!repo_) {
+        QMessageBox::warning(this, "Vacuum",
+            "Database is not available - cannot vacuum.");
+        return;
+    }
+    // VACUUM can take a few seconds on large databases. We don't run it
+    // in a background thread here because:
+    //   1. The SQLite C API requires that VACUUM runs on the same
+    //      connection that owns the database, and our Database object
+    //      is not thread-safe for DDL.
+    //   2. For a typical user database (<100 MB) VACUUM completes in
+    //      under 2 seconds, which is acceptable for a modal dialog.
+    setEnabled(false);
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = repo_->vacuum();
+    QApplication::restoreOverrideCursor();
+    setEnabled(true);
+    if (ok) {
+        QMessageBox::information(this, "Vacuum",
+            "Database vacuumed successfully.\n"
+            "Unused space has been reclaimed.");
+    } else {
+        QMessageBox::warning(this, "Vacuum",
+            "Vacuum failed. The database may be in use by another "
+            "operation - try again later.");
+    }
 }
 
 } // namespace DocuSearch

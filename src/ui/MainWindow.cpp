@@ -20,6 +20,7 @@
 #include "../database/Database.h"
 #include "../database/Schema.h"
 #include "../database/FileRepository.h"
+#include "../backup/BackupManager.h"
 #include "../search/SearchEngine.h"
 #include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
@@ -1089,14 +1090,59 @@ void MainWindow::onNoteChanged(qint64 fileId, const QString& note) {
 void MainWindow::onOpenSettings() {
     if (!repo_ || !db_) return;
     try {
-        SettingsDialog dlg(settings_, this);
-        if (dlg.exec() == QDialog::Accepted) {
+        SettingsDialog dlg(settings_, repo_, db_, this);
+
+        // Apply button: persist + live-apply without closing the dialog.
+        // This lets the user change theme/threads and see the effect
+        // immediately, then keep tweaking.
+        QObject::connect(&dlg, &SettingsDialog::settingsApplied,
+            this, [this](const AppSettings& s){
+                settings_ = s;
+                darkMode_ = settings_.darkMode;
+                saveSettings();
+                applyTheme();
+                updateIndexStats();
+                statusBar()->showMessage("Settings applied.", 3000);
+            });
+
+        // Restore: close DB, let BackupManager overwrite the .db file,
+        // reopen DB, refresh UI. We do this here (not in the dialog)
+        // because the dialog doesn't own the Database object.
+        QObject::connect(&dlg, &SettingsDialog::restoreRequested,
+            this, [this](const QString& zipPath){
+                statusBar()->showMessage("Restoring database...", 0);
+                db_->close();
+                BackupManager bm;
+                const bool ok = bm.restore(zipPath, Config::instance().dbPath());
+                if (ok) {
+                    QString err;
+                    if (db_->open(Config::instance().dbPath(), &err)) {
+                        statusBar()->showMessage(
+                            "Database restored. Please restart DocuSearch.", 8000);
+                        updateIndexStats();
+                        refreshSavedSearches();
+                    } else {
+                        statusBar()->showMessage(
+                            "Restore succeeded but reopen failed: " + err, 0);
+                    }
+                } else {
+                    QString err;
+                    db_->open(Config::instance().dbPath(), &err);
+                    statusBar()->showMessage("Restore failed.", 5000);
+                }
+            });
+
+        // Saved searches are persisted immediately by the dialog (via
+        // repo_->saveSearch / deleteSearch), so regardless of whether
+        // the user clicks OK or Cancel, refresh the dropdown in case
+        // they added/removed entries.
+        const int rc = dlg.exec();
+        refreshSavedSearches();
+        if (rc == QDialog::Accepted) {
             settings_ = dlg.result();
             darkMode_ = settings_.darkMode;
             saveSettings();
             applyTheme();
-            // ocrPool_/watcher_/indexer_ are not constructed in this build -
-            // skip calling them.
             updateIndexStats();
         }
     } catch (...) {

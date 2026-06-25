@@ -75,8 +75,11 @@ Write-Host "=== Harvesting $($filteredFiles.Count) files from $BuildDir ==="
 
 # Helper: deterministic GUID from a string (SHA-256 -> first 16 bytes -> GUID).
 # Required so re-runs produce identical GUIDs (MSI tracks components by GUID).
-Add-Type -AssemblyName System.Security
-Add-Type -AssemblyName System.Text
+#
+# Note: we deliberately do NOT call `Add-Type -AssemblyName System.Security`
+# or `System.Text` here. In PowerShell 7 (Core) those types are already
+# available by default, and `Add-Type -AssemblyName` in PS 7 looks for a
+# literal DLL file on disk (which fails with "Cannot find path ... .dll").
 function Get-StableGuid {
     param([string]$seed)
     $sha = [System.Security.Cryptography.SHA256]::Create()
