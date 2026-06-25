@@ -18,7 +18,7 @@ namespace {
 void applyLabelFont(QLabel* lbl) {
     QFont f = lbl->font();
     f.setFamily("Segoe UI");
-    f.setPointSize(12);
+    f.setPointSize(9);  // issue #4: 9pt, same as MetadataPane
     lbl->setFont(f);
 }
 }
@@ -37,12 +37,14 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
     v->setContentsMargins(8, 8, 8, 8);
     v->setSpacing(6);
 
-    // Section header - blue.
-    phaseLabel_ = new QLabel("Idle", inner);
+    // Section header - static "INDEX STATUS" banner (issue #4).
+    // The actual stats are shown in the form labels below.
+    phaseLabel_ = new QLabel("INDEX STATUS", inner);
     phaseLabel_->setObjectName("titleLabel");
-    QFont headerFont("Segoe UI", 11);
+    QFont headerFont("Segoe UI", 9);
     headerFont.setBold(true);
     phaseLabel_->setFont(headerFont);
+    phaseLabel_->setAlignment(Qt::AlignCenter);
     phaseLabel_->setStyleSheet(
         "QLabel {"
         "  color: #FFFFFF;"
@@ -120,27 +122,42 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
 }
 
 void IndexingProgressWidget::setPhase(const QString& phase) {
-    // phase may contain newlines (from updateIndexStats) - preserve them.
-    phaseLabel_->setText(phase);
+    // Issue #4: setPhase() only sets the section header text, not the
+    // stats. The form labels are updated via update().
+    if (!phaseLabel_) return;
+    if (phase.isEmpty()) {
+        phaseLabel_->setText("INDEX STATUS");
+    } else {
+        phaseLabel_->setText(phase);
+    }
 }
 
 void IndexingProgressWidget::update(const DocuSearch::IndexingProgress& p) {
-    scannedLabel_->setText(QString::number(p.filesScanned.load()));
-    indexedLabel_->setText(QString::number(p.documentsIndexed.load()));
-    ocrLabel_->    setText(QString::number(p.ocrCompleted.load()));
-    queueLabel_->  setText(QString::number(p.queueRemaining.load()));
-    errorsLabel_-> setText(QString::number(p.errorsCount.load()));
-    cpuBar_->setValue(p.cpuUsagePct.load());
+    // Issue #4: update() updates ONLY the form labels, not the phase
+    // header. The phase header stays a static "INDEX STATUS" banner.
+    if (scannedLabel_) scannedLabel_->setText(QString::number(p.filesScanned.load()));
+    if (indexedLabel_) indexedLabel_->setText(QString::number(p.documentsIndexed.load()));
+    if (ocrLabel_)     ocrLabel_->    setText(QString::number(p.ocrCompleted.load()));
+    if (queueLabel_)   queueLabel_->  setText(QString::number(p.queueRemaining.load()));
+    if (errorsLabel_)  errorsLabel_-> setText(QString::number(p.errorsCount.load()));
+    if (cpuBar_)       cpuBar_->setValue(p.cpuUsagePct.load());
 
     // ETA estimation: very rough
-    if (p.queueRemaining.load() > 0 && p.documentsIndexed.load() > 0) {
-        etaLabel_->setText("estimating...");
-    } else {
-        etaLabel_->setText("-");
+    if (etaLabel_) {
+        if (p.queueRemaining.load() > 0 && p.documentsIndexed.load() > 0) {
+            etaLabel_->setText("estimating...");
+        } else {
+            etaLabel_->setText("-");
+        }
     }
 
-    if (p.paused.load()) {
-        phaseLabel_->setText(phaseLabel_->text() + "  (paused)");
+    // Reflect paused state in the header text only (issue #4: header is
+    // just a label - it doesn't carry stats).
+    if (phaseLabel_ && p.paused.load()) {
+        const QString base = phaseLabel_->text();
+        if (!base.endsWith(" (paused)")) {
+            phaseLabel_->setText(base + "  (paused)");
+        }
     }
 }
 

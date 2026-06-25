@@ -34,3 +34,6 @@ certs/
 CMakeUserPresets.json
 upload/
 upload/
+
+# Tool result scratch dir
+tool-results/
