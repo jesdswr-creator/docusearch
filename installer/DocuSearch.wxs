@@ -18,15 +18,16 @@
     * Per-machine install (ALLUSERS=1) so all users on the PC get it
     * Uninstall removes everything including the local DB
 
-  Build with the build-release.ps1 script (which wraps candle + light):
+  Build with (WiX v4 — heat harvests bin\Release into DocuSearch.Harvest.wxs):
 
-      .\scripts\build-release.ps1 -MakeMsi
+      wix heat dir build\bin\Release -o installer\DocuSearch.Harvest.wxs ^
+          -cg HarvestedFiles -dr BinFolder -sreg -srd ^
+          -var var.BuildOutputDir -t installer\heat-filter.xsl
 
-  Or directly:
-
-      candle installer\DocuSearch.wxs -o build\wix\
-      light  build\wix\DocuSearch.wixobj -o build\DocuSearch-Setup.msi ^
-             -ext WixUIExtension -ext WixUtilExtension
+      wix build installer\DocuSearch.wxs installer\DocuSearch.Harvest.wxs ^
+          -o dist\DocuSearch-Setup.msi ^
+          -d BuildOutputDir=build\bin\Release ^
+          -ext WixToolset.UI.wixext
   ============================================================
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -74,6 +75,7 @@
     <Feature Id="ProductFeature" Title="$(var.ProductName)" Level="1"
              Description="Offline intelligent document search &amp; OCR system.">
       <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="HarvestedFiles" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="ApplicationShortcutDesktop" />
       <ComponentRef Id="RegistryUninstallEntry" />
@@ -102,7 +104,9 @@
     <StandardDirectory Id="DesktopFolder" />
 
     <!-- ============================================================
-         App files (everything that windeployqt dumps in bin\Release)
+         App files: just the main executable here. All Qt DLLs, plugins,
+         and themes are pulled in via <ComponentGroupRef Id="HarvestedFiles"/>
+         which references the heat-harvested DocuSearch.Harvest.wxs.
          ============================================================ -->
     <ComponentGroup Id="AppFiles" Directory="BinFolder">
       <!-- Main executable -->
@@ -111,12 +115,6 @@
               Source="$(var.BuildOutputDir)\DocuSearch.exe"
               KeyPath="yes" Checksum="yes" />
       </Component>
-
-      <!-- Qt DLLs and plugins produced by windeployqt.
-           We harvest the whole bin\Release directory at build time
-           via heat.exe (see build-release.ps1); the resulting
-           DocuSearch harvest file is pulled in via <?include ?>. -->
-      <?include DocuSearch.Harvest.wxi ?>
 
       <!-- VC++ Redistributable policy (the .exe is statically linked,
            but we still record the runtime dependency for clarity). -->

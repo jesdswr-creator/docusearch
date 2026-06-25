@@ -66,11 +66,16 @@ jobs:
           echo "C:\vcpkg" >> $env:GITHUB_PATH
           & C:\vcpkg\vcpkg.exe --version
 
-      - name: Install WiX v4
+      - name: Install WiX v4 (pinned to avoid v7 OSMF EULA)
         shell: pwsh
         run: |
-          dotnet tool install -g wix
+          # Pin to WiX v4.0.5 — WiX v7 requires accepting the OSMF EULA
+          # which fails non-interactively on CI. v4 has no such restriction.
+          dotnet tool install -g wix --version 4.0.5
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+          # Pre-fetch the UI extension so wix build can resolve it offline
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add WixToolset.UI.wixext/4.0.5
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version
 
       # NOTE: vcpkg dependencies (sqlite3, tesseract, leptonica, poppler, zlib)
       # are installed automatically by CMake via the vcpkg manifest (vcpkg.json)
@@ -119,7 +124,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\bin\Release\themes | Out-Null
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
-      - name: Build portable ZIP (skip MSI/MSIX - WiX extension issues)
+      - name: Build portable ZIP
         shell: pwsh
         run: |
           # Create a portable ZIP directly from the windeployqt output.
@@ -141,20 +146,41 @@ jobs:
           Write-Host "Contents:"
           Get-ChildItem $stagingDir | Format-Table Name
 
-      - name: Build MSI installer (WiX v4, no UI extension)
+      - name: Harvest build output with WiX heat
         shell: pwsh
-        continue-on-error: true
         run: |
           $env:Path += ";$env:USERPROFILE\.dotnet\tools"
-          $wxsFile = "installer\DocuSearch.wxs"
+          $harvestOut = "installer\DocuSearch.Harvest.wxs"
+          # Harvest everything in build\bin\Release (Qt DLLs, plugins, themes, etc.)
+          # -cg HarvestedFiles    ComponentGroup name to emit
+          # -dr BinFolder         DirectoryRef to attach files to (ProgramFiles\DocuSearch\bin)
+          # -sreg                 Skip registry harvesting (no .reg files here)
+          # -srd                  Suppress the root directory wrapper (we use BinFolder directly)
+          # -var var.BuildOutputDir  Use $(var.BuildOutputDir) for Source paths
+          # -t installer\heat-filter.xsl  Exclude DocuSearch.exe (already in main wxs)
+          & wix heat dir "build\bin\Release" -o $harvestOut `
+            -cg HarvestedFiles -dr BinFolder `
+            -sreg -srd -var var.BuildOutputDir `
+            -t installer\heat-filter.xsl
+          Write-Host "=== Harvested file: $harvestOut ==="
+          Get-Content $harvestOut | Select-Object -First 30
+
+      - name: Build MSI installer (WiX v4)
+        shell: pwsh
+        run: |
+          $env:Path += ";$env:USERPROFILE\.dotnet\tools"
+          $wxsMain = "installer\DocuSearch.wxs"
+          $wxsHarvest = "installer\DocuSearch.Harvest.wxs"
           $msiOut = Join-Path (Get-Location) "dist\DocuSearch-Setup-1.0.0.0.msi"
           if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" | Out-Null }
-          try {
-            wix build $wxsFile -o $msiOut -d "BuildOutputDir=build\bin\Release"
-            Write-Host "MSI created: $msiOut"
-          } catch {
-            Write-Host "WiX build failed - MSI not produced. Portable ZIP is still available."
-          }
+          # Build MSI: pass both the main wxs and the harvested wxs as inputs.
+          # -ext WixToolset.UI.wixext enables <ui:WixUI> for the install wizard.
+          & wix build $wxsMain $wxsHarvest -o $msiOut `
+            -d "BuildOutputDir=build\bin\Release" `
+            -ext WixToolset.UI.wixext
+          if (-not (Test-Path $msiOut)) { throw "MSI was not produced at $msiOut" }
+          Write-Host "=== MSI created: $msiOut ==="
+          Get-Item $msiOut | Format-List Name, Length, LastWriteTime
 
       - name: Upload portable ZIP (the main deliverable)
         uses: actions/upload-artifact@v5
@@ -164,12 +190,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload MSI installer (if built)
+      - name: Upload MSI installer
         uses: actions/upload-artifact@v5
         with:
           name: DocuSearch-Setup-msi
           path: dist/DocuSearch-Setup-1.0.0.0.msi
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload bare exe folder (debugging)
