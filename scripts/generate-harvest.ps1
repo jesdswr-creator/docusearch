@@ -208,8 +208,16 @@ foreach ($dirKey in ($filesByDir.Keys | Sort-Object)) {
             $dirAttr = $dirIds[$dirKey]
         }
 
-        [void]$xml.AppendLine('    <Component Id="{0}" Guid="{1}" Directory="{2}" Bitness="always64">' -f $compId, $guid, $dirAttr)
-        [void]$xml.AppendLine('      <File Id="{0}" Source="{1}" KeyPath="yes" />' -f $fileId, $source)
+        # Use PowerShell string interpolation (double quotes with
+        # backtick-escaped inner quotes) instead of the -f format
+        # operator. When -f is used inside a method call like
+        #   $xml.AppendLine('...' -f $a, $b, $c)
+        # PowerShell's parser can mis-split the argument list between
+        # AppendLine and -f, producing "Index (zero based) must be
+        # greater than or equal to zero and less than the size of the
+        # argument list." Interpolation avoids the ambiguity.
+        [void]$xml.AppendLine("    <Component Id=`"$compId`" Guid=`"$guid`" Directory=`"$dirAttr`" Bitness=`"always64`">")
+        [void]$xml.AppendLine("      <File Id=`"$fileId`" Source=`"$source`" KeyPath=`"yes`" />")
         [void]$xml.AppendLine('    </Component>')
         $componentIds += $compId
     }
