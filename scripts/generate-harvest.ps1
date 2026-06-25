@@ -28,7 +28,9 @@ param(
     [string]$BuildDir      = "build\bin\Release",
     [string]$OutputFile    = "installer\DocuSearch.Harvest.wxs",
     [string]$RootDirId     = "BinFolder",
-    [string]$SourceVar     = "$(var.BuildOutputDir)"
+    # Use SINGLE QUOTES — this is a literal WiX preprocessor variable
+    # reference $(var.BuildOutputDir), NOT a PowerShell subexpression.
+    [string]$SourceVar     = '$(var.BuildOutputDir)'
 )
 
 $ErrorActionPreference = "Stop"
