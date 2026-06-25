@@ -45,7 +45,8 @@
       Version="$(var.ProductVersion)"
       UpgradeCode="$(var.ProductUpgradeCode)"
       Language="1033"
-      Codepage="1252">
+      Codepage="1252"
+      Scope="perMachine">
 
     <SummaryInformation
         Codepage="1252"
@@ -57,13 +58,17 @@
         DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed. The installer will now exit." />
 
     <!-- Embed the standard WiX UI (license + feature tree + install dir).
-         In WiX v4 only <ui:WixUI> is needed; <ui:WixUIRef> for
-         WixUI_Common is invalid and was a WiX v3 idiom. -->
+         In WiX v4:
+           * <ui:WixUIRef Id="WixUI_Common"> is invalid (v3 idiom).
+           * The InstallDirectory attribute on <ui:WixUI> automatically
+             sets the WIXUI_INSTALLDIR property internally, so we must
+             NOT also declare <Property Id="WIXUI_INSTALLDIR"> - doing
+             so causes error WIX0091 (duplicate symbol).
+           * Setting Scope="perMachine" on <Package> automatically
+             defines ALLUSERS=1, so we must NOT also declare
+             <Property Id="ALLUSERS"> - doing so causes the same
+             duplicate-symbol error. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-
-    <!-- Per-machine install -->
-    <Property Id="ALLUSERS" Value="1" />
 
     <!-- Optional desktop shortcut: default ON -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
