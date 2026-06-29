@@ -68,12 +68,13 @@
              defines ALLUSERS=1, so we must NOT also declare
              <Property Id="ALLUSERS"> - doing so causes the same
              duplicate-symbol error.
-         The LicenseFile attribute embeds the RTF license agreement
-         so the installer shows a professional EULA page before the
-         user can continue. -->
-    <ui:WixUI Id="WixUI_InstallDir"
-              InstallDirectory="INSTALLFOLDER"
-              LicenseFile="installer\LICENSE.rtf" />
+           * The LicenseFile attribute is NOT valid on <ui:WixUI> in v4
+             (it was in v3). Instead, set the WixUILicenseRtf variable
+             via <ui:WixVariable> to override the default license RTF.
+         The WixUI_InstallDir dialog set includes a license page that
+         reads the WixUILicenseRtf variable. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <ui:WixVariable Id="WixUILicenseRtf" Value="installer\LICENSE.rtf" />
 
     <!-- Optional desktop shortcut: default ON -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
