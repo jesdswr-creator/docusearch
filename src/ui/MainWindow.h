@@ -119,6 +119,7 @@ public:
     AppSettings       settings_;
     bool              darkMode_ = true;
     bool              contentExtractionRunning_ = false;
+    bool              autoScanRunning_ = false;
     // Track the currently-selected file so we can refresh its preview
     // after a background extraction completes.
     qint64            selectedFileId_ = 0;

@@ -972,10 +972,14 @@ void MainWindow::onExtract() {
 void MainWindow::autoScanIndexedFolders() {
     if (!repo_ || !db_) return;
     if (contentExtractionRunning_) return;
+    if (autoScanRunning_) return;
 
-    try {
-        // Gather unique top-level folders from indexed file paths.
-        QSet<QString> folders;
+    autoScanRunning_ = true;
+    statusBar()->showMessage("Auto-scanning for new files...");
+
+    // Gather unique top-level folders from indexed file paths.
+    QSet<QString> folders;
+    {
         sqlite3* raw = db_->raw();
         if (raw) {
             sqlite3_stmt* s = nullptr;
@@ -1004,55 +1008,114 @@ void MainWindow::autoScanIndexedFolders() {
                 sqlite3_finalize(s);
             }
         }
-        if (folders.isEmpty()) return;
+    }
+    if (folders.isEmpty()) {
+        autoScanRunning_ = false;
+        return;
+    }
 
-        const QStringList folderList(folders.begin(), folders.end());
-        statusBar()->showMessage("Auto-scanning for new files...");
+    const QStringList folderList(folders.begin(), folders.end());
 
-        // Run on MAIN THREAD (no QtConcurrent) to avoid SQLite thread-safety issues.
+    // Run the scan in a BACKGROUND THREAD to keep the UI responsive.
+    // Previously this ran on the main thread with processEvents() every
+    // 200 files, which could freeze the UI for large indexes.
+    //
+    // The worker thread opens its own sqlite3 connection (FULLMUTEX mode)
+    // so it doesn't conflict with the main thread's Database object.
+    QString dbPath = Config::instance().dbPath();
+    bool hashEnabled = settings_.hashLargeFiles;
+    QStringList foldersCopy = folderList;
+
+    QFuture<void> future = QtConcurrent::run([foldersCopy, dbPath, hashEnabled]() {
+        sqlite3* workerDb = nullptr;
+        if (sqlite3_open_v2(dbPath.toUtf8().constData(), &workerDb,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                            nullptr) != SQLITE_OK) {
+            return;
+        }
+
         int newFiles = 0, updatedFiles = 0;
-        int processed = 0;
-        for (const auto& folder : folderList) {
+
+        for (const auto& folder : foldersCopy) {
             try {
                 QStringList emptyExcludes;
                 FileUtils::walkDirectory(folder, emptyExcludes,
                     [&](const QFileInfo& fi) -> bool {
                         const QString path = FileUtils::toNative(fi.absoluteFilePath());
-                        FileRecord existing;
-                        const bool isNew = repo_->getByPath(path, existing);
-                        FileRecord r;
-                        r.path         = path;
-                        r.filename     = fi.fileName();
-                        r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
-                        r.size         = fi.size();
-                        r.createdDate  = fi.birthTime();
-                        r.modifiedDate = fi.lastModified();
-                        r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
-                        if (Constants::kDocumentExtensions.contains(r.extension) ||
-                            Constants::kImageExtensions.contains(r.extension)) {
-                            r.ocrStatus = Constants::OcrStatus::kPending;
-                        } else {
-                            r.ocrStatus = Constants::OcrStatus::kNotNeeded;
+
+                        // Check if file already exists in DB.
+                        sqlite3_stmt* chk = nullptr;
+                        bool isNew = true;
+                        if (sqlite3_prepare_v2(workerDb,
+                                "SELECT id FROM Files WHERE path = ?1;",
+                                -1, &chk, nullptr) == SQLITE_OK) {
+                            sqlite3_bind_text(chk, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            if (sqlite3_step(chk) == SQLITE_ROW) {
+                                isNew = false;
+                            }
+                            sqlite3_finalize(chk);
                         }
-                        qint64 fileId = repo_->upsertFile(r);
-                        if (fileId > 0) {
-                            if (isNew) ++newFiles;
-                            else       ++updatedFiles;
+
+                        // Build file metadata.
+                        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath());
+                        const QString hash = hashEnabled
+                            ? FileUtils::sha256OfFile(path, 64 * 1024 * 1024)
+                            : QString();
+                        const qint64 size = fi.size();
+                        const qint64 created = fi.birthTime().toSecsSinceEpoch();
+                        const qint64 modified = fi.lastModified().toSecsSinceEpoch();
+
+                        // Upsert (INSERT OR REPLACE on path).
+                        sqlite3_stmt* upd = nullptr;
+                        sqlite3_prepare_v2(workerDb,
+                            "INSERT INTO Files (path, filename, extension, size, "
+                            "  created_date, modified_date, hash, indexing_status, ocr_status) "
+                            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) "
+                            "ON CONFLICT(path) DO UPDATE SET "
+                            "  filename=excluded.filename, extension=excluded.extension, "
+                            "  size=excluded.size, modified_date=excluded.modified_date, "
+                            "  hash=excluded.hash;",
+                            -1, &upd, nullptr);
+                        if (upd) {
+                            sqlite3_bind_text(upd, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(upd, 2, fi.fileName().toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(upd, 3, ext.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int64(upd, 4, size);
+                            sqlite3_bind_int64(upd, 5, created);
+                            sqlite3_bind_int64(upd, 6, modified);
+                            sqlite3_bind_text(upd, 7, hash.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            // New files get 'metadata_only'; existing files
+                            // keep their current status via the ON CONFLICT
+                            // clause (we don't update indexing_status).
+                            const char* idxStat = isNew ? "metadata_only" : "content_done";
+                            sqlite3_bind_text(upd, 8, idxStat, -1, SQLITE_TRANSIENT);
+                            const char* ocrStat = (Constants::kDocumentExtensions.contains(ext) ||
+                                                   Constants::kImageExtensions.contains(ext))
+                                                  ? (isNew ? "pending" : "not_needed")
+                                                  : "not_needed";
+                            sqlite3_bind_text(upd, 9, ocrStat, -1, SQLITE_TRANSIENT);
+                            sqlite3_step(upd);
+                            sqlite3_finalize(upd);
                         }
-                        ++processed;
-                        if (processed % 200 == 0) {
-                            statusBar()->showMessage(
-                                QString("Auto-scan: %1 new, %2 updated...").arg(newFiles).arg(updatedFiles));
-                            QApplication::processEvents();
-                        }
+
+                        if (isNew) ++newFiles;
+                        else ++updatedFiles;
                         return true;
                     });
             } catch (...) {}
         }
 
-        statusBar()->showMessage(
-            QString("Auto-scan: %1 new, %2 updated").arg(newFiles).arg(updatedFiles), 5000);
-    } catch (...) {}
+        sqlite3_close(workerDb);
+    });
+
+    auto* watcher = new QFutureWatcher<void>(this);
+    connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
+        autoScanRunning_ = false;
+        updateIndexStats();
+        statusBar()->showMessage("Auto-scan complete.", 5000);
+        watcher->deleteLater();
+    });
+    watcher->setFuture(future);
 }
 
 void MainWindow::updateIndexStats() {

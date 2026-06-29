@@ -70,11 +70,10 @@
              duplicate-symbol error.
            * The LicenseFile attribute is NOT valid on <ui:WixUI> in v4
              (it was in v3). Instead, set the WixUILicenseRtf variable
-             via <ui:WixVariable> to override the default license RTF.
-         The WixUI_InstallDir dialog set includes a license page that
-         reads the WixUILicenseRtf variable. -->
+             via <WixVariable> (placed as a child of <Package>, which
+             is valid in WiX v4.0.5+). -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
-    <ui:WixVariable Id="WixUILicenseRtf" Value="installer\LICENSE.rtf" />
+    <WixVariable Id="WixUILicenseRtf" Value="installer\LICENSE.rtf" />
 
     <!-- Optional desktop shortcut: default ON -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
