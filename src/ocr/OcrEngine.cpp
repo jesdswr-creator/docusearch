@@ -120,7 +120,11 @@ QString OcrEngine::ocrImage(const QImage& img) {
                   conv.bytesPerLine() / conv.width(), conv.bytesPerLine());
     char* text = api->GetUTF8Text();
     QString result = text ? QString::fromUtf8(text) : QString();
-    if (text) api->ReleaseUTF8Text(text);
+    // Tesseract 5.x removed ReleaseUTF8Text(). The memory returned by
+    // GetUTF8Text() is allocated with 'new[]', so we free it with
+    // 'delete[]'. (In Tesseract 4.x, ReleaseUTF8Text() did the same
+    // thing internally — it was just a wrapper around delete[].)
+    if (text) delete[] text;
     return result;
 #else
     Q_UNUSED(img);

@@ -951,7 +951,7 @@ void MainWindow::onExtract() {
 
         // Watcher to dispatch completion back to the main thread.
         auto* watcher = new QFutureWatcher<void>(this);
-        connect(watcher, &QFutureWatcher<void>::finished, this, [this, todo]() {
+        connect(watcher, &QFutureWatcher<void>::finished, this, [this, todo, watcher]() {
             contentExtractionRunning_ = false;
             updateIndexStats();
             statusBar()->showMessage(
