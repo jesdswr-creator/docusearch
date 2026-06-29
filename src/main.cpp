@@ -15,6 +15,7 @@
 #include <QStyleFactory>
 #include <QPalette>
 #include <QColor>
+#include <QIcon>
 
 using namespace DocuSearch;
 
@@ -35,6 +36,17 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
+
+    // Set the application window icon. This makes the icon appear in:
+    //   * The title bar of the main window
+    //   * The Windows taskbar
+    //   * Alt-Tab switcher
+    //   * The system tray (if we ever add one)
+    // The icon is loaded from the embedded Qt resource (app.qrc) which
+    // bundles icons/DocuSearch-256.png. We use the PNG (not the .ico)
+    // because Qt's QIcon loads PNGs natively on all platforms; the .ico
+    // is only used by the Windows linker for the .exe's embedded icon.
+    app.setWindowIcon(QIcon(":/icons/DocuSearch-256.png"));
 
     // Use Fusion style — modern cross-platform look. We DON'T apply any QSS
     // theme (the QSS was causing the blank window). Fusion without QSS gives

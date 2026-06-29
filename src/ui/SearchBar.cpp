@@ -20,22 +20,19 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     edit_->setClearButtonEnabled(true);
     edit_->setMinimumHeight(30);
 
+    // Search button - use the 'default' style from Theme QSS (accent blue).
+    // Previously had hardcoded inline styles that didn't adapt to dark mode.
     searchBtn_ = new QPushButton("Search", this);
     searchBtn_->setDefault(true);
     searchBtn_->setMinimumHeight(30);
-    searchBtn_->setStyleSheet(
-        "QPushButton { background: #0078D4; color: white; border: none; "
-        "border-radius: 4px; padding: 6px 18px; font-size: 13px; font-weight: bold; }"
-        "QPushButton:hover { background: #0067C0; }"
-        "QPushButton:pressed { background: #0054A6; }");
 
+    // Saved searches dropdown - no inline stylesheet, let Theme QSS style it.
+    // Previously had hardcoded 'border: 1px solid #ccc' which stayed light
+    // in dark mode.
     savedBox_  = new QComboBox(this);
     savedBox_->setToolTip("Click to run a saved search");
     savedBox_->addItem("-- Saved Searches --");
     savedBox_->setMinimumHeight(30);
-    savedBox_->setStyleSheet(
-        "QComboBox { border: 1px solid #ccc; border-radius: 4px; padding: 4px 8px; }"
-        "QComboBox:hover { border-color: #0078D4; }");
 
     // Filters button removed - all filters work via search syntax
     filterBtn_ = nullptr;

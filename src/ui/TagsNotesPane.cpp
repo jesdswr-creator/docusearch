@@ -21,17 +21,11 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
-    const QString groupStyle =
-        "QGroupBox { font-size: 11px; font-weight: bold; "
-        "  border: 1px solid #ccc; border-radius: 4px; "
-        "  margin-top: 8px; padding-top: 4px; }";
-    const QString fieldStyle =
-        "QListWidget, QTextEdit, QLineEdit { font-size: 11px; "
-        "  border: 1px solid #ddd; border-radius: 3px; }";
-
     // ---- Tags (top) ----
+    // No inline stylesheets - let the Theme QSS handle dark/light mode
+    // colors. Previously had hardcoded 'border: 1px solid #ccc' which
+    // left the group boxes white in dark mode.
     auto* tagBox = new QGroupBox("Tags", this);
-    tagBox->setStyleSheet(groupStyle);
     auto* tagLay = new QVBoxLayout(tagBox);
     tagLay->setContentsMargins(4, 4, 4, 4);
     tagLay->setSpacing(2);
@@ -41,14 +35,11 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     tagInput_ = new QLineEdit(tagBox);
     tagInput_->setPlaceholderText("Add tag...");
     tagInput_->setMaximumHeight(24);
-    tagInput_->setStyleSheet(fieldStyle);
     addTagBtn_ = new QPushButton("Add", tagBox);
     addTagBtn_->setMaximumHeight(24);
-    addTagBtn_->setStyleSheet("QPushButton { font-size: 11px; padding: 2px 8px; }");
     rmTagBtn_  = new QPushButton("X", tagBox);
     rmTagBtn_->setMaximumHeight(24);
     rmTagBtn_->setMaximumWidth(28);
-    rmTagBtn_->setStyleSheet("QPushButton { font-size: 11px; padding: 2px 4px; }");
     inputRow->addWidget(tagInput_);
     inputRow->addWidget(addTagBtn_);
     inputRow->addWidget(rmTagBtn_);
@@ -59,7 +50,6 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     // Give the tag list a reasonable minimum height so it's usable,
     // but let the Notes box below get the majority of vertical space.
     tagList_->setMinimumHeight(60);
-    tagList_->setStyleSheet(fieldStyle);
     tagLay->addWidget(tagList_, 1);
 
     outer->addWidget(tagBox, 1);
@@ -69,13 +59,11 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     // space than Tags (1) - users typically write longer notes than
     // they have tags.
     auto* noteBox = new QGroupBox("Notes", this);
-    noteBox->setStyleSheet(groupStyle);
     auto* noteLay = new QVBoxLayout(noteBox);
     noteLay->setContentsMargins(4, 4, 4, 4);
     noteLay->setSpacing(2);
     noteEdit_ = new QTextEdit(noteBox);
     noteEdit_->setPlaceholderText("Add notes...");
-    noteEdit_->setStyleSheet(fieldStyle);
     noteEdit_->setMinimumHeight(60);
     noteLay->addWidget(noteEdit_, 1);
 

@@ -15,10 +15,9 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     v->setContentsMargins(8, 8, 8, 8);
     v->setSpacing(6);
 
-    // Section header
+    // Section header - use objectName so Theme QSS can style it.
     auto* section = new QLabel("PREVIEW", this);
-    section->setStyleSheet("color: #0078D4; font-size: 11px; font-weight: bold; "
-                           "text-transform: uppercase; letter-spacing: 1px;");
+    section->setObjectName("sectionLabel");
     v->addWidget(section);
 
     // File path label
@@ -27,19 +26,20 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     pathLabel_->setWordWrap(true);
     v->addWidget(pathLabel_);
 
-    // Extracted text - main content area (no thumbnail box - saves space)
+    // Extracted text - main content area (no thumbnail box - saves space).
+    // NO inline stylesheet - let the Theme QSS handle colors so dark mode
+    // works correctly. Previously had hardcoded 'background: white' which
+    // left the preview pane white in dark mode.
     textEdit_ = new QTextEdit(this);
     textEdit_->setReadOnly(true);
     textEdit_->setPlaceholderText("Extracted text will appear here after content indexing.");
-    textEdit_->setStyleSheet("QTextEdit { background: white; border: 1px solid #d0d0d0; border-radius: 4px; font-size: 13px; }");
     v->addWidget(textEdit_, 1);
 
-    // Open button
+    // Open button - no inline stylesheet, let Theme QSS style it.
+    // Previously had hardcoded 'background: #f0f0f0' which left the button
+    // white in dark mode.
     auto* h = new QHBoxLayout();
     openBtn_ = new QPushButton("Open Original", this);
-    openBtn_->setStyleSheet("QPushButton { padding: 6px 16px; border-radius: 4px; "
-                            "background: #f0f0f0; border: 1px solid #ccc; font-size: 12px; }"
-                            "QPushButton:hover { background: #e0e0e0; }");
     h->addStretch();
     h->addWidget(openBtn_);
     v->addLayout(h);

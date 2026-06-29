@@ -63,24 +63,51 @@ if(NOT SQLite3_FOUND)
 endif()
 
 # Tesseract + Leptonica
+# vcpkg's tesseract port provides a CMake config-target package that
+# exposes the target 'Tesseract::libtesseract' (NOT 'Tesseract::Lib').
+# We try config mode first (the modern way), then fall back to
+# pkgconfig + manual find_path/find_library for older vcpkg versions
+# or system-installed Tesseract.
 if(DOCUSEARCH_ENABLE_TESSERACT)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
-    pkg_check_modules(LEPTONICA IMPORTED_TARGET lept)
-endif()
-if(NOT TESSERACT_FOUND)
-    find_path(TESSERACT_INCLUDE_DIR tesseract/baseapi.h PATH_SUFFIXES tesseract)
-    find_library(TESSERACT_LIBRARY NAMES tesseract)
-    if(TESSERACT_INCLUDE_DIR AND TESSERACT_LIBRARY)
+    # 1. Try CMake config-target package (vcpkg's preferred mode)
+    find_package(Tesseract CONFIG QUIET)
+    if(Tesseract_FOUND)
         set(TESSERACT_FOUND TRUE)
-        add_library(Tesseract::Lib INTERFACE IMPORTED)
-        set_target_properties(Tesseract::Lib PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${TESSERACT_INCLUDE_DIR}"
-            INTERFACE_LINK_LIBRARIES      "${TESSERACT_LIBRARY}"
-        )
+        # vcpkg exposes Tesseract::libtesseract, but our code below
+        # references Tesseract::Lib - create an alias so both work.
+        if(NOT TARGET Tesseract::Lib)
+            add_library(Tesseract::Lib INTERFACE IMPORTED)
+            set_target_properties(Tesseract::Lib PROPERTIES
+                INTERFACE_LINK_LIBRARIES Tesseract::libtesseract)
+        endif()
+        message(STATUS "Tesseract: found via config-target package")
     endif()
-endif()
+
+    # 2. Try pkgconfig (common on Linux and some vcpkg versions)
+    if(NOT TESSERACT_FOUND)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
+            pkg_check_modules(LEPTONICA IMPORTED_TARGET lept)
+        endif()
+        if(TESSERACT_FOUND)
+            message(STATUS "Tesseract: found via pkg-config")
+        endif()
+    endif()
+
+    # 3. Manual find_path/find_library fallback
+    if(NOT TESSERACT_FOUND)
+        find_path(TESSERACT_INCLUDE_DIR tesseract/baseapi.h PATH_SUFFIXES tesseract)
+        find_library(TESSERACT_LIBRARY NAMES tesseract libtesseract)
+        if(TESSERACT_INCLUDE_DIR AND TESSERACT_LIBRARY)
+            set(TESSERACT_FOUND TRUE)
+            add_library(Tesseract::Lib INTERFACE IMPORTED)
+            set_target_properties(Tesseract::Lib PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${TESSERACT_INCLUDE_DIR}"
+                INTERFACE_LINK_LIBRARIES      "${TESSERACT_LIBRARY}")
+            message(STATUS "Tesseract: found via manual find_path/find_library")
+        endif()
+    endif()
 endif()
 
 # Poppler (Qt binding preferred)

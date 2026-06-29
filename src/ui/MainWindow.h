@@ -84,6 +84,11 @@ private:
     void refreshSavedSearches();
     void openFile(const QString& path);
 
+    // Refresh the preview pane with the currently-selected file's
+    // extracted text (re-reads from the DB so newly-extracted content
+    // appears immediately after an Extract run finishes).
+    void refreshPreviewForSelectedFile();
+
 public:
     // Update indexing widget with file counts. Q_INVOKABLE so it can be
     // called safely via QMetaObject::invokeMethod from worker threads.
@@ -114,6 +119,10 @@ public:
     AppSettings       settings_;
     bool              darkMode_ = true;
     bool              contentExtractionRunning_ = false;
+    // Track the currently-selected file so we can refresh its preview
+    // after a background extraction completes.
+    qint64            selectedFileId_ = 0;
+    QString           selectedPath_;
 };
 
 } // namespace DocuSearch

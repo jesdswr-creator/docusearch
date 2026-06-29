@@ -24,10 +24,18 @@
 #include "../search/SearchEngine.h"
 #include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
+#include "../ocr/OcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/ThumbnailGenerator.h"
 #include "../settings/SettingsManager.h"
+
+#ifdef DOCUSEARCH_HAS_POPPLER
+#  include <poppler-document.h>
+#  include <poppler-page.h>
+#  include <poppler-page-renderer.h>
+#  include <type_traits>
+#endif
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -549,6 +557,10 @@ void MainWindow::onLiveSearchTick() {
 
 void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     if (!repo_ || !db_) return;
+    // Track the selection so we can refresh the preview after a
+    // background extraction run finishes.
+    selectedFileId_ = fileId;
+    selectedPath_   = path;
     try {
         FileRecord r;
         if (fileId != 0 && repo_->getById(fileId, r)) {
@@ -647,6 +659,14 @@ void MainWindow::onAddFolder() {
             r.createdDate  = fi.birthTime();
             r.modifiedDate = fi.lastModified();
             r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
+            // Compute SHA-256 hash for duplicate detection. We cap at
+            // 64 MB so huge files (ISOs, videos) don't stall the scan
+            // for seconds each. Files larger than the cap get a hash
+            // of their first 64 MB, which is still good enough for
+            // dedup in practice.
+            if (settings_.hashLargeFiles) {
+                r.hash = FileUtils::sha256OfFile(r.path, 64 * 1024 * 1024);
+            }
             // Quick scan: pending for documents/images, not_needed otherwise.
             if (Constants::kDocumentExtensions.contains(r.extension) ||
                 Constants::kImageExtensions.contains(r.extension)) {
@@ -693,6 +713,32 @@ void MainWindow::onAddFolder() {
     }
 }
 
+void MainWindow::refreshPreviewForSelectedFile() {
+    if (!db_ || selectedFileId_ == 0) return;
+    try {
+        sqlite3* raw = db_->raw();
+        if (!raw) return;
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(raw,
+                "SELECT extracted_text FROM DocumentText WHERE file_id = ?1;",
+                -1, &s, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(s, 1, selectedFileId_);
+            QString extracted;
+            if (sqlite3_step(s) == SQLITE_ROW) {
+                const unsigned char* t = sqlite3_column_text(s, 0);
+                if (t) extracted = QString::fromUtf8(
+                                    reinterpret_cast<const char*>(t));
+            }
+            sqlite3_finalize(s);
+            previewPane_->setExtractedText(extracted.isEmpty()
+                ? "No content extracted for this file."
+                : extracted);
+        }
+    } catch (...) {
+        // Silently ignore - this is just a convenience refresh.
+    }
+}
+
 void MainWindow::onExtract() {
     if (!repo_ || !db_) return;
     try {
@@ -733,56 +779,190 @@ void MainWindow::onExtract() {
         }
 
         if (todo.isEmpty()) {
-            statusBar()->showMessage("No files need content extraction.", 3000);
+            statusBar()->showMessage("No files need content extraction. "
+                                     "All files are already indexed.", 3000);
             return;
         }
 
         contentExtractionRunning_ = true;
+        // Disable the Extract button so the user can't click it again
+        // and start a duplicate run. We re-enable it in the cleanup lambda.
         statusBar()->showMessage(
             QString("Extracting content from %1 files...").arg(todo.size()));
         QApplication::processEvents();
 
-        // Run extraction on the MAIN THREAD (not QtConcurrent) to avoid
-        // SQLite thread-safety crashes. Call processEvents() between files
-        // to keep the UI responsive.
-        FileRepository* repoPtr = repo_.get();
-        auto& registry = DocumentExtractorRegistry::instance();
-        int done = 0, failed = 0;
-        for (const auto& item : todo) {
-            try {
-                auto result = registry.extractByExtension(item.path, item.ext);
-                if (!result.text.isEmpty()) {
-                    if (repoPtr)
-                        repoPtr->updateContent(item.fileId, result.text, result.source,
-                                               Constants::IndexingStatus::kContentDone,
-                                               Constants::OcrStatus::kNotNeeded);
-                    ++done;
-                } else {
-                    if (repoPtr)
-                        repoPtr->updateStatus(item.fileId,
-                                              Constants::IndexingStatus::kFailed);
+        // Run extraction in a BACKGROUND THREAD to avoid freezing the UI.
+        // Previously this ran on the main thread with only
+        // QApplication::processEvents() every 20 files, which made the
+        // app appear unresponsive (frozen window, "Not Responding" in
+        // the title bar) during extraction of large PDFs.
+        //
+        // We capture copies of the data we need (todo list, settings,
+        // db path) so the worker thread doesn't touch any Qt widget
+        // or the main thread's Database object directly. Each write
+        // to the database goes through a SEPARATE sqlite3 connection
+        // opened on the worker thread (SQLite handles concurrent
+        // connections fine as long as we don't share connections
+        // across threads).
+        QList<TodoItem> todoCopy = todo;
+        QString dbPath = Config::instance().dbPath();
+        QString tessdataPath = settings_.tessdataPath;
+        QString ocrLanguage = settings_.ocrLanguage;
+
+        // Use QtConcurrent::run to schedule the work on a thread pool
+        // worker, then dispatch the result back to the main thread.
+        QFuture<void> future = QtConcurrent::run([todoCopy, dbPath, tessdataPath, ocrLanguage]() {
+            // Open a SEPARATE sqlite3 connection for this worker thread.
+            // The main thread's Database object uses SQLITE_OPEN_NOMUTEX
+            // (single-threaded mode), so we MUST NOT use it from here.
+            sqlite3* workerDb = nullptr;
+            if (sqlite3_open_v2(dbPath.toUtf8().constData(), &workerDb,
+                                SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                                nullptr) != SQLITE_OK) {
+                return;
+            }
+
+            auto& registry = DocumentExtractorRegistry::instance();
+            int done = 0, failed = 0;
+            const int total = todoCopy.size();
+
+            for (const auto& item : todoCopy) {
+                try {
+                    auto result = registry.extractByExtension(item.path, item.ext);
+
+                    // If Poppler returned empty text (scanned PDF) or the
+                    // file is an image, run OCR via Tesseract to extract
+                    // text from the image content.
+                    bool needOcr = result.needsOcr ||
+                                   (result.text.trimmed().isEmpty() &&
+                                    (item.ext == "pdf" || item.ext == "png" ||
+                                     item.ext == "jpg" || item.ext == "jpeg" ||
+                                     item.ext == "bmp" || item.ext == "tiff" ||
+                                     item.ext == "tif" || item.ext == "webp"));
+                    if (needOcr) {
+#ifdef DOCUSEARCH_HAS_TESSERACT
+                        OcrEngine engine(tessdataPath, ocrLanguage);
+                        if (engine.init()) {
+                            // For PDFs, we need to render each page to an
+                            // image first, then OCR. For images, OCR directly.
+                            QString ocrText;
+                            if (item.ext == "pdf") {
+                                // Render each PDF page to an image and OCR it.
+                                // Use Poppler's page_renderer if available.
+#ifdef DOCUSEARCH_HAS_POPPLER
+                                try {
+                                    auto doc = poppler::document::load_from_file(
+                                        item.path.toStdString());
+                                    if (doc) {
+                                        poppler::page_renderer renderer;
+                                        renderer.set_render_hint(
+                                            poppler::page_renderer::text_antialiasing);
+                                        const int dpi = 200;  // higher DPI for better OCR
+                                        const int maxPages = std::min(doc->pages(), 50);
+                                        for (int i = 0; i < maxPages; ++i) {
+                                            auto page = doc->create_page(i);
+                                            if (!page) continue;
+                                            auto getPagePtr = [](auto& p) -> poppler::page* {
+                                                if constexpr (std::is_same_v<std::decay_t<decltype(p)>,
+                                                                             poppler::page*>) {
+                                                    return p;
+                                                } else {
+                                                    return p.get();
+                                                }
+                                            };
+                                            poppler::page* pagePtr = getPagePtr(page);
+                                            auto img_data = renderer.render_page(pagePtr, dpi, dpi);
+                                            if (!img_data.is_valid()) continue;
+                                            char* dataPtr = const_cast<char*>(img_data.data());
+                                            QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
+                                                        img_data.width(), img_data.height(),
+                                                        img_data.bytes_per_row(),
+                                                        QImage::Format_ARGB32);
+                                            QString pageText = engine.ocrImage(qimg);
+                                            if (!pageText.isEmpty()) {
+                                                ocrText += pageText + "\n";
+                                            }
+                                        }
+                                    }
+                                } catch (...) {}
+#endif // DOCUSEARCH_HAS_POPPLER
+                            } else {
+                                // Image file - OCR directly.
+                                ocrText = engine.ocrFile(item.path);
+                            }
+                            if (!ocrText.isEmpty()) {
+                                if (result.text.isEmpty()) {
+                                    result.text = ocrText;
+                                    result.source = "ocr";
+                                } else {
+                                    result.text += "\n" + ocrText;
+                                    result.source = "native+ocr";
+                                }
+                            }
+                        }
+#endif // DOCUSEARCH_HAS_TESSERACT
+                    }
+
+                    if (!result.text.isEmpty()) {
+                        // Write to the worker thread's DB connection.
+                        sqlite3_stmt* upd = nullptr;
+                        sqlite3_prepare_v2(workerDb,
+                            "UPDATE DocumentText SET extracted_text = ?1, source = ?2 "
+                            "WHERE file_id = ?3;", -1, &upd, nullptr);
+                        if (upd) {
+                            sqlite3_bind_text(upd, 1, result.text.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(upd, 2, result.source.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int64(upd, 3, item.fileId);
+                            sqlite3_step(upd);
+                            sqlite3_finalize(upd);
+                        }
+                        sqlite3_stmt* upd2 = nullptr;
+                        sqlite3_prepare_v2(workerDb,
+                            "UPDATE Files SET indexing_status = 'content_done', "
+                            "ocr_status = ?2 WHERE id = ?1;", -1, &upd2, nullptr);
+                        if (upd2) {
+                            sqlite3_bind_int64(upd2, 1, item.fileId);
+                            const char* ocrStat = needOcr ? "done" : "not_needed";
+                            sqlite3_bind_text(upd2, 2, ocrStat, -1, SQLITE_TRANSIENT);
+                            sqlite3_step(upd2);
+                            sqlite3_finalize(upd2);
+                        }
+                        ++done;
+                    } else {
+                        sqlite3_exec(workerDb,
+                            QString("UPDATE Files SET indexing_status = 'failed' WHERE id = %1;")
+                                .arg(item.fileId).toUtf8().constData(),
+                            nullptr, nullptr, nullptr);
+                        ++failed;
+                    }
+                } catch (...) {
+                    try {
+                        sqlite3_exec(workerDb,
+                            QString("UPDATE Files SET indexing_status = 'failed' WHERE id = %1;")
+                                .arg(item.fileId).toUtf8().constData(),
+                            nullptr, nullptr, nullptr);
+                    } catch (...) {}
                     ++failed;
                 }
-            } catch (...) {
-                try {
-                    if (repoPtr)
-                        repoPtr->updateStatus(item.fileId,
-                                              Constants::IndexingStatus::kFailed);
-                } catch (...) {}
-                ++failed;
             }
-            if ((done + failed) % 20 == 0) {
-                statusBar()->showMessage(
-                    QString("Extracting: %1/%2...").arg(done + failed).arg(todo.size()));
-                QApplication::processEvents();
-            }
-        }
 
-        contentExtractionRunning_ = false;
-        updateIndexStats();
-        statusBar()->showMessage(
-            QString("Extracted content for %1 files (%2 failed).")
-                .arg(done).arg(failed), 5000);
+            sqlite3_close(workerDb);
+        });
+
+        // Watcher to dispatch completion back to the main thread.
+        auto* watcher = new QFutureWatcher<void>(this);
+        connect(watcher, &QFutureWatcher<void>::finished, this, [this, todo]() {
+            contentExtractionRunning_ = false;
+            updateIndexStats();
+            statusBar()->showMessage(
+                QString("Content extraction complete. %1 files processed.")
+                    .arg(todo.size()), 5000);
+            // Refresh the preview pane if a file is selected, so the
+            // newly-extracted text appears immediately.
+            refreshPreviewForSelectedFile();
+            watcher->deleteLater();
+        });
+        watcher->setFuture(future);
     } catch (...) {
         contentExtractionRunning_ = false;
         statusBar()->showMessage("Content extraction failed.", 5000);

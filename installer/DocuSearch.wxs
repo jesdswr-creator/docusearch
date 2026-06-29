@@ -67,8 +67,13 @@
            * Setting Scope="perMachine" on <Package> automatically
              defines ALLUSERS=1, so we must NOT also declare
              <Property Id="ALLUSERS"> - doing so causes the same
-             duplicate-symbol error. -->
-    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+             duplicate-symbol error.
+         The LicenseFile attribute embeds the RTF license agreement
+         so the installer shows a professional EULA page before the
+         user can continue. -->
+    <ui:WixUI Id="WixUI_InstallDir"
+              InstallDirectory="INSTALLFOLDER"
+              LicenseFile="installer\LICENSE.rtf" />
 
     <!-- Optional desktop shortcut: default ON -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
