@@ -135,13 +135,19 @@ jobs:
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
           # ---- Bundle non-Qt DLLs: Tesseract, Leptonica, Poppler, and
-          # their transitive dependencies (installed by vcpkg into
-          # build\bin\Release already by CMake's install step, but we
-          # copy them again here to be sure). windeployqt only handles
-          # Qt DLLs - it doesn't know about vcpkg-installed libraries.
-          # We use dumpbin /dependents to discover the DLLs DocuSearch.exe
-          # imports, then copy any that match the vcpkg bin dir. ----
-          $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
+          # their transitive dependencies. windeployqt only handles Qt
+          # DLLs - it doesn't know about vcpkg-installed libraries.
+          # vcpkg with manifest mode installs to build\vcpkg_installed\
+          # x64-windows\bin (NOT C:\vcpkg\installed\... which is the
+          # classic mode path). CMake's vcpkg toolchain auto-copies most
+          # DLLs during the build, but we copy them again here to be
+          # sure nothing is missed (especially indirect deps like
+          # openjpeg, freetype, etc.). ----
+          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
+          if (-not (Test-Path $vcpkgBin)) {
+            # Fallback to classic vcpkg install location
+            $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
+          }
           if (Test-Path $vcpkgBin) {
             Write-Host "=== Copying vcpkg runtime DLLs from $vcpkgBin ==="
             # Tesseract + Leptonica + Poppler + their deps. We copy the
