@@ -45,17 +45,19 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             // the Poppler version, ustring is either:
             //   * std::basic_string<char>      (UTF-8, older Poppler)
             //   * std::basic_string<char16_t>  (UTF-16, newer Poppler 24.x)
-            // Handle both by converting via QByteArray for UTF-8 or
-            // QString::fromStdU16String for UTF-16.
+            // We detect the element type via the sizeof the element, which
+            // is reliable regardless of const/pointer decay quirks.
             const auto txt = p->text();
+            using ElemT = std::remove_cv_t<std::remove_reference_t<
+                decltype(*txt.data())>>;
             QString q;
-            if constexpr (std::is_same_v<std::decay_t<decltype(txt.data())>,
-                                         const char*>) {
-                // UTF-8 path
-                q = QString::fromUtf8(txt.data(),
-                                      static_cast<int>(txt.size()));
+            if constexpr (sizeof(ElemT) == 1) {
+                // 1-byte element -> UTF-8
+                q = QString::fromUtf8(
+                    reinterpret_cast<const char*>(txt.data()),
+                    static_cast<int>(txt.size()));
             } else {
-                // UTF-16 path (char16_t)
+                // 2-byte element -> UTF-16
                 q = QString::fromUtf16(
                     reinterpret_cast<const char16_t*>(txt.data()),
                     static_cast<int>(txt.size()));
