@@ -10,6 +10,7 @@
 #  include <poppler-document.h>
 #  include <poppler-page.h>
 #  include <poppler-global.h>
+#  include <type_traits>
 #endif
 
 #include <QFile>
@@ -40,13 +41,25 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
         for (int i = 0; i < maxPages; ++i) {
             auto p = doc->create_page(i);
             if (!p) continue;
-            // poppler::page::text() returns poppler::ustring, which in
-            // newer Poppler versions inherits from std::basic_string<char>
-            // (UTF-8 encoded). The old to_string() method was removed;
-            // we access the underlying bytes directly via .data()/.size().
+            // poppler::page::text() returns poppler::ustring. Depending on
+            // the Poppler version, ustring is either:
+            //   * std::basic_string<char>      (UTF-8, older Poppler)
+            //   * std::basic_string<char16_t>  (UTF-16, newer Poppler 24.x)
+            // Handle both by converting via QByteArray for UTF-8 or
+            // QString::fromStdU16String for UTF-16.
             const auto txt = p->text();
-            const QString q = QString::fromUtf8(txt.data(),
-                                                static_cast<int>(txt.size()));
+            QString q;
+            if constexpr (std::is_same_v<std::decay_t<decltype(txt.data())>,
+                                         const char*>) {
+                // UTF-8 path
+                q = QString::fromUtf8(txt.data(),
+                                      static_cast<int>(txt.size()));
+            } else {
+                // UTF-16 path (char16_t)
+                q = QString::fromUtf16(
+                    reinterpret_cast<const char16_t*>(txt.data()),
+                    static_cast<int>(txt.size()));
+            }
             if (q.trimmed().isEmpty()) ++emptyPages;
             all.append(q);
             all.append('\n');
