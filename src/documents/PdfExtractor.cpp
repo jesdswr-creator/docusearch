@@ -40,10 +40,13 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
         for (int i = 0; i < maxPages; ++i) {
             auto p = doc->create_page(i);
             if (!p) continue;
-            // poppler::page::text() returns poppler::ustring (UTF-8 bytes).
-            // Use poppler::ustring::to_string() to get std::string.
-            const std::string txt = p->text().to_string();
-            const QString q = QString::fromUtf8(txt.data(), static_cast<int>(txt.size()));
+            // poppler::page::text() returns poppler::ustring, which in
+            // newer Poppler versions inherits from std::basic_string<char>
+            // (UTF-8 encoded). The old to_string() method was removed;
+            // we access the underlying bytes directly via .data()/.size().
+            const auto txt = p->text();
+            const QString q = QString::fromUtf8(txt.data(),
+                                                static_cast<int>(txt.size()));
             if (q.trimmed().isEmpty()) ++emptyPages;
             all.append(q);
             all.append('\n');

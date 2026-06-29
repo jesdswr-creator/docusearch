@@ -1,9 +1,9 @@
 // ============================================================
-// main.cpp - Clean, minimal entry point for DocuSearch
+// main.cpp — Clean, minimal entry point for DocuSearch
 // ============================================================
 // Stripped down to the bare minimum to get a WORKING window.
 // No diagnostic console, no watchdog, no heavy logging.
-// Just: QApplication -> MainWindow -> show -> exec.
+// Just: QApplication → MainWindow → show → exec.
 // ============================================================
 
 #include "../core/Config.h"
@@ -15,22 +15,28 @@
 #include <QStyleFactory>
 #include <QPalette>
 #include <QColor>
-#include <QIcon>
 
 using namespace DocuSearch;
 
 int main(int argc, char* argv[]) {
+    // Round the scale factor to the nearest integer (1x, 2x, 3x) instead
+    // of passing fractional scales (1.25x, 1.5x) through. On Windows,
+    // fractional scaling causes Qt to rasterize at one DPI and Windows
+    // to bitmap-stretch the window, which produces blurry text - especially
+    // noticeable on Full HD (1080p) monitors at 125% or 150% scaling.
+    // With Round, a 1.25x scale becomes 1x (crisp) and a 1.75x scale
+    // becomes 2x (also crisp). The manifest already declares
+    // PerMonitorV2 awareness so the app gets the real per-monitor DPI.
     QApplication::setHighDpiScaleFactorRoundingPolicy(
-        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+        Qt::HighDpiScaleFactorRoundingPolicy::Round);
 
     QApplication app(argc, argv);
     app.setApplicationName(Constants::kAppName);
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
-    app.setWindowIcon(QIcon(QStringLiteral(":/icons/DocuSearch-256.png")));
 
-    // Use Fusion style - modern cross-platform look. We DON'T apply any QSS
+    // Use Fusion style — modern cross-platform look. We DON'T apply any QSS
     // theme (the QSS was causing the blank window). Fusion without QSS gives
     // a clean, modern, native-looking interface.
     QApplication::setStyle(QStyleFactory::create("Fusion"));
@@ -60,7 +66,7 @@ int main(int argc, char* argv[]) {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // Don't apply any QSS theme for now - use native Windows styling.
+    // Don't apply any QSS theme for now — use native Windows styling.
     // We can re-enable themes once the basic window works.
     // auto& log = DocuSearch::Logger::instance();
     // log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);

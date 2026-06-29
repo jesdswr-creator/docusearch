@@ -17,7 +17,6 @@
 #  include <poppler-page.h>
 #  include <poppler-page-renderer.h>
 #  include <type_traits>
-#  include <memory>
 #endif
 
 namespace DocuSearch {
@@ -61,20 +60,23 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
                     poppler::page_renderer renderer;
                     renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
                     const int dpi = 96;
-                    // render_page takes poppler::page*. Depending on Poppler
-                    // version, create_page() returns either unique_ptr<page>
-                    // or page* directly. Handle both with 'if constexpr'.
-                    using PageType = std::decay_t<decltype(page)>;
-                    poppler::page* pagePtr = nullptr;
-                    if constexpr (std::is_same_v<PageType, std::unique_ptr<poppler::page>>) {
-                        pagePtr = page.get();
-                    } else {
-                        pagePtr = page;
-                    }
+                    // create_page() returns different types depending on
+                    // Poppler version: raw poppler::page* in newer
+                    // releases, std::unique_ptr<poppler::page> in older.
+                    // Use a generic lambda + .get() / direct dereference.
+                    auto getPagePtr = [](auto& p) -> poppler::page* {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(p)>,
+                                                     poppler::page*>) {
+                            return p;
+                        } else {
+                            return p.get();
+                        }
+                    };
+                    poppler::page* pagePtr = getPagePtr(page);
                     auto img_data = renderer.render_page(pagePtr, dpi, dpi);
                     if (!img_data.is_valid()) return {};
-                    // img_data.data() returns non-const char* in some versions,
-                    // const char* in others. Cast away const if needed.
+                    // img_data.data() returns non-const char* in some
+                    // versions, const char* in others. Cast away const.
                     char* dataPtr = const_cast<char*>(img_data.data());
                     QImage tmp(reinterpret_cast<const uchar*>(dataPtr),
                                img_data.width(), img_data.height(),
@@ -89,7 +91,7 @@ QImage ThumbnailGenerator::thumbnail(const QString& path, int maxSize) {
         }
     }
 #endif
-    // DOCX/XLSX/PPTX - skip thumbnails for now; UI shows a file-type icon.
+    // DOCX/XLSX/PPTX — skip thumbnails for now; UI shows a file-type icon.
 
     if (img.isNull()) return {};
 
