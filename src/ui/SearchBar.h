@@ -5,6 +5,8 @@
 #include <QPushButton>
 #include <QComboBox>
 
+class QTimer;
+
 namespace DocuSearch {
 
 class SearchBar : public QWidget {
@@ -31,6 +33,7 @@ private:
     QPushButton* searchBtn_;
     QComboBox*  savedBox_;
     QPushButton* filterBtn_;
+    QTimer*     autoSearchTimer_;
 };
 
 } // namespace DocuSearch
