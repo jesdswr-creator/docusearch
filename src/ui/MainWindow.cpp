@@ -926,75 +926,20 @@ void MainWindow::onExtract() {
 
         // ---- Step 3: Save results to database ----
         // A file is marked "failed" ONLY if extraction threw an exception.
-        // A file with legitimately empty text (e.g., empty .txt, or scanned
-        // PDF where OCR also found nothing) is still marked "content_done"
+        // A file with legitimately empty text is still marked "content_done"
         // so we don't keep re-trying it on every Extract run.
         try {
             if (!extractionOk) {
-                // Extraction threw an exception - mark as failed.
                 repo_->updateStatus(item.fileId,
                     Constants::IndexingStatus::kFailed,
                     Constants::OcrStatus::kSkipped);
                 ++failed;
             } else {
-                // Extraction succeeded (even if text is empty).
-                // Save the extracted text via INSERT OR REPLACE.
-                {
-                    sqlite3* raw = db_->raw();
-                    sqlite3_stmt* upd = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "INSERT INTO DocumentText (file_id, extracted_text, source) "
-                        "VALUES (?1, ?2, ?3) "
-                        "ON CONFLICT(file_id) DO UPDATE SET "
-                        "  extracted_text = excluded.extracted_text, "
-                        "  source = excluded.source;",
-                        -1, &upd, nullptr);
-                    if (upd) {
-                        sqlite3_bind_int64(upd, 1, item.fileId);
-                        QByteArray textBytes = extractedText.toUtf8();
-                        sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                        QByteArray srcBytes = source.toUtf8();
-                        sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_step(upd);
-                        sqlite3_finalize(upd);
-                    }
-                }
-                // Update FTS index (DELETE old row first, then INSERT —
-                // FTS5 tables don't support ON CONFLICT).
-                {
-                    sqlite3* raw = db_->raw();
-                    // Delete old FTS entries for this file.
-                    sqlite3_stmt* del = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "DELETE FROM SearchIndex WHERE file_id = ?1;",
-                        -1, &del, nullptr);
-                    if (del) {
-                        sqlite3_bind_int64(del, 1, item.fileId);
-                        sqlite3_step(del);
-                        sqlite3_finalize(del);
-                    }
-                    // Insert new FTS entry.
-                    sqlite3_stmt* ins = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                        "VALUES (?1, ?2, ?3, ?4, ?5);",
-                        -1, &ins, nullptr);
-                    if (ins) {
-                        QFileInfo fi(item.path);
-                        QByteArray fn = fi.fileName().toUtf8();
-                        QByteArray txt = extractedText.toUtf8();
-                        QByteArray pth = item.path.toUtf8();
-                        QByteArray ext = item.ext.toUtf8();
-                        sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 2, txt.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int64(ins, 5, item.fileId);
-                        sqlite3_step(ins);
-                        sqlite3_finalize(ins);
-                    }
-                }
-                // Update file status to content_done.
+                // Use repo_->updateContent which handles both the
+                // DocumentText table AND the FTS SearchIndex table
+                // atomically. Previously we did manual SQL here which
+                // conflicted with repo_'s internal operations and could
+                // crash if the SQLite statement was in a bad state.
                 QString ocrStatus = needOcr ? Constants::OcrStatus::kDone
                                             : Constants::OcrStatus::kNotNeeded;
                 repo_->updateContent(item.fileId, extractedText, source,
@@ -1004,8 +949,17 @@ void MainWindow::onExtract() {
         } catch (const std::exception& e) {
             DS_WARN("Extract", QString("DB save failed for %1: %2")
                                 .arg(item.path).arg(e.what()));
+            // Try to mark as failed, but don't throw.
+            try {
+                repo_->updateStatus(item.fileId,
+                    Constants::IndexingStatus::kFailed);
+            } catch (...) {}
             ++failed;
         } catch (...) {
+            try {
+                repo_->updateStatus(item.fileId,
+                    Constants::IndexingStatus::kFailed);
+            } catch (...) {}
             ++failed;
         }
 

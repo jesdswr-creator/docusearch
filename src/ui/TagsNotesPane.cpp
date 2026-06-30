@@ -16,144 +16,113 @@ namespace DocuSearch {
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     // Vertical layout: Tags on top, Notes below.
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(8, 8, 8, 8);
-    outer->setSpacing(8);
+    outer->setContentsMargins(4, 4, 4, 4);
+    outer->setSpacing(4);
 
-    // Modern section header for Tags.
+    // ---- Tags section ----
     auto* tagsHeader = new QLabel("TAGS", this);
     tagsHeader->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 11px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1.5px; "
-        "  background: transparent; border: none; padding: 2px; }");
+        "QLabel { color: #0078D4; font-size: 10px; font-weight: bold; "
+        "  text-transform: uppercase; letter-spacing: 1px; "
+        "  background: transparent; border: none; padding: 1px; }");
     outer->addWidget(tagsHeader);
 
-    // ---- Tags (top) ----
-    auto* tagBox = new QGroupBox(this);
-    tagBox->setStyleSheet(
-        "QGroupBox { "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  margin-top: 0px; "
-        "  padding: 12px 8px 8px 8px; "
-        "  background-color: #ffffff; "
-        "} "
-        "QGroupBox::title { background: transparent; }");
-    tagBox->setTitle("");
-    auto* tagLay = new QVBoxLayout(tagBox);
-    tagLay->setContentsMargins(4, 4, 4, 4);
-    tagLay->setSpacing(6);
-
-    auto* inputRow = new QHBoxLayout();
-    inputRow->setSpacing(4);
-    tagInput_ = new QLineEdit(tagBox);
+    // Tag input on its own row (the panel is narrow, so we can't fit
+    // input + 2 buttons in one row without crushing them).
+    tagInput_ = new QLineEdit(this);
     tagInput_->setPlaceholderText("Add tag...");
-    tagInput_->setMaximumHeight(32);
+    tagInput_->setMaximumHeight(26);
     tagInput_->setStyleSheet(
         "QLineEdit { "
-        "  padding: 4px 10px; "
-        "  border-radius: 16px; "
+        "  padding: 2px 8px; "
+        "  border-radius: 4px; "
         "  background-color: #f5f5f5; "
         "  border: 1px solid #e0e0e0; "
-        "  font-size: 12px; "
+        "  font-size: 11px; "
         "} "
-        "QLineEdit:focus { border: 2px solid #0078D4; }");
-    addTagBtn_ = new QPushButton("+ Add", tagBox);
-    addTagBtn_->setMaximumHeight(32);
+        "QLineEdit:focus { border: 1px solid #0078D4; }");
+    outer->addWidget(tagInput_);
+
+    // Buttons row: Add + Remove side by side, compact.
+    auto* btnRow = new QHBoxLayout();
+    btnRow->setSpacing(3);
+    addTagBtn_ = new QPushButton("+ Add", this);
+    addTagBtn_->setMaximumHeight(24);
     addTagBtn_->setCursor(Qt::PointingHandCursor);
     addTagBtn_->setStyleSheet(
         "QPushButton { "
-        "  padding: 4px 12px; "
-        "  border-radius: 16px; "
+        "  padding: 2px 8px; "
+        "  border-radius: 4px; "
         "  background-color: #0078D4; "
         "  color: #ffffff; "
         "  border: none; "
-        "  font-size: 12px; "
+        "  font-size: 11px; "
         "  font-weight: 500; "
         "} "
         "QPushButton:hover { background-color: #0067C0; }");
-    rmTagBtn_  = new QPushButton("Remove", tagBox);
-    rmTagBtn_->setMaximumHeight(32);
+    rmTagBtn_ = new QPushButton("Remove", this);
+    rmTagBtn_->setMaximumHeight(24);
     rmTagBtn_->setCursor(Qt::PointingHandCursor);
     rmTagBtn_->setStyleSheet(
         "QPushButton { "
-        "  padding: 4px 10px; "
-        "  border-radius: 16px; "
+        "  padding: 2px 8px; "
+        "  border-radius: 4px; "
         "  background-color: #f0f0f0; "
         "  color: #606060; "
         "  border: 1px solid #e0e0e0; "
-        "  font-size: 12px; "
+        "  font-size: 11px; "
         "} "
         "QPushButton:hover { background-color: #e0e0e0; }");
-    inputRow->addWidget(tagInput_);
-    inputRow->addWidget(addTagBtn_);
-    inputRow->addWidget(rmTagBtn_);
-    tagLay->addLayout(inputRow);
+    btnRow->addWidget(addTagBtn_);
+    btnRow->addWidget(rmTagBtn_);
+    outer->addLayout(btnRow);
 
-    tagList_ = new QListWidget(tagBox);
+    // Tag list.
+    tagList_ = new QListWidget(this);
     tagList_->setSelectionMode(QAbstractItemView::SingleSelection);
-    tagList_->setMinimumHeight(50);
-    // Tag chips: rounded, colored background, modern look.
+    tagList_->setMinimumHeight(30);
     tagList_->setStyleSheet(
         "QListWidget { "
-        "  background-color: transparent; "
-        "  border: none; "
+        "  background-color: #ffffff; "
+        "  border: 1px solid #e0e0e0; "
+        "  border-radius: 4px; "
+        "  font-size: 11px; "
         "} "
         "QListWidget::item { "
-        "  padding: 6px 12px; "
-        "  margin: 2px; "
-        "  border-radius: 14px; "
+        "  padding: 4px 8px; "
+        "  margin: 1px; "
+        "  border-radius: 8px; "
         "  background-color: #e3f2fd; "
         "  color: #0067C0; "
-        "  font-size: 12px; "
-        "  font-weight: 500; "
         "} "
-        "QListWidget::item:hover { "
-        "  background-color: #bbdefb; "
-        "} "
+        "QListWidget::item:hover { background-color: #bbdefb; } "
         "QListWidget::item:selected { "
         "  background-color: #0078D4; "
         "  color: #ffffff; "
         "}");
-    tagLay->addWidget(tagList_, 1);
+    outer->addWidget(tagList_, 1);
 
-    outer->addWidget(tagBox, 1);
-
-    // ---- Notes (bottom) ----
+    // ---- Notes section ----
     auto* notesHeader = new QLabel("NOTES", this);
     notesHeader->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 11px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1.5px; "
-        "  background: transparent; border: none; padding: 2px; }");
+        "QLabel { color: #0078D4; font-size: 10px; font-weight: bold; "
+        "  text-transform: uppercase; letter-spacing: 1px; "
+        "  background: transparent; border: none; padding: 1px; }");
     outer->addWidget(notesHeader);
 
-    auto* noteBox = new QGroupBox(this);
-    noteBox->setStyleSheet(
-        "QGroupBox { "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  margin-top: 0px; "
-        "  padding: 12px 8px 8px 8px; "
-        "  background-color: #ffffff; "
-        "} "
-        "QGroupBox::title { background: transparent; }");
-    auto* noteLay = new QVBoxLayout(noteBox);
-    noteLay->setContentsMargins(4, 4, 4, 4);
-    noteLay->setSpacing(4);
-    noteEdit_ = new QTextEdit(noteBox);
+    noteEdit_ = new QTextEdit(this);
     noteEdit_->setPlaceholderText("Add notes...");
-    noteEdit_->setMinimumHeight(50);
+    noteEdit_->setMinimumHeight(30);
     noteEdit_->setStyleSheet(
         "QTextEdit { "
         "  background-color: #ffffff; "
         "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  font-size: 12px; "
-        "  padding: 8px; "
+        "  border-radius: 4px; "
+        "  font-size: 11px; "
+        "  padding: 4px; "
         "} "
-        "QTextEdit:focus { border: 2px solid #0078D4; }");
-    noteLay->addWidget(noteEdit_, 1);
-
-    outer->addWidget(noteBox, 2);
+        "QTextEdit:focus { border: 1px solid #0078D4; }");
+    outer->addWidget(noteEdit_, 2);
 
     connect(addTagBtn_, &QPushButton::clicked, this, &TagsNotesPane::onAddTag);
     connect(rmTagBtn_,  &QPushButton::clicked, this, &TagsNotesPane::onRemoveTag);
