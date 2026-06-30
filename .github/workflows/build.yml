@@ -313,9 +313,12 @@ jobs:
           if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" | Out-Null }
           # Build MSI: pass both the main wxs and the harvested wxs as inputs.
           # -ext WixToolset.UI.wixext enables <ui:WixUI> for the install wizard.
+          # -platform x64 forces 64-bit MSI so it installs to
+          # C:\Program Files (not Program Files (x86)).
           & wix build $wxsMain $wxsHarvest -o $msiOut `
             -d "BuildOutputDir=build\bin\Release" `
-            -ext WixToolset.UI.wixext
+            -ext WixToolset.UI.wixext `
+            -platform x64
           if (-not (Test-Path $msiOut)) { throw "MSI was not produced at $msiOut" }
           Write-Host "=== MSI created: $msiOut ==="
           Get-Item $msiOut | Format-List Name, Length, LastWriteTime
