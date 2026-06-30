@@ -30,13 +30,6 @@
 #include "../preview/ThumbnailGenerator.h"
 #include "../settings/SettingsManager.h"
 
-#ifdef DOCUSEARCH_HAS_POPPLER
-#  include <poppler-document.h>
-#  include <poppler-page.h>
-#  include <poppler-page-renderer.h>
-#  include <type_traits>
-#endif
-
 #include <QApplication>
 #include <QGuiApplication>
 #include <QScreen>
@@ -429,14 +422,29 @@ void MainWindow::buildToolbar() {
     auto* tb = addToolBar("Main");
     tb->setMovable(false);
     tb->setIconSize(QSize(20, 20));
+    // Modern text-only toolbar — no old Qt standard icons.
+    tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    tb->setStyleSheet(
+        "QToolBar { background: transparent; border: none; padding: 4px; spacing: 4px; } "
+        "QToolButton { "
+        "  padding: 6px 14px; "
+        "  border-radius: 6px; "
+        "  background: transparent; "
+        "  border: none; "
+        "  font-size: 13px; "
+        "  color: palette(text); "
+        "} "
+        "QToolButton:hover { background: palette(midlight); } "
+        "QToolButton:pressed { background: palette(dark); } "
+        "QToolBar::separator { width: 1px; background: palette(mid); margin: 4px; }");
 
-    auto* addFolderAct = new QAction(style()->standardIcon(QStyle::SP_DirOpenIcon), "Add Folder", this);
+    auto* addFolderAct = new QAction("Add Folder", this);
     connect(addFolderAct, &QAction::triggered, this, [this]{
         try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
     });
     tb->addAction(addFolderAct);
 
-    auto* extractAct = new QAction(style()->standardIcon(QStyle::SP_DialogSaveButton), "Extract", this);
+    auto* extractAct = new QAction("Extract", this);
     connect(extractAct, &QAction::triggered, this, [this]{
         try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
     });
@@ -444,19 +452,19 @@ void MainWindow::buildToolbar() {
 
     tb->addSeparator();
 
-    auto* settingsAct = new QAction(style()->standardIcon(QStyle::SP_FileDialogListView), "Settings", this);
+    auto* settingsAct = new QAction("Settings", this);
     connect(settingsAct, &QAction::triggered, this, [this]{
         try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
     });
     tb->addAction(settingsAct);
 
-    auto* themeAct = new QAction(style()->standardIcon(QStyle::SP_DesktopIcon), "Theme", this);
+    auto* themeAct = new QAction("Theme", this);
     connect(themeAct, &QAction::triggered, this, [this]{
         try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
     });
     tb->addAction(themeAct);
 
-    auto* dupesAct = new QAction(style()->standardIcon(QStyle::SP_BrowserReload), "Duplicates", this);
+    auto* dupesAct = new QAction("Duplicates", this);
     connect(dupesAct, &QAction::triggered, this, [this]{
         try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
     });
@@ -787,184 +795,54 @@ void MainWindow::onExtract() {
     statusBar()->showMessage(
         QString("Extracting content from %1 files...").arg(total));
 
-    // Create OCR engine ONCE and reuse for all files. Previously a new
-    // OcrEngine was created per-file, which was extremely slow (Tesseract
-    // Init() loads ~10 MB of traineddata each time) and could crash due
-    // to memory fragmentation after many init/destruct cycles.
-#ifdef DOCUSEARCH_HAS_TESSERACT
-    std::unique_ptr<OcrEngine> ocrEngine;
-    {
-        ocrEngine = std::make_unique<OcrEngine>(settings_.tessdataPath,
-                                                  settings_.ocrLanguage);
-        if (!ocrEngine->init()) {
-            ocrEngine.reset();  // OCR unavailable, continue without it
-        }
-    }
-#endif
-
+    // Native extraction ONLY. No OCR in this loop — OCR via Poppler
+    // rendering + Tesseract was causing crashes on certain PDFs
+    // (memory corruption in Poppler's page renderer). OCR will be
+    // a separate manual action in a future update.
     auto& registry = DocumentExtractorRegistry::instance();
     int done = 0, failed = 0;
 
     for (int idx = 0; idx < total; ++idx) {
         const auto& item = todo[idx];
 
-        // Check if file still exists before trying to extract.
+        // Check if file still exists.
         if (!QFileInfo::exists(item.path)) {
             try {
                 repo_->updateStatus(item.fileId,
-                    Constants::IndexingStatus::kFailed,
-                    Constants::OcrStatus::kSkipped);
+                    Constants::IndexingStatus::kFailed);
             } catch (...) {}
             ++failed;
-            // Update status bar.
-            statusBar()->showMessage(
-                QString("Extracting: %1/%2 (done: %3, failed: %4)...")
-                    .arg(idx + 1).arg(total).arg(done).arg(failed));
-            QApplication::processEvents();
-            continue;
-        }
+        } else {
+            QString extractedText;
+            QString source = "native";
+            bool ok = false;
 
-        QString extractedText;
-        QString source = "native";
-        bool extractionOk = false;
+            try {
+                auto result = registry.extractByExtension(item.path, item.ext);
+                extractedText = result.text;
+                source = result.source.isEmpty() ? "native" : result.source;
+                ok = true;
+            } catch (...) {
+                ok = false;
+            }
 
-        // ---- Step 1: Native extraction (Poppler for PDF, etc.) ----
-        try {
-            auto result = registry.extractByExtension(item.path, item.ext);
-            extractedText = result.text;
-            source = result.source.isEmpty() ? "native" : result.source;
-            extractionOk = true;
-        } catch (const std::exception& e) {
-            DS_WARN("Extract", QString("Native extraction failed for %1: %2")
-                                .arg(item.path).arg(e.what()));
-        } catch (...) {
-            DS_WARN("Extract", "Native extraction failed (unknown exception): " + item.path);
-        }
-
-        // ---- Step 2: OCR fallback for scanned PDFs and images ----
-        // Only run OCR if native extraction returned empty text.
-        bool needOcr = (extractedText.trimmed().isEmpty()) &&
-                       (item.ext == "pdf" || item.ext == "png" ||
-                        item.ext == "jpg" || item.ext == "jpeg" ||
-                        item.ext == "bmp" || item.ext == "tiff" ||
-                        item.ext == "tif" || item.ext == "webp");
-
-        if (needOcr && extractionOk) {
-#ifdef DOCUSEARCH_HAS_TESSERACT
-            if (ocrEngine) {
-                try {
-                    QString ocrText;
-                    if (item.ext == "pdf") {
-                        // Render PDF pages to images and OCR each one.
-#ifdef DOCUSEARCH_HAS_POPPLER
-                        try {
-                            auto doc = poppler::document::load_from_file(
-                                item.path.toStdString());
-                            if (doc && doc->pages() > 0) {
-                                poppler::page_renderer renderer;
-                                renderer.set_render_hint(
-                                    poppler::page_renderer::text_antialiasing);
-                                const int dpi = 200;
-                                const int maxPages = std::min(doc->pages(), 50);
-                                for (int i = 0; i < maxPages; ++i) {
-                                    try {
-                                        // create_page() returns poppler::page*
-                                        // (raw pointer) in Poppler 24.x. We assign
-                                        // directly to pagePtr — no .get() needed.
-                                        poppler::page* pagePtr = doc->create_page(i);
-                                        if (!pagePtr) continue;
-                                        auto img_data = renderer.render_page(
-                                            pagePtr, dpi, dpi);
-                                        if (!img_data.is_valid()) continue;
-                                        char* dataPtr = const_cast<char*>(
-                                            img_data.data());
-                                        if (!dataPtr) continue;
-                                        QImage qimg(
-                                            reinterpret_cast<const uchar*>(dataPtr),
-                                            img_data.width(),
-                                            img_data.height(),
-                                            img_data.bytes_per_row(),
-                                            QImage::Format_ARGB32);
-                                        if (qimg.isNull()) continue;
-                                        QString pageText = ocrEngine->ocrImage(qimg);
-                                        if (!pageText.isEmpty()) {
-                                            ocrText += pageText + "\n";
-                                        }
-                                    } catch (...) {
-                                        // Skip this page, continue to next.
-                                    }
-                                }
-                            }
-                        } catch (const std::exception& e) {
-                            DS_WARN("Extract",
-                                QString("PDF render failed for %1: %2")
-                                    .arg(item.path).arg(e.what()));
-                        } catch (...) {}
-#endif // DOCUSEARCH_HAS_POPPLER
-                    } else {
-                        // Image file - OCR directly.
-                        ocrText = ocrEngine->ocrFile(item.path);
-                    }
-                    if (!ocrText.isEmpty()) {
-                        if (extractedText.isEmpty()) {
-                            extractedText = ocrText;
-                            source = "ocr";
-                        } else {
-                            extractedText += "\n" + ocrText;
-                            source = "native+ocr";
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    DS_WARN("Extract", QString("OCR failed for %1: %2")
-                                        .arg(item.path).arg(e.what()));
-                } catch (...) {
-                    DS_WARN("Extract", "OCR failed (unknown): " + item.path);
+            try {
+                if (ok) {
+                    repo_->updateContent(item.fileId, extractedText, source,
+                        Constants::IndexingStatus::kContentDone,
+                        Constants::OcrStatus::kNotNeeded);
+                    ++done;
+                } else {
+                    repo_->updateStatus(item.fileId,
+                        Constants::IndexingStatus::kFailed);
+                    ++failed;
                 }
-            }
-#endif // DOCUSEARCH_HAS_TESSERACT
-        }
-
-        // ---- Step 3: Save results to database ----
-        // A file is marked "failed" ONLY if extraction threw an exception.
-        // A file with legitimately empty text is still marked "content_done"
-        // so we don't keep re-trying it on every Extract run.
-        try {
-            if (!extractionOk) {
-                repo_->updateStatus(item.fileId,
-                    Constants::IndexingStatus::kFailed,
-                    Constants::OcrStatus::kSkipped);
+            } catch (...) {
                 ++failed;
-            } else {
-                // Use repo_->updateContent which handles both the
-                // DocumentText table AND the FTS SearchIndex table
-                // atomically. Previously we did manual SQL here which
-                // conflicted with repo_'s internal operations and could
-                // crash if the SQLite statement was in a bad state.
-                QString ocrStatus = needOcr ? Constants::OcrStatus::kDone
-                                            : Constants::OcrStatus::kNotNeeded;
-                repo_->updateContent(item.fileId, extractedText, source,
-                    Constants::IndexingStatus::kContentDone, ocrStatus);
-                ++done;
             }
-        } catch (const std::exception& e) {
-            DS_WARN("Extract", QString("DB save failed for %1: %2")
-                                .arg(item.path).arg(e.what()));
-            // Try to mark as failed, but don't throw.
-            try {
-                repo_->updateStatus(item.fileId,
-                    Constants::IndexingStatus::kFailed);
-            } catch (...) {}
-            ++failed;
-        } catch (...) {
-            try {
-                repo_->updateStatus(item.fileId,
-                    Constants::IndexingStatus::kFailed);
-            } catch (...) {}
-            ++failed;
         }
 
-        // Update status bar and process events every file (not every 5)
-        // so the UI is maximally responsive and the user sees progress.
+        // Update status bar every file.
         statusBar()->showMessage(
             QString("Extracting: %1/%2 (done: %3, failed: %4)...")
                 .arg(idx + 1).arg(total).arg(done).arg(failed));

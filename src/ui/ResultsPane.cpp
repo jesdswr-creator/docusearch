@@ -52,13 +52,10 @@ QString humanSize(qint64 bytes) {
 ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     auto* v = new QVBoxLayout(this);
     v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(6);
+    v->setSpacing(4);
 
-    // Modern result count label with larger, bolder text.
     countLabel_ = new QLabel("No results", this);
     countLabel_->setObjectName("subtitleLabel");
-    countLabel_->setStyleSheet(
-        "QLabel { font-size: 12px; color: #606060; padding: 2px 4px; }");
     v->addWidget(countLabel_);
 
     table_ = new QTableWidget(this);
@@ -70,40 +67,13 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     table_->setHorizontalHeaderLabels({"Name", "Type", "Size", "Date", "Snippet"});
     table_->verticalHeader()->setVisible(false);
     table_->setWordWrap(true);
-    // No grid lines for a cleaner modern look (Windows 11 style).
     table_->setShowGrid(false);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    // Modern table styling: no grid, rounded selection, better padding.
-    table_->setStyleSheet(
-        "QTableWidget { "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  background-color: #ffffff; "
-        "  gridline-color: transparent; "
-        "} "
-        "QTableWidget::item { "
-        "  padding: 8px 10px; "
-        "  border-bottom: 1px solid #f0f0f0; "
-        "} "
-        "QTableWidget::item:hover { "
-        "  background-color: #f5f5f5; "
-        "} "
-        "QTableWidget::item:selected { "
-        "  background-color: #cce4f7; "
-        "  color: #000000; "
-        "} "
-        "QHeaderView::section { "
-        "  background-color: #fafafa; "
-        "  color: #4a4a4a; "
-        "  padding: 10px 10px; "
-        "  border: none; "
-        "  border-bottom: 1px solid #e0e0e0; "
-        "  font-weight: 600; "
-        "  font-size: 12px; "
-        "}");
+    // No inline stylesheet — let the Theme QSS handle all colors so
+    // dark mode works correctly. The Theme QSS already styles
+    // QTableWidget, QHeaderView, and items with palette-aware colors.
 
-    // Header sizing: Name & Snippet stretch, others size to contents.
     auto* hh = table_->horizontalHeader();
     hh->setStretchLastSection(false);
     hh->setSectionResizeMode(ColName,    QHeaderView::Stretch);

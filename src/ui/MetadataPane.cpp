@@ -20,51 +20,26 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
 
-    // Wrap content in a QScrollArea so labels don't get crushed.
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
     auto* inner = new QWidget(scroll);
-    inner->setStyleSheet("background: transparent;");
     auto* innerLay = new QVBoxLayout(inner);
     innerLay->setContentsMargins(8, 8, 8, 8);
-    innerLay->setSpacing(8);
+    innerLay->setSpacing(6);
 
-    // Modern section header.
+    // Section header — uses Theme QSS via objectName.
     auto* header = new QLabel("METADATA", inner);
-    header->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 11px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1.5px; "
-        "  background: transparent; border: none; padding: 2px; }");
+    header->setObjectName("sectionLabel");
     innerLay->addWidget(header);
 
-    // Group box with modern card styling.
+    // Group box — no inline style, Theme QSS handles dark/light.
     auto* gb = new QGroupBox("Metadata", inner);
-    gb->setStyleSheet(
-        "QGroupBox { "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  margin-top: 14px; "
-        "  padding: 16px 12px 12px 12px; "
-        "  font-size: 12px; "
-        "  font-weight: 600; "
-        "  color: #1f1f1f; "
-        "  background-color: #ffffff; "
-        "} "
-        "QGroupBox::title { "
-        "  subcontrol-origin: margin; "
-        "  subcontrol-position: top left; "
-        "  left: 12px; "
-        "  padding: 0 6px; "
-        "  background-color: #ffffff; "
-        "  color: #4a4a4a; "
-        "}");
     auto* form = new QFormLayout(gb);
     form->setLabelAlignment(Qt::AlignRight);
-    form->setSpacing(8);
-    form->setContentsMargins(4, 4, 4, 4);
+    form->setSpacing(6);
+    form->setContentsMargins(8, 8, 8, 8);
 
     filename_ = new QLabel("-", gb);  filename_->setWordWrap(true);
     path_     = new QLabel("-", gb);  path_->setWordWrap(true);

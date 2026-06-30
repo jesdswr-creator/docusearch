@@ -12,58 +12,30 @@ namespace DocuSearch {
 
 PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     auto* v = new QVBoxLayout(this);
-    v->setContentsMargins(12, 12, 12, 12);
-    v->setSpacing(8);
+    v->setContentsMargins(8, 8, 8, 8);
+    v->setSpacing(6);
 
-    // Section header - modern uppercase label.
+    // Section header - uses palette so it adapts to dark/light mode.
     auto* section = new QLabel("PREVIEW", this);
     section->setObjectName("sectionLabel");
-    section->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 11px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1.5px; "
-        "  background: transparent; border: none; }");
     v->addWidget(section);
 
-    // File path label.
+    // File path label - no hardcoded color, uses palette.
     pathLabel_ = new QLabel("Select a file to preview", this);
-    pathLabel_->setStyleSheet(
-        "QLabel { font-size: 12px; padding: 4px 2px; "
-        "  color: #606060; background: transparent; border: none; }");
+    pathLabel_->setStyleSheet("font-size: 12px; padding: 2px; background: transparent; border: none;");
     pathLabel_->setWordWrap(true);
     v->addWidget(pathLabel_);
 
-    // Extracted text - main content area with comfortable margins.
+    // Extracted text - no hardcoded background, uses palette via Theme QSS.
     textEdit_ = new QTextEdit(this);
     textEdit_->setReadOnly(true);
     textEdit_->setPlaceholderText("Extracted text will appear here after content indexing.");
-    textEdit_->setStyleSheet(
-        "QTextEdit { "
-        "  background-color: #ffffff; "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 8px; "
-        "  font-size: 13px; "
-        "  padding: 12px; "
-        "  line-height: 1.5; "
-        "} ");
     v->addWidget(textEdit_, 1);
 
-    // Open button - modern accent button.
+    // Open button - no hardcoded color, uses Theme QSS QPushButton style.
     auto* h = new QHBoxLayout();
-    h->setContentsMargins(0, 4, 0, 0);
     openBtn_ = new QPushButton("Open Original", this);
     openBtn_->setCursor(Qt::PointingHandCursor);
-    openBtn_->setStyleSheet(
-        "QPushButton { "
-        "  padding: 8px 20px; "
-        "  border-radius: 8px; "
-        "  background-color: #0078D4; "
-        "  color: #ffffff; "
-        "  border: none; "
-        "  font-size: 12px; "
-        "  font-weight: 500; "
-        "} "
-        "QPushButton:hover { background-color: #0067C0; } "
-        "QPushButton:pressed { background-color: #0054A6; }");
     h->addStretch();
     h->addWidget(openBtn_);
     v->addLayout(h);

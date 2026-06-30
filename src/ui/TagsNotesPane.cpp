@@ -14,114 +14,49 @@
 namespace DocuSearch {
 
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
-    // Vertical layout: Tags on top, Notes below.
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
     // ---- Tags section ----
     auto* tagsHeader = new QLabel("TAGS", this);
-    tagsHeader->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 10px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1px; "
-        "  background: transparent; border: none; padding: 1px; }");
+    tagsHeader->setObjectName("sectionLabel");
     outer->addWidget(tagsHeader);
 
-    // Tag input on its own row (the panel is narrow, so we can't fit
-    // input + 2 buttons in one row without crushing them).
+    // Tag input on its own row.
     tagInput_ = new QLineEdit(this);
     tagInput_->setPlaceholderText("Add tag...");
     tagInput_->setMaximumHeight(26);
-    tagInput_->setStyleSheet(
-        "QLineEdit { "
-        "  padding: 2px 8px; "
-        "  border-radius: 4px; "
-        "  background-color: #f5f5f5; "
-        "  border: 1px solid #e0e0e0; "
-        "  font-size: 11px; "
-        "} "
-        "QLineEdit:focus { border: 1px solid #0078D4; }");
     outer->addWidget(tagInput_);
 
-    // Buttons row: Add + Remove side by side, compact.
+    // Buttons row: Add + Remove.
     auto* btnRow = new QHBoxLayout();
     btnRow->setSpacing(3);
     addTagBtn_ = new QPushButton("+ Add", this);
     addTagBtn_->setMaximumHeight(24);
     addTagBtn_->setCursor(Qt::PointingHandCursor);
-    addTagBtn_->setStyleSheet(
-        "QPushButton { "
-        "  padding: 2px 8px; "
-        "  border-radius: 4px; "
-        "  background-color: #0078D4; "
-        "  color: #ffffff; "
-        "  border: none; "
-        "  font-size: 11px; "
-        "  font-weight: 500; "
-        "} "
-        "QPushButton:hover { background-color: #0067C0; }");
+    addTagBtn_->setDefault(true);
     rmTagBtn_ = new QPushButton("Remove", this);
     rmTagBtn_->setMaximumHeight(24);
     rmTagBtn_->setCursor(Qt::PointingHandCursor);
-    rmTagBtn_->setStyleSheet(
-        "QPushButton { "
-        "  padding: 2px 8px; "
-        "  border-radius: 4px; "
-        "  background-color: #f0f0f0; "
-        "  color: #606060; "
-        "  border: 1px solid #e0e0e0; "
-        "  font-size: 11px; "
-        "} "
-        "QPushButton:hover { background-color: #e0e0e0; }");
     btnRow->addWidget(addTagBtn_);
     btnRow->addWidget(rmTagBtn_);
     outer->addLayout(btnRow);
 
-    // Tag list.
+    // Tag list — no inline style, Theme QSS handles colors.
     tagList_ = new QListWidget(this);
     tagList_->setSelectionMode(QAbstractItemView::SingleSelection);
     tagList_->setMinimumHeight(30);
-    tagList_->setStyleSheet(
-        "QListWidget { "
-        "  background-color: #ffffff; "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 4px; "
-        "  font-size: 11px; "
-        "} "
-        "QListWidget::item { "
-        "  padding: 4px 8px; "
-        "  margin: 1px; "
-        "  border-radius: 8px; "
-        "  background-color: #e3f2fd; "
-        "  color: #0067C0; "
-        "} "
-        "QListWidget::item:hover { background-color: #bbdefb; } "
-        "QListWidget::item:selected { "
-        "  background-color: #0078D4; "
-        "  color: #ffffff; "
-        "}");
     outer->addWidget(tagList_, 1);
 
     // ---- Notes section ----
     auto* notesHeader = new QLabel("NOTES", this);
-    notesHeader->setStyleSheet(
-        "QLabel { color: #0078D4; font-size: 10px; font-weight: bold; "
-        "  text-transform: uppercase; letter-spacing: 1px; "
-        "  background: transparent; border: none; padding: 1px; }");
+    notesHeader->setObjectName("sectionLabel");
     outer->addWidget(notesHeader);
 
     noteEdit_ = new QTextEdit(this);
     noteEdit_->setPlaceholderText("Add notes...");
     noteEdit_->setMinimumHeight(30);
-    noteEdit_->setStyleSheet(
-        "QTextEdit { "
-        "  background-color: #ffffff; "
-        "  border: 1px solid #e0e0e0; "
-        "  border-radius: 4px; "
-        "  font-size: 11px; "
-        "  padding: 4px; "
-        "} "
-        "QTextEdit:focus { border: 1px solid #0078D4; }");
     outer->addWidget(noteEdit_, 2);
 
     connect(addTagBtn_, &QPushButton::clicked, this, &TagsNotesPane::onAddTag);
