@@ -868,23 +868,10 @@ void MainWindow::onExtract() {
                                 const int maxPages = std::min(doc->pages(), 50);
                                 for (int i = 0; i < maxPages; ++i) {
                                     try {
-                                        auto page = doc->create_page(i);
-                                        // create_page() returns poppler::page* (raw
-                                        // pointer) in Poppler 24.x. We just use it
-                                        // directly - no .get() needed.
-                                        poppler::page* pagePtr = nullptr;
-                                        if constexpr (std::is_same_v<
-                                                std::decay_t<decltype(page)>,
-                                                poppler::page*>) {
-                                            pagePtr = page;
-                                        } else if constexpr (std::is_same_v<
-                                                std::decay_t<decltype(page)>,
-                                                std::unique_ptr<poppler::page>>) {
-                                            pagePtr = page.get();
-                                        } else {
-                                            // Unknown type - skip this page.
-                                            continue;
-                                        }
+                                        // create_page() returns poppler::page*
+                                        // (raw pointer) in Poppler 24.x. We assign
+                                        // directly to pagePtr — no .get() needed.
+                                        poppler::page* pagePtr = doc->create_page(i);
                                         if (!pagePtr) continue;
                                         auto img_data = renderer.render_page(
                                             pagePtr, dpi, dpi);
