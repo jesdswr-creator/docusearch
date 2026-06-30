@@ -741,138 +741,215 @@ void MainWindow::refreshPreviewForSelectedFile() {
 
 void MainWindow::onExtract() {
     if (!repo_ || !db_) return;
-    try {
-        if (contentExtractionRunning_) {
-            statusBar()->showMessage("Content extraction already running.");
-            return;
-        }
+    if (contentExtractionRunning_) {
+        statusBar()->showMessage("Content extraction already running.", 3000);
+        return;
+    }
 
-        // Gather files needing content extraction.
-        struct TodoItem { qint64 fileId; QString path; QString ext; };
-        QList<TodoItem> todo;
+    // Gather files needing content extraction.
+    struct TodoItem { qint64 fileId; QString path; QString ext; };
+    QList<TodoItem> todo;
+    {
         sqlite3* raw = db_->raw();
-        if (raw) {
-            sqlite3_stmt* s = nullptr;
-            const char* sql =
-                "SELECT id, path, extension FROM Files "
-                "WHERE indexing_status != 'content_done' "
-                "AND extension IN ("
-                "'pdf','doc','docx',"
-                "'xls','xlsx','xlsm',"
-                "'ppt','pptx',"
-                "'txt','csv','md','rtf') "
-                "ORDER BY id;";
-            if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
-                while (sqlite3_step(s) == SQLITE_ROW) {
-                    TodoItem it;
-                    it.fileId = sqlite3_column_int64(s, 0);
-                    const unsigned char* p = sqlite3_column_text(s, 1);
-                    const unsigned char* e = sqlite3_column_text(s, 2);
-                    it.path = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
-                    it.ext  = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
-                    todo.append(it);
-                }
-                sqlite3_finalize(s);
+        if (!raw) return;
+        sqlite3_stmt* s = nullptr;
+        const char* sql =
+            "SELECT id, path, extension FROM Files "
+            "WHERE indexing_status != 'content_done' "
+            "AND extension IN ("
+            "'pdf','doc','docx',"
+            "'xls','xlsx','xlsm',"
+            "'ppt','pptx',"
+            "'txt','csv','md','rtf') "
+            "ORDER BY id;";
+        if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(s) == SQLITE_ROW) {
+                TodoItem it;
+                it.fileId = sqlite3_column_int64(s, 0);
+                const unsigned char* p = sqlite3_column_text(s, 1);
+                const unsigned char* e = sqlite3_column_text(s, 2);
+                it.path = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
+                it.ext  = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
+                todo.append(it);
             }
+            sqlite3_finalize(s);
         }
+    }
 
-        if (todo.isEmpty()) {
-            statusBar()->showMessage("No files need content extraction. "
-                                     "All files are already indexed.", 3000);
-            return;
-        }
+    if (todo.isEmpty()) {
+        statusBar()->showMessage("No files need content extraction. "
+                                 "All files are already indexed.", 3000);
+        return;
+    }
 
-        contentExtractionRunning_ = true;
-        statusBar()->showMessage(
-            QString("Extracting content from %1 files...").arg(todo.size()));
+    contentExtractionRunning_ = true;
+    const int total = todo.size();
+    statusBar()->showMessage(
+        QString("Extracting content from %1 files...").arg(total));
 
-        // Run extraction on the MAIN THREAD with processEvents() every 5
-        // files to keep the UI responsive. Previously this used
-        // QtConcurrent::run (background thread) but that crashed because
-        // Poppler and Tesseract are not guaranteed thread-safe when
-        // called from a non-main thread. The main-thread approach is
-        // slightly less responsive during large PDFs but is crash-free.
-        auto& registry = DocumentExtractorRegistry::instance();
-        int done = 0, failed = 0;
-        const int total = todo.size();
-
-        for (const auto& item : todo) {
-            try {
-                auto result = registry.extractByExtension(item.path, item.ext);
-
-                // If Poppler returned empty text (scanned PDF), try OCR.
-                bool needOcr = result.needsOcr ||
-                               (result.text.trimmed().isEmpty() &&
-                                (item.ext == "pdf" || item.ext == "png" ||
-                                 item.ext == "jpg" || item.ext == "jpeg" ||
-                                 item.ext == "bmp" || item.ext == "tiff" ||
-                                 item.ext == "tif" || item.ext == "webp"));
-                if (needOcr) {
+    // Create OCR engine ONCE and reuse for all files. Previously a new
+    // OcrEngine was created per-file, which was extremely slow (Tesseract
+    // Init() loads ~10 MB of traineddata each time) and could crash due
+    // to memory fragmentation after many init/destruct cycles.
 #ifdef DOCUSEARCH_HAS_TESSERACT
-                    try {
-                        OcrEngine engine(settings_.tessdataPath, settings_.ocrLanguage);
-                        if (engine.init()) {
-                            QString ocrText;
-                            if (item.ext == "pdf") {
+    std::unique_ptr<OcrEngine> ocrEngine;
+    {
+        ocrEngine = std::make_unique<OcrEngine>(settings_.tessdataPath,
+                                                  settings_.ocrLanguage);
+        if (!ocrEngine->init()) {
+            ocrEngine.reset();  // OCR unavailable, continue without it
+        }
+    }
+#endif
+
+    auto& registry = DocumentExtractorRegistry::instance();
+    int done = 0, failed = 0;
+
+    for (int idx = 0; idx < total; ++idx) {
+        const auto& item = todo[idx];
+
+        // Check if file still exists before trying to extract.
+        if (!QFileInfo::exists(item.path)) {
+            try {
+                repo_->updateStatus(item.fileId,
+                    Constants::IndexingStatus::kFailed,
+                    Constants::OcrStatus::kSkipped);
+            } catch (...) {}
+            ++failed;
+            // Update status bar.
+            statusBar()->showMessage(
+                QString("Extracting: %1/%2 (done: %3, failed: %4)...")
+                    .arg(idx + 1).arg(total).arg(done).arg(failed));
+            QApplication::processEvents();
+            continue;
+        }
+
+        QString extractedText;
+        QString source = "native";
+        bool extractionOk = false;
+
+        // ---- Step 1: Native extraction (Poppler for PDF, etc.) ----
+        try {
+            auto result = registry.extractByExtension(item.path, item.ext);
+            extractedText = result.text;
+            source = result.source.isEmpty() ? "native" : result.source;
+            extractionOk = true;
+        } catch (const std::exception& e) {
+            DS_WARN("Extract", QString("Native extraction failed for %1: %2")
+                                .arg(item.path).arg(e.what()));
+        } catch (...) {
+            DS_WARN("Extract", "Native extraction failed (unknown exception): " + item.path);
+        }
+
+        // ---- Step 2: OCR fallback for scanned PDFs and images ----
+        // Only run OCR if native extraction returned empty text.
+        bool needOcr = (extractedText.trimmed().isEmpty()) &&
+                       (item.ext == "pdf" || item.ext == "png" ||
+                        item.ext == "jpg" || item.ext == "jpeg" ||
+                        item.ext == "bmp" || item.ext == "tiff" ||
+                        item.ext == "tif" || item.ext == "webp");
+
+        if (needOcr && extractionOk) {
+#ifdef DOCUSEARCH_HAS_TESSERACT
+            if (ocrEngine) {
+                try {
+                    QString ocrText;
+                    if (item.ext == "pdf") {
+                        // Render PDF pages to images and OCR each one.
 #ifdef DOCUSEARCH_HAS_POPPLER
-                                auto doc = poppler::document::load_from_file(
-                                    item.path.toStdString());
-                                if (doc) {
-                                    poppler::page_renderer renderer;
-                                    renderer.set_render_hint(
-                                        poppler::page_renderer::text_antialiasing);
-                                    const int dpi = 200;
-                                    const int maxPages = std::min(doc->pages(), 50);
-                                    for (int i = 0; i < maxPages; ++i) {
+                        try {
+                            auto doc = poppler::document::load_from_file(
+                                item.path.toStdString());
+                            if (doc && doc->pages() > 0) {
+                                poppler::page_renderer renderer;
+                                renderer.set_render_hint(
+                                    poppler::page_renderer::text_antialiasing);
+                                const int dpi = 200;
+                                const int maxPages = std::min(doc->pages(), 50);
+                                for (int i = 0; i < maxPages; ++i) {
+                                    try {
                                         auto page = doc->create_page(i);
-                                        if (!page) continue;
-                                        auto getPagePtr = [](auto& p) -> poppler::page* {
-                                            if constexpr (std::is_same_v<std::decay_t<decltype(p)>,
-                                                                         poppler::page*>) {
-                                                return p;
-                                            } else {
-                                                return p.get();
-                                            }
-                                        };
-                                        poppler::page* pagePtr = getPagePtr(page);
-                                        auto img_data = renderer.render_page(pagePtr, dpi, dpi);
+                                        // create_page returns poppler::page*
+                                        // in Poppler 24.x (raw pointer, NOT
+                                        // unique_ptr). We must NOT call .get()
+                                        // on it.
+                                        poppler::page* pagePtr = nullptr;
+                                        if constexpr (std::is_same_v<
+                                                std::decay_t<decltype(page)>,
+                                                poppler::page*>) {
+                                            pagePtr = page;
+                                        } else {
+                                            pagePtr = page.get();
+                                        }
+                                        if (!pagePtr) continue;
+                                        auto img_data = renderer.render_page(
+                                            pagePtr, dpi, dpi);
                                         if (!img_data.is_valid()) continue;
-                                        char* dataPtr = const_cast<char*>(img_data.data());
-                                        QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
-                                                    img_data.width(), img_data.height(),
-                                                    img_data.bytes_per_row(),
-                                                    QImage::Format_ARGB32);
-                                        QString pageText = engine.ocrImage(qimg);
+                                        char* dataPtr = const_cast<char*>(
+                                            img_data.data());
+                                        if (!dataPtr) continue;
+                                        QImage qimg(
+                                            reinterpret_cast<const uchar*>(dataPtr),
+                                            img_data.width(),
+                                            img_data.height(),
+                                            img_data.bytes_per_row(),
+                                            QImage::Format_ARGB32);
+                                        if (qimg.isNull()) continue;
+                                        QString pageText = ocrEngine->ocrImage(qimg);
                                         if (!pageText.isEmpty()) {
                                             ocrText += pageText + "\n";
                                         }
+                                    } catch (...) {
+                                        // Skip this page, continue to next.
                                     }
                                 }
+                            }
+                        } catch (const std::exception& e) {
+                            DS_WARN("Extract",
+                                QString("PDF render failed for %1: %2")
+                                    .arg(item.path).arg(e.what()));
+                        } catch (...) {}
 #endif // DOCUSEARCH_HAS_POPPLER
-                            } else {
-                                ocrText = engine.ocrFile(item.path);
-                            }
-                            if (!ocrText.isEmpty()) {
-                                if (result.text.isEmpty()) {
-                                    result.text = ocrText;
-                                    result.source = "ocr";
-                                } else {
-                                    result.text += "\n" + ocrText;
-                                    result.source = "native+ocr";
-                                }
-                            }
-                        }
-                    } catch (...) {
-                        // OCR failed for this file - continue with native text only.
+                    } else {
+                        // Image file - OCR directly.
+                        ocrText = ocrEngine->ocrFile(item.path);
                     }
-#endif // DOCUSEARCH_HAS_TESSERACT
+                    if (!ocrText.isEmpty()) {
+                        if (extractedText.isEmpty()) {
+                            extractedText = ocrText;
+                            source = "ocr";
+                        } else {
+                            extractedText += "\n" + ocrText;
+                            source = "native+ocr";
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    DS_WARN("Extract", QString("OCR failed for %1: %2")
+                                        .arg(item.path).arg(e.what()));
+                } catch (...) {
+                    DS_WARN("Extract", "OCR failed (unknown): " + item.path);
                 }
+            }
+#endif // DOCUSEARCH_HAS_TESSERACT
+        }
 
-                if (!result.text.isEmpty()) {
-                    // Use INSERT OR REPLACE so the text is saved even if
-                    // no DocumentText row exists yet (previously used
-                    // UPDATE which silently did nothing if the row was
-                    // missing, causing "extracted" text to vanish).
+        // ---- Step 3: Save results to database ----
+        // A file is marked "failed" ONLY if extraction threw an exception.
+        // A file with legitimately empty text (e.g., empty .txt, or scanned
+        // PDF where OCR also found nothing) is still marked "content_done"
+        // so we don't keep re-trying it on every Extract run.
+        try {
+            if (!extractionOk) {
+                // Extraction threw an exception - mark as failed.
+                repo_->updateStatus(item.fileId,
+                    Constants::IndexingStatus::kFailed,
+                    Constants::OcrStatus::kSkipped);
+                ++failed;
+            } else {
+                // Extraction succeeded (even if text is empty).
+                // Save the extracted text via INSERT OR REPLACE.
+                {
+                    sqlite3* raw = db_->raw();
                     sqlite3_stmt* upd = nullptr;
                     sqlite3_prepare_v2(raw,
                         "INSERT INTO DocumentText (file_id, extracted_text, source) "
@@ -883,79 +960,78 @@ void MainWindow::onExtract() {
                         -1, &upd, nullptr);
                     if (upd) {
                         sqlite3_bind_int64(upd, 1, item.fileId);
-                        sqlite3_bind_text(upd, 2, result.text.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(upd, 3, result.source.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                        QByteArray textBytes = extractedText.toUtf8();
+                        sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                        QByteArray srcBytes = source.toUtf8();
+                        sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
                         sqlite3_step(upd);
                         sqlite3_finalize(upd);
                     }
-                    // Update file status.
-                    sqlite3_stmt* upd2 = nullptr;
+                }
+                // Update FTS index (DELETE old row first, then INSERT —
+                // FTS5 tables don't support ON CONFLICT).
+                {
+                    sqlite3* raw = db_->raw();
+                    // Delete old FTS entries for this file.
+                    sqlite3_stmt* del = nullptr;
                     sqlite3_prepare_v2(raw,
-                        "UPDATE Files SET indexing_status = 'content_done', "
-                        "ocr_status = ?2 WHERE id = ?1;", -1, &upd2, nullptr);
-                    if (upd2) {
-                        sqlite3_bind_int64(upd2, 1, item.fileId);
-                        const char* ocrStat = needOcr ? "done" : "not_needed";
-                        sqlite3_bind_text(upd2, 2, ocrStat, -1, SQLITE_TRANSIENT);
-                        sqlite3_step(upd2);
-                        sqlite3_finalize(upd2);
+                        "DELETE FROM SearchIndex WHERE file_id = ?1;",
+                        -1, &del, nullptr);
+                    if (del) {
+                        sqlite3_bind_int64(del, 1, item.fileId);
+                        sqlite3_step(del);
+                        sqlite3_finalize(del);
                     }
-                    // Update FTS index.
-                    sqlite3_stmt* fts = nullptr;
+                    // Insert new FTS entry.
+                    sqlite3_stmt* ins = nullptr;
                     sqlite3_prepare_v2(raw,
                         "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                        "VALUES (?1, ?2, ?3, ?4, ?5) "
-                        "ON CONFLICT(file_id) DO UPDATE SET "
-                        "  content = excluded.content;",
-                        -1, &fts, nullptr);
-                    if (fts) {
+                        "VALUES (?1, ?2, ?3, ?4, ?5);",
+                        -1, &ins, nullptr);
+                    if (ins) {
                         QFileInfo fi(item.path);
-                        sqlite3_bind_text(fts, 1, fi.fileName().toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(fts, 2, result.text.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(fts, 3, item.path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(fts, 4, item.ext.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int64(fts, 5, item.fileId);
-                        sqlite3_step(fts);
-                        sqlite3_finalize(fts);
+                        QByteArray fn = fi.fileName().toUtf8();
+                        QByteArray txt = extractedText.toUtf8();
+                        QByteArray pth = item.path.toUtf8();
+                        QByteArray ext = item.ext.toUtf8();
+                        sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 2, txt.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_int64(ins, 5, item.fileId);
+                        sqlite3_step(ins);
+                        sqlite3_finalize(ins);
                     }
-                    ++done;
-                } else {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status = 'failed' WHERE id = %1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-                    ++failed;
                 }
-            } catch (...) {
-                try {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status = 'failed' WHERE id = %1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-                } catch (...) {}
-                ++failed;
+                // Update file status to content_done.
+                QString ocrStatus = needOcr ? Constants::OcrStatus::kDone
+                                            : Constants::OcrStatus::kNotNeeded;
+                repo_->updateContent(item.fileId, extractedText, source,
+                    Constants::IndexingStatus::kContentDone, ocrStatus);
+                ++done;
             }
-
-            // Update status bar and process events every 5 files so the
-            // UI stays responsive (doesn't show "Not Responding").
-            if ((done + failed) % 5 == 0) {
-                statusBar()->showMessage(
-                    QString("Extracting: %1/%2 (done: %3, failed: %4)...")
-                        .arg(done + failed).arg(total).arg(done).arg(failed));
-                QApplication::processEvents();
-            }
+        } catch (const std::exception& e) {
+            DS_WARN("Extract", QString("DB save failed for %1: %2")
+                                .arg(item.path).arg(e.what()));
+            ++failed;
+        } catch (...) {
+            ++failed;
         }
 
-        contentExtractionRunning_ = false;
-        updateIndexStats();
-        refreshPreviewForSelectedFile();
+        // Update status bar and process events every file (not every 5)
+        // so the UI is maximally responsive and the user sees progress.
         statusBar()->showMessage(
-            QString("Extracted content for %1 files (%2 failed).")
-                .arg(done).arg(failed), 5000);
-    } catch (...) {
-        contentExtractionRunning_ = false;
-        statusBar()->showMessage("Content extraction failed.", 5000);
+            QString("Extracting: %1/%2 (done: %3, failed: %4)...")
+                .arg(idx + 1).arg(total).arg(done).arg(failed));
+        QApplication::processEvents();
     }
+
+    contentExtractionRunning_ = false;
+    updateIndexStats();
+    refreshPreviewForSelectedFile();
+    statusBar()->showMessage(
+        QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+            .arg(done).arg(failed).arg(total), 8000);
 }
 
 void MainWindow::autoScanIndexedFolders() {
