@@ -20,9 +20,11 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     section->setObjectName("sectionLabel");
     v->addWidget(section);
 
-    // File path label
+    // File path label - no hardcoded color so Theme QSS can style it
+    // for dark mode. Previously had 'color: #666' which was unreadable
+    // on the dark background.
     pathLabel_ = new QLabel("Select a file to preview", this);
-    pathLabel_->setStyleSheet("color: #666; font-size: 12px; padding: 2px;");
+    pathLabel_->setStyleSheet("font-size: 12px; padding: 2px;");
     pathLabel_->setWordWrap(true);
     v->addWidget(pathLabel_);
 
