@@ -3,5 +3,10 @@
         <file>themes/dark.qss</file>
         <file>themes/light.qss</file>
         <file>icons/DocuSearch-256.png</file>
+        <file>icons/add-folder.svg</file>
+        <file>icons/extract.svg</file>
+        <file>icons/settings.svg</file>
+        <file>icons/theme.svg</file>
+        <file>icons/duplicates.svg</file>
     </qresource>
 </RCC>

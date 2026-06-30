@@ -421,30 +421,31 @@ void MainWindow::buildMenus() {
 void MainWindow::buildToolbar() {
     auto* tb = addToolBar("Main");
     tb->setMovable(false);
-    tb->setIconSize(QSize(20, 20));
-    // Modern text-only toolbar — no old Qt standard icons.
-    tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    tb->setIconSize(QSize(18, 18));
+    // Modern icon + text toolbar with Fluent-style SVG icons.
+    tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     tb->setStyleSheet(
         "QToolBar { background: transparent; border: none; padding: 4px; spacing: 4px; } "
         "QToolButton { "
-        "  padding: 6px 14px; "
+        "  padding: 6px 12px; "
         "  border-radius: 6px; "
         "  background: transparent; "
         "  border: none; "
         "  font-size: 13px; "
         "  color: palette(text); "
+        "  spacing: 6px; "
         "} "
         "QToolButton:hover { background: palette(midlight); } "
         "QToolButton:pressed { background: palette(dark); } "
         "QToolBar::separator { width: 1px; background: palette(mid); margin: 4px; }");
 
-    auto* addFolderAct = new QAction("Add Folder", this);
+    auto* addFolderAct = new QAction(QIcon(":/icons/add-folder.svg"), "Add Folder", this);
     connect(addFolderAct, &QAction::triggered, this, [this]{
         try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
     });
     tb->addAction(addFolderAct);
 
-    auto* extractAct = new QAction("Extract", this);
+    auto* extractAct = new QAction(QIcon(":/icons/extract.svg"), "Extract", this);
     connect(extractAct, &QAction::triggered, this, [this]{
         try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
     });
@@ -452,19 +453,19 @@ void MainWindow::buildToolbar() {
 
     tb->addSeparator();
 
-    auto* settingsAct = new QAction("Settings", this);
+    auto* settingsAct = new QAction(QIcon(":/icons/settings.svg"), "Settings", this);
     connect(settingsAct, &QAction::triggered, this, [this]{
         try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
     });
     tb->addAction(settingsAct);
 
-    auto* themeAct = new QAction("Theme", this);
+    auto* themeAct = new QAction(QIcon(":/icons/theme.svg"), "Theme", this);
     connect(themeAct, &QAction::triggered, this, [this]{
         try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
     });
     tb->addAction(themeAct);
 
-    auto* dupesAct = new QAction("Duplicates", this);
+    auto* dupesAct = new QAction(QIcon(":/icons/duplicates.svg"), "Duplicates", this);
     connect(dupesAct, &QAction::triggered, this, [this]{
         try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
     });
@@ -795,11 +796,10 @@ void MainWindow::onExtract() {
     statusBar()->showMessage(
         QString("Extracting content from %1 files...").arg(total));
 
-    // Native extraction ONLY. No OCR in this loop — OCR via Poppler
-    // rendering + Tesseract was causing crashes on certain PDFs
-    // (memory corruption in Poppler's page renderer). OCR will be
-    // a separate manual action in a future update.
+    // Native extraction ONLY. No OCR — Poppler page rendering +
+    // Tesseract was causing memory corruption crashes on certain PDFs.
     auto& registry = DocumentExtractorRegistry::instance();
+    sqlite3* raw = db_->raw();
     int done = 0, failed = 0;
 
     for (int idx = 0; idx < total; ++idx) {
@@ -807,10 +807,12 @@ void MainWindow::onExtract() {
 
         // Check if file still exists.
         if (!QFileInfo::exists(item.path)) {
-            try {
-                repo_->updateStatus(item.fileId,
-                    Constants::IndexingStatus::kFailed);
-            } catch (...) {}
+            if (raw) {
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+            }
             ++failed;
         } else {
             QString extractedText;
@@ -826,18 +828,79 @@ void MainWindow::onExtract() {
                 ok = false;
             }
 
-            try {
-                if (ok) {
-                    repo_->updateContent(item.fileId, extractedText, source,
-                        Constants::IndexingStatus::kContentDone,
-                        Constants::OcrStatus::kNotNeeded);
-                    ++done;
-                } else {
-                    repo_->updateStatus(item.fileId,
-                        Constants::IndexingStatus::kFailed);
-                    ++failed;
+            if (ok && raw) {
+                // Write directly via raw SQL — no transactions, no
+                // repo_->updateContent (which uses begin/commit and can
+                // leave the DB in a broken state if an exception occurs
+                // mid-transaction).
+                QByteArray textBytes = extractedText.toUtf8();
+                QByteArray srcBytes = source.toUtf8();
+                qint64 charCount = extractedText.size();
+                qint64 now = QDateTime::currentSecsSinceEpoch();
+
+                // 1. Upsert DocumentText.
+                sqlite3_stmt* upd = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5) "
+                    "ON CONFLICT(file_id) DO UPDATE SET "
+                    "  extracted_text=excluded.extracted_text, "
+                    "  text_source=excluded.text_source, "
+                    "  char_count=excluded.char_count, "
+                    "  updated_at=excluded.updated_at;",
+                    -1, &upd, nullptr);
+                if (upd) {
+                    sqlite3_bind_int64(upd, 1, item.fileId);
+                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 4, charCount);
+                    sqlite3_bind_int64(upd, 5, now);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
                 }
-            } catch (...) {
+
+                // 2. Update Files status.
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+
+                // 3. Update FTS index (delete old + insert new).
+                sqlite3_stmt* del = nullptr;
+                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
+                                   -1, &del, nullptr);
+                if (del) {
+                    sqlite3_bind_int64(del, 1, item.fileId);
+                    sqlite3_step(del);
+                    sqlite3_finalize(del);
+                }
+
+                QFileInfo fi(item.path);
+                QByteArray fn = fi.fileName().toUtf8();
+                QByteArray pth = item.path.toUtf8();
+                QByteArray ext = item.ext.toUtf8();
+                sqlite3_stmt* ins = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5);",
+                    -1, &ins, nullptr);
+                if (ins) {
+                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(ins, 5, item.fileId);
+                    sqlite3_step(ins);
+                    sqlite3_finalize(ins);
+                }
+                ++done;
+            } else if (raw) {
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+                ++failed;
+            } else {
                 ++failed;
             }
         }
