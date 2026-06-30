@@ -111,7 +111,6 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     hh->setSectionResizeMode(ColSize,    QHeaderView::ResizeToContents);
     hh->setSectionResizeMode(ColDate,    QHeaderView::ResizeToContents);
     hh->setSectionResizeMode(ColSnippet, QHeaderView::Stretch);
-    hh->highlightSections = false;
     hh->setHighlightSections(false);
 
     v->addWidget(table_);

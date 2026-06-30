@@ -9,6 +9,7 @@
 #include <QGroupBox>
 #include <QKeyEvent>
 #include <QScrollArea>
+#include <QLabel>
 
 namespace DocuSearch {
 

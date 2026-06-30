@@ -46,7 +46,8 @@
       UpgradeCode="$(var.ProductUpgradeCode)"
       Language="1033"
       Codepage="1252"
-      Scope="perMachine">
+      Scope="perMachine"
+      Platform="x64">
 
     <SummaryInformation
         Codepage="1252"
