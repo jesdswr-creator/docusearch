@@ -21,15 +21,18 @@ public:
 
 signals:
     void openRequested(const QString& path);
+    void ocrRequested(const QString& path);
 
 private slots:
     void onOpenClicked();
+    void onOcrClicked();
 
 private:
     QLabel*     thumbLabel_;
     QTextEdit*  textEdit_;
     QLabel*     pathLabel_;
     QPushButton* openBtn_;
+    QPushButton* ocrBtn_;
 };
 
 } // namespace DocuSearch

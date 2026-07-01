@@ -184,6 +184,7 @@ set(APP_SOURCES
     # ocr
     src/ocr/OcrEngine.cpp
     src/ocr/OcrWorkerPool.cpp
+    src/ocr/WindowsOcrEngine.cpp
     # indexer
     src/indexer/MetadataIndexer.cpp
     src/indexer/ContentIndexer.cpp
@@ -341,7 +342,15 @@ if(WIN32)
         dwmapi     # DwmSetWindowAttribute (Win11 Mica backdrop)
         propsys    # IPropertyStore for jump-list tasks
         comctl32   # Common Controls v6 (manifest-driven)
+        # Windows Runtime (WinRT) for Windows OCR
+        windowsapp
+        WindowsApp.lib
     )
+    # Enable C++/WinRT support: /await flag + C++17 minimum.
+    if(MSVC)
+        target_compile_options(DocuSearch PRIVATE /await)
+        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
+    endif()
 endif()
 
 # Install targets (for packaging)

@@ -49,6 +49,7 @@ private slots:
     void onFileActivated(qint64 fileId, const QString& path);
     void onOpenOriginal(const QString& path);
     void onOpenSettings();
+    void onOcrThisFile(const QString& path);
     void onToggleTheme();
     void onStartIndexing();
     void onStopIndexing();

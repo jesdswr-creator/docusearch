@@ -32,11 +32,17 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     textEdit_->setPlaceholderText("Extracted text will appear here after content indexing.");
     v->addWidget(textEdit_, 1);
 
-    // Open button - no hardcoded color, uses Theme QSS QPushButton style.
+    // Buttons row: OCR + Open Original.
     auto* h = new QHBoxLayout();
+    h->setSpacing(6);
+    ocrBtn_ = new QPushButton("OCR This File", this);
+    ocrBtn_->setCursor(Qt::PointingHandCursor);
+    ocrBtn_->setToolTip("Run Windows OCR on this file (for scanned PDFs and images)");
+    ocrBtn_->setDefault(true);
     openBtn_ = new QPushButton("Open Original", this);
     openBtn_->setCursor(Qt::PointingHandCursor);
     h->addStretch();
+    h->addWidget(ocrBtn_);
     h->addWidget(openBtn_);
     v->addLayout(h);
 
@@ -45,6 +51,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     thumbLabel_->setVisible(false);
 
     connect(openBtn_, &QPushButton::clicked, this, &PreviewPane::onOpenClicked);
+    connect(ocrBtn_,  &QPushButton::clicked, this, &PreviewPane::onOcrClicked);
 }
 
 void PreviewPane::setThumbnail(const QPixmap& pix) {
@@ -69,6 +76,12 @@ void PreviewPane::onOpenClicked() {
     const QString p = pathLabel_->text();
     if (!p.isEmpty() && p != "Select a file to preview")
         emit openRequested(p);
+}
+
+void PreviewPane::onOcrClicked() {
+    const QString p = pathLabel_->text();
+    if (!p.isEmpty() && p != "Select a file to preview")
+        emit ocrRequested(p);
 }
 
 } // namespace DocuSearch
