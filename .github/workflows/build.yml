@@ -105,7 +105,7 @@ jobs:
 
       - name: Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release
 
       - name: Run unit tests
         shell: pwsh
