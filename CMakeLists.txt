@@ -122,6 +122,14 @@ if(SQLITE3_BUNDLED)
     endif()
 endif()
 
+# Force dynamic CRT (/MD) to match Qt6EntryPoint.lib which was compiled
+# with /MD. Without this, the linker uses static CRT (/MT) from vcpkg's
+# Poppler, causing:
+#   LNK4098: defaultlib 'msvcrt.lib' conflicts with use of other libs
+#   LNK2019: unresolved external symbol main (Qt6EntryPoint can't find
+#            main because it expects dynamic CRT linkage)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
 # ============================================================
 # Application sources
 # ============================================================
