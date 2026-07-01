@@ -8,10 +8,7 @@
       "features": ["fts5"]
     },
     "zlib",
-    {
-      "name": "poppler",
-      "features": ["jpeg", "png", "zlib", "openjpeg"]
-    }
+    "poppler"
   ],
   "features": {
     "tests": {
