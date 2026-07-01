@@ -52,6 +52,9 @@ public:
 
 private:
     bool initialized_ = false;
+#ifdef DOCUSEARCH_HAS_WINDOWS_OCR
+    void* engine_ = nullptr;  // IOcrEngine* (ABI::Windows::Media::Ocr::IOcrEngine)
+#endif
 };
 
 } // namespace DocuSearch

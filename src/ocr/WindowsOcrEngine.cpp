@@ -1,5 +1,13 @@
 // ============================================================
-// WindowsOcrEngine.cpp - Windows.Media.Ocr via WinRT/C++
+// WindowsOcrEngine.cpp - Windows OCR via raw COM (no C++/WinRT)
+// ============================================================
+//
+// Uses the Windows.Media.Ocr COM API directly via WRL/COM instead of
+// C++/WinRT. This avoids the linker conflict between C++/WinRT's
+// entry point redirection and Qt's WIN32 entry point.
+//
+// The Windows.Media.Ocr API is a Windows Runtime (WinRT) API, but we
+// can call it via raw COM using the ABI headers from the Windows SDK.
 // ============================================================
 
 #include "WindowsOcrEngine.h"
@@ -7,38 +15,52 @@
 
 #include <QImage>
 #include <QFileInfo>
+#include <QCoreApplication>
 
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
 
-// Prevent WinRT from redefining the entry point (main). Qt's WIN32
-// subsystem uses Qt6EntryPoint.lib which expects a standard main().
-// Without this define, winrt/base.h adds a linker pragma that
-// redirects main to WINRT_CRT_MAIN, causing:
-//   error LNK2019: unresolved external symbol main
-#define WINRT_NO_MAKE_LINK
+#include <windows.h>
+#include <roapi.h>
+#include <wrl/client.h>
+#include <wrl/wrappers/corewrappers.h>
 
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Globalization.h>
-#include <winrt/Windows.Media.Ocr.h>
-#include <winrt/Windows.Graphics.Imaging.h>
-#include <winrt/Windows.Storage.Streams.h>
-#include <winrt/base.h>
+// Windows Runtime ABI headers
+#include <windows.foundation.h>
+#include <windows.media.ocr.h>
+#include <windows.graphics.imaging.h>
+#include <windows.storage.streams.h>
 
-// robuffer.h provides IBufferByteAccess for raw pointer access to
-// IBuffer's backing memory. Must link runtimeobject.lib.
-#include <robuffer.h>
+#pragma comment(lib, "runtimeobject.lib")
 
-#include <vector>
-#include <cstring>
+using namespace Microsoft::WRL;
+using namespace Microsoft::WRL::Wrappers;
+using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::Media::Ocr;
+using namespace ABI::Windows::Graphics::Imaging;
+using namespace ABI::Windows::Storage::Streams;
 
-namespace winrt {
-    using namespace Windows::Foundation;
-    using namespace Windows::Foundation::Collections;
-    using namespace Windows::Globalization;
-    using namespace Windows::Media::Ocr;
-    using namespace Windows::Graphics::Imaging;
-    using namespace Windows::Storage::Streams;
+// Helper: convert HSTRING to QString
+static QString hstringToQString(HSTRING hs) {
+    if (!hs) return {};
+    UINT32 len = 0;
+    auto ptr = WindowsGetStringRawBuffer(hs, &len);
+    return QString::fromUtf16(reinterpret_cast<const char16_t*>(ptr), len);
+}
+
+// Helper: activate a WinRT class by name
+template<typename T>
+static ComPtr<T> ActivateInstance(const wchar_t* className) {
+    ComPtr<T> instance;
+    HSTRING_HEADER header;
+    HSTRING hs;
+    if (SUCCEEDED(WindowsCreateStringReference(className, static_cast<UINT32>(wcslen(className)), &header, &hs))) {
+        ComPtr<IInspectable> inspectable;
+        RoActivateInstance(hs, &inspectable);
+        if (inspectable) {
+            inspectable.As(&instance);
+        }
+    }
+    return instance;
 }
 
 #endif // DOCUSEARCH_HAS_WINDOWS_OCR
@@ -52,25 +74,28 @@ bool WindowsOcrEngine::init() {
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
     if (initialized_) return true;
     try {
-        winrt::init_apartment();
-        auto engine = winrt::OcrEngine::TryCreateFromUserProfileLanguages();
-        if (engine) {
-            initialized_ = true;
-            DS_INFO("WinOCR", "Windows OCR engine initialized");
-            return true;
+        HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
+        if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+            DS_ERROR("WinOCR", "RoInitialize failed");
+            return false;
         }
-        DS_WARN("WinOCR", "No OCR languages available");
-        return false;
-    } catch (const winrt::hresult_error& e) {
-        DS_ERROR("WinOCR", QString("WinRT init failed: %1")
-                  .arg(QString::fromWCharArray(e.message().c_str())));
-        return false;
+
+        auto engine = ActivateInstance<IOcrEngine>(
+            RuntimeClass_Windows_Media_Ocr_OcrEngine);
+        if (!engine) {
+            DS_WARN("WinOCR", "Failed to create OcrEngine");
+            return false;
+        }
+
+        engine_ = engine;
+        initialized_ = true;
+        DS_INFO("WinOCR", "Windows OCR engine initialized");
+        return true;
     } catch (...) {
-        DS_ERROR("WinOCR", "Unknown WinRT init error");
+        DS_ERROR("WinOCR", "Unknown init error");
         return false;
     }
 #else
-    DS_WARN("WinOCR", "Built without Windows OCR support");
     return false;
 #endif
 }
@@ -79,16 +104,17 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
     if (!initialized_ && !init()) return {};
     if (img.isNull()) return {};
+    if (!engine_) return {};
 
     try {
-        // Convert QImage to BGRA format.
+        // Convert QImage to BGRA.
         QImage conv = img.convertToFormat(QImage::Format_RGBA8888);
         if (conv.isNull()) return {};
 
         const int w = conv.width();
         const int h = conv.height();
 
-        // Swap RGBA → BGRA for Windows.
+        // Swap RGBA → BGRA.
         std::vector<uint8_t> bgra(w * h * 4);
         const uint8_t* src = conv.bits();
         for (int i = 0; i < w * h; ++i) {
@@ -98,36 +124,94 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
             bgra[i*4+3] = src[i*4+3]; // A
         }
 
-        // Create an IBuffer and copy BGRA pixels into it.
-        // IBufferByteAccess (from robuffer.h) lets us get a raw pointer
-        // to the buffer's backing memory for fast memcpy.
-        auto buffer = winrt::Buffer(static_cast<uint32_t>(bgra.size()));
-        auto byteAccess = buffer.as<Windows::Storage::Streams::IBufferByteAccess>();
-        uint8_t* dst = nullptr;
-        uint32_t cap = 0;
-        byteAccess->Buffer(&dst, &cap);
-        if (dst && cap >= bgra.size()) {
-            std::memcpy(dst, bgra.data(), bgra.size());
-        }
+        // Create a DataWriter to write bytes into an InMemoryRandomAccessStream.
+        auto stream = ActivateInstance<IRandomAccessStream>(
+            RuntimeClass_Windows_Storage_Streams_InMemoryRandomAccessStream);
+        if (!stream) return {};
 
-        // Create SoftwareBitmap and copy from buffer.
-        auto sb = winrt::SoftwareBitmap::CreateCopyFromBuffer(
-            buffer,
-            winrt::BitmapPixelFormat::Bgra8,
+        // Write BGRA bytes to the stream.
+        ComPtr<IDataWriter> dataWriter;
+        ComPtr<IInspectable> dwInspectable;
+        HSTRING_HEADER dwHeader;
+        HSTRING dwHs;
+        WindowsCreateStringReference(
+            RuntimeClass_Windows_Storage_Streams_DataWriter,
+            static_cast<UINT32>(wcslen(RuntimeClass_Windows_Storage_Streams_DataWriter)),
+            &dwHeader, &dwHs);
+        RoActivateInstance(dwHs, &dwInspectable);
+        if (dwInspectable) {
+            dwInspectable.As(&dataWriter);
+        }
+        if (!dataWriter) return {};
+
+        // Set the output stream.
+        ComPtr<IOutputStream> outputStream;
+        stream.As(&outputStream);
+        dataWriter->put_OutputStream(outputStream.Get());
+
+        // Write bytes.
+        ComPtr<IBuffer> buffer;
+        dataWriter->WriteBytes(
+            static_cast<UINT32>(bgra.size()),
+            bgra.data());
+        dataWriter->StoreAsync();
+
+        // Flush and seek to beginning.
+        stream->Seek(0);
+
+        // Create SoftwareBitmap from the buffer.
+        ComPtr<ISoftwareBitmapFactory> sbFactory;
+        ComPtr<IInspectable> sbfInspectable;
+        HSTRING_HEADER sbfHeader;
+        HSTRING sbfHs;
+        WindowsCreateStringReference(
+            RuntimeClass_Windows_Graphics_Imaging_SoftwareBitmap,
+            static_cast<UINT32>(wcslen(RuntimeClass_Windows_Graphics_Imaging_SoftwareBitmap)),
+            &sbfHeader, &sbfHs);
+        RoGetActivationFactory(sbfHs, IID_PPV_ARGS(&sbFactory));
+        if (!sbFactory) return {};
+
+        ComPtr<IBuffer> dataBuffer;
+        dataWriter->DetachBuffer(&dataBuffer);
+        if (!dataBuffer) return {};
+
+        ComPtr<ISoftwareBitmap> sb;
+        sbFactory->CreateCopyFromBuffer(
+            BitmapPixelFormat_Bgra8,
             w, h,
-            winrt::BitmapAlphaMode::Premultiplied);
+            dataBuffer.Get(),
+            BitmapAlphaMode_Premultiplied,
+            &sb);
+        if (!sb) return {};
 
         // Run OCR.
-        auto engine = winrt::OcrEngine::TryCreateFromUserProfileLanguages();
-        if (!engine) return {};
+        ComPtr<IAsyncOperation<OcrResult*>> asyncOp;
+        engine_->RecognizeAsync(sb.Get(), &asyncOp);
+        if (!asyncOp) return {};
 
-        auto result = engine.RecognizeAsync(sb).get();
-        auto text = result.Text();
-        return QString::fromWCharArray(text.c_str());
-    } catch (const winrt::hresult_error& e) {
-        DS_WARN("WinOCR", QString("OCR failed: %1")
-                 .arg(QString::fromWCharArray(e.message().c_str())));
-        return {};
+        // Wait for async operation to complete (synchronous).
+        ComPtr<IAsyncInfo> asyncInfo;
+        asyncOp.As(&asyncInfo);
+        AsyncStatus status = AsyncStatus::Started;
+        while (status == AsyncStatus::Started) {
+            asyncInfo->get_Status(&status);
+            if (status == AsyncStatus::Started) {
+                QCoreApplication::processEvents();
+                Sleep(10);
+            }
+        }
+
+        if (status != AsyncStatus::Completed) return {};
+
+        ComPtr<IOcrResult> result;
+        asyncOp->GetResults(&result);
+        if (!result) return {};
+
+        HSTRING textHs = nullptr;
+        result->get_Text(&textHs);
+        QString text = hstringToQString(textHs);
+        if (textHs) WindowsDeleteString(textHs);
+        return text;
     } catch (...) {
         DS_WARN("WinOCR", "OCR failed (unknown)");
         return {};
@@ -149,13 +233,33 @@ QStringList WindowsOcrEngine::availableLanguages() {
     QStringList list;
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
     try {
-        winrt::init_apartment();
-        auto langs = winrt::OcrEngine::AvailableRecognizerLanguages();
-        const uint32_t size = langs.Size();
-        for (uint32_t i = 0; i < size; ++i) {
-            auto lang = langs.GetAt(i);
-            auto tag = lang.LanguageTag();
-            list << QString::fromWCharArray(tag.c_str());
+        RoInitialize(RO_INIT_MULTITHREADED);
+        ComPtr<IOcrEngineStatics> statics;
+        ComPtr<IInspectable> inspectable;
+        HSTRING_HEADER header;
+        HSTRING hs;
+        WindowsCreateStringReference(
+            RuntimeClass_Windows_Media_Ocr_OcrEngine,
+            static_cast<UINT32>(wcslen(RuntimeClass_Windows_Media_Ocr_OcrEngine)),
+            &header, &hs);
+        RoGetActivationFactory(hs, IID_PPV_ARGS(&statics));
+        if (statics) {
+            ComPtr<IVectorView<Language*>> langs;
+            statics->get_AvailableRecognizerLanguages(&langs);
+            if (langs) {
+                UINT32 size = 0;
+                langs->get_Size(&size);
+                for (UINT32 i = 0; i < size; ++i) {
+                    ComPtr<ILanguage> lang;
+                    langs->GetAt(i, &lang);
+                    if (lang) {
+                        HSTRING tag = nullptr;
+                        lang->get_LanguageTag(&tag);
+                        list << hstringToQString(tag);
+                        if (tag) WindowsDeleteString(tag);
+                    }
+                }
+            }
         }
     } catch (...) {}
 #endif

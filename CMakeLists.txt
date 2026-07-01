@@ -291,14 +291,10 @@ if(WIN32)
         dwmapi     # DwmSetWindowAttribute (Win11 Mica backdrop)
         propsys    # IPropertyStore for jump-list tasks
         comctl32   # Common Controls v6 (manifest-driven)
-        # Windows Runtime (WinRT) for Windows OCR
-        windowsapp
-        WindowsApp.lib
-        runtimeobject  # IBufferByteAccess (robuffer.h)
+        # Windows Runtime (WinRT) for Windows OCR — raw COM, not C++/WinRT
+        runtimeobject  # RoActivateInstance, RoGetActivationFactory
     )
-    # Enable Windows OCR via WinRT. No /await flag needed — we use
-    # winrt::init_apartment() and .get() for synchronous async calls,
-    # which doesn't require coroutine language support.
+    # Enable Windows OCR via raw COM ABI (no C++/WinRT library needed).
     if(MSVC)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
     endif()
