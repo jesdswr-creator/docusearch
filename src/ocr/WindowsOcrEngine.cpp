@@ -12,6 +12,7 @@
 
 // WinRT headers — part of the Windows SDK (no vcpkg needed).
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Ocr.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -22,6 +23,7 @@
 
 namespace winrt {
     using namespace Windows::Foundation;
+    using namespace Windows::Foundation::Collections;
     using namespace Windows::Media::Ocr;
     using namespace Windows::Graphics::Imaging;
     using namespace Windows::Storage::Streams;
@@ -73,6 +75,8 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
 
         const int w = conv.width();
         const int h = conv.height();
+
+        // Swap RGBA → BGRA for Windows.
         std::vector<uint8_t> bgra(w * h * 4);
         const uint8_t* src = conv.bits();
         for (int i = 0; i < w * h; ++i) {
@@ -82,20 +86,17 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
             bgra[i*4+3] = src[i*4+3]; // A
         }
 
-        // Create SoftwareBitmap and copy pixels.
+        // Create SoftwareBitmap.
         auto sb = winrt::SoftwareBitmap(winrt::BitmapPixelFormat::Bgra8, w, h,
                                         winrt::BitmapAlphaMode::Premultiplied);
-        {
-            auto buf = sb.LockBuffer(winrt::BitmapBufferAccessMode::Write);
-            auto ref = buf.CreateReference();
-            auto byteAccess = ref.as<Windows::Foundation::IMemoryBufferByteAccess>();
-            uint8_t* dst = nullptr;
-            uint32_t cap = 0;
-            byteAccess->GetBuffer(&dst, &cap);
-            if (dst && cap >= static_cast<uint32_t>(bgra.size())) {
-                std::memcpy(dst, bgra.data(), bgra.size());
-            }
-        }
+
+        // Copy pixel data using CopyToBuffer.
+        auto stream = winrt::InMemoryRandomAccessStream();
+        winrt::DataWriter writer(stream);
+        writer.WriteBytes(winrt::array_view<uint8_t const>(bgra.data(), bgra.data() + bgra.size()));
+        writer.StoreAsync().get();
+        stream.Seek(0);
+        sb.CopyFromBuffer(stream.GetOutputStreamAt(0)).get();
 
         // Run OCR.
         auto engine = winrt::OcrEngine::TryCreateFromUserProfileLanguages();
@@ -131,7 +132,10 @@ QStringList WindowsOcrEngine::availableLanguages() {
     try {
         winrt::init_apartment();
         auto langs = winrt::OcrEngine::AvailableRecognizerLanguages();
-        for (auto const& lang : langs) {
+        // Use indexed access instead of range-for to avoid iterator issues.
+        const uint32_t size = langs.Size();
+        for (uint32_t i = 0; i < size; ++i) {
+            auto lang = langs.GetAt(i);
             list << QString::fromWCharArray(lang.LanguageTag().c_str());
         }
     } catch (...) {}
