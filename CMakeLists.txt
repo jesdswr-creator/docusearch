@@ -295,8 +295,14 @@ if(WIN32)
         runtimeobject  # RoActivateInstance, RoGetActivationFactory
     )
     # Enable Windows OCR via raw COM ABI (no C++/WinRT library needed).
+    # runtimeobject.lib contains /INCLUDE:WINRT_CRT_MAIN which expects
+    # a 'main' function. Since we use WIN32 subsystem (WinMain), we
+    # must tell the linker to use mainCRTStartup as the entry point
+    # (Qt6EntryPoint.lib provides this and calls our main()).
     if(MSVC)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
+        set_target_properties(DocuSearch PROPERTIES
+            LINK_FLAGS "/ENTRY:mainCRTStartup")
     endif()
 endif()
 
