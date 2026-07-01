@@ -10,6 +10,13 @@
 
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
 
+// Prevent WinRT from redefining the entry point (main). Qt's WIN32
+// subsystem uses Qt6EntryPoint.lib which expects a standard main().
+// Without this define, winrt/base.h adds a linker pragma that
+// redirects main to WINRT_CRT_MAIN, causing:
+//   error LNK2019: unresolved external symbol main
+#define WINRT_NO_MAKE_LINK
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.h>
