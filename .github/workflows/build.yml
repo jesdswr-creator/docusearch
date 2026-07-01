@@ -105,7 +105,13 @@ jobs:
 
       - name: Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release
+        run: |
+          # Build ONLY the DocuSearch target first, then tests.
+          # MSBuild builds all targets simultaneously by default,
+          # which caused a race condition where the linker ran before
+          # main.cpp was compiled (LNK2019: unresolved external main).
+          cmake --build build --config Release --target DocuSearch
+          cmake --build build --config Release
 
       - name: Run unit tests
         shell: pwsh
