@@ -296,9 +296,10 @@ if(WIN32)
         WindowsApp.lib
         runtimeobject  # IBufferByteAccess (robuffer.h)
     )
-    # Enable C++/WinRT support: /await flag + DOCUSEARCH_HAS_WINDOWS_OCR define.
+    # Enable Windows OCR via WinRT. No /await flag needed — we use
+    # winrt::init_apartment() and .get() for synchronous async calls,
+    # which doesn't require coroutine language support.
     if(MSVC)
-        target_compile_options(DocuSearch PRIVATE /await)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
     endif()
 endif()
