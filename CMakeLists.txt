@@ -291,18 +291,14 @@ if(WIN32)
         dwmapi     # DwmSetWindowAttribute (Win11 Mica backdrop)
         propsys    # IPropertyStore for jump-list tasks
         comctl32   # Common Controls v6 (manifest-driven)
-        # Windows Runtime (WinRT) for Windows OCR — raw COM, not C++/WinRT
-        runtimeobject  # RoActivateInstance, RoGetActivationFactory
+        # NOTE: runtimeobject.lib is NOT linked here because it contains
+        # /INCLUDE:WINRT_CRT_MAIN which conflicts with Qt's WIN32 entry
+        # point. WindowsOcrEngine.cpp loads the WinRT functions dynamically
+        # via LoadLibrary("api-ms-win-core-winrt-l1-1-0.dll").
     )
-    # Enable Windows OCR via raw COM ABI (no C++/WinRT library needed).
-    # runtimeobject.lib contains /INCLUDE:WINRT_CRT_MAIN which expects
-    # a 'main' function. Since we use WIN32 subsystem (WinMain), we
-    # must tell the linker to use mainCRTStartup as the entry point
-    # (Qt6EntryPoint.lib provides this and calls our main()).
+    # Enable Windows OCR via raw COM ABI + dynamic loading.
     if(MSVC)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
-        set_target_properties(DocuSearch PROPERTIES
-            LINK_FLAGS "/ENTRY:mainCRTStartup")
     endif()
 endif()
 
