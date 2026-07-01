@@ -297,12 +297,13 @@ if(WIN32)
         # via LoadLibrary("api-ms-win-core-winrt-l1-1-0.dll").
     )
     # Enable Windows OCR via raw COM ABI + dynamic loading.
-    if(MSVC)
-        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
-        # WINRT_NO_MAKE_LINK (defined in WindowsOcrEngine.cpp) suppresses
-        # the #pragma comment(lib, "runtimeobject.lib") from WinRT ABI
-        # headers. No /NODEFAULTLIB needed.
-    endif()
+    # Windows OCR is DISABLED for now — the WinRT ABI headers
+    # auto-link runtimeobject.lib which conflicts with Qt's WIN32
+    # entry point (LNK2019: unresolved external symbol main).
+    # Will re-enable using a separate DLL plugin approach later.
+    # if(MSVC)
+    #     target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
+    # endif()
 endif()
 
 # Install targets (for packaging)
