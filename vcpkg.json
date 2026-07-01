@@ -8,9 +8,10 @@
       "features": ["fts5"]
     },
     "zlib",
-    "leptonica",
-    "tesseract",
-    "poppler"
+    {
+      "name": "poppler",
+      "features": ["jpeg", "png", "zlib", "openjpeg"]
+    }
   ],
   "features": {
     "tests": {

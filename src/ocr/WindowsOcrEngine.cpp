@@ -18,6 +18,10 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/base.h>
 
+// robuffer.h provides IBufferByteAccess for raw pointer access to
+// IBuffer's backing memory. Must link runtimeobject.lib.
+#include <robuffer.h>
+
 #include <vector>
 #include <cstring>
 
@@ -87,7 +91,9 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
             bgra[i*4+3] = src[i*4+3]; // A
         }
 
-        // Create an IBuffer from the BGRA pixel data.
+        // Create an IBuffer and copy BGRA pixels into it.
+        // IBufferByteAccess (from robuffer.h) lets us get a raw pointer
+        // to the buffer's backing memory for fast memcpy.
         auto buffer = winrt::Buffer(static_cast<uint32_t>(bgra.size()));
         auto byteAccess = buffer.as<Windows::Storage::Streams::IBufferByteAccess>();
         uint8_t* dst = nullptr;

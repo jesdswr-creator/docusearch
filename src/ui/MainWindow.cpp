@@ -24,7 +24,6 @@
 #include "../search/SearchEngine.h"
 #include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
-#include "../ocr/OcrEngine.h"
 #include "../ocr/WindowsOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"

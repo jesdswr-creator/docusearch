@@ -62,53 +62,11 @@ if(NOT SQLite3_FOUND)
     set(SQLITE3_BUNDLED TRUE)
 endif()
 
-# Tesseract + Leptonica
-# vcpkg's tesseract port provides a CMake config-target package that
-# exposes the target 'Tesseract::libtesseract' (NOT 'Tesseract::Lib').
-# We try config mode first (the modern way), then fall back to
-# pkgconfig + manual find_path/find_library for older vcpkg versions
-# or system-installed Tesseract.
-if(DOCUSEARCH_ENABLE_TESSERACT)
-    # 1. Try CMake config-target package (vcpkg's preferred mode)
-    find_package(Tesseract CONFIG QUIET)
-    if(Tesseract_FOUND)
-        set(TESSERACT_FOUND TRUE)
-        # vcpkg exposes Tesseract::libtesseract, but our code below
-        # references Tesseract::Lib - create an alias so both work.
-        if(NOT TARGET Tesseract::Lib)
-            add_library(Tesseract::Lib INTERFACE IMPORTED)
-            set_target_properties(Tesseract::Lib PROPERTIES
-                INTERFACE_LINK_LIBRARIES Tesseract::libtesseract)
-        endif()
-        message(STATUS "Tesseract: found via config-target package")
-    endif()
-
-    # 2. Try pkgconfig (common on Linux and some vcpkg versions)
-    if(NOT TESSERACT_FOUND)
-        find_package(PkgConfig QUIET)
-        if(PkgConfig_FOUND)
-            pkg_check_modules(TESSERACT IMPORTED_TARGET tesseract)
-            pkg_check_modules(LEPTONICA IMPORTED_TARGET lept)
-        endif()
-        if(TESSERACT_FOUND)
-            message(STATUS "Tesseract: found via pkg-config")
-        endif()
-    endif()
-
-    # 3. Manual find_path/find_library fallback
-    if(NOT TESSERACT_FOUND)
-        find_path(TESSERACT_INCLUDE_DIR tesseract/baseapi.h PATH_SUFFIXES tesseract)
-        find_library(TESSERACT_LIBRARY NAMES tesseract libtesseract)
-        if(TESSERACT_INCLUDE_DIR AND TESSERACT_LIBRARY)
-            set(TESSERACT_FOUND TRUE)
-            add_library(Tesseract::Lib INTERFACE IMPORTED)
-            set_target_properties(Tesseract::Lib PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${TESSERACT_INCLUDE_DIR}"
-                INTERFACE_LINK_LIBRARIES      "${TESSERACT_LIBRARY}")
-            message(STATUS "Tesseract: found via manual find_path/find_library")
-        endif()
-    endif()
-endif()
+# Tesseract + Leptonica — REMOVED.
+# OCR is now handled by Windows OCR (Windows.Media.Ocr via WinRT),
+# which is built into Windows 10/11 and requires no third-party
+# dependencies. This removes ~40 MB from the build and eliminates
+# the crash-prone Tesseract/Leptonica DLLs.
 
 # Poppler (Qt binding preferred)
 if(DOCUSEARCH_ENABLE_POPPLER)
@@ -182,9 +140,8 @@ set(APP_SOURCES
     src/documents/PptxExtractor.cpp
     src/documents/DocumentExtractorRegistry.cpp
     # ocr
-    src/ocr/OcrEngine.cpp
-    src/ocr/OcrWorkerPool.cpp
     src/ocr/WindowsOcrEngine.cpp
+    src/ocr/OcrWorkerPool.cpp
     # indexer
     src/indexer/MetadataIndexer.cpp
     src/indexer/ContentIndexer.cpp
@@ -304,14 +261,6 @@ target_link_libraries(DocuSearch PRIVATE
     ZLIB::ZLIB
 )
 
-if(TESSERACT_FOUND)
-    target_link_libraries(DocuSearch PRIVATE Tesseract::Lib)
-    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_TESSERACT=1)
-    message(STATUS "Tesseract: enabled")
-else()
-    message(WARNING "Tesseract not found — OCR features will be stubbed.")
-endif()
-
 if(POPPLER_FOUND)
     target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
     target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_POPPLER=1)
@@ -345,8 +294,9 @@ if(WIN32)
         # Windows Runtime (WinRT) for Windows OCR
         windowsapp
         WindowsApp.lib
+        runtimeobject  # IBufferByteAccess (robuffer.h)
     )
-    # Enable C++/WinRT support: /await flag + C++17 minimum.
+    # Enable C++/WinRT support: /await flag + DOCUSEARCH_HAS_WINDOWS_OCR define.
     if(MSVC)
         target_compile_options(DocuSearch PRIVATE /await)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)

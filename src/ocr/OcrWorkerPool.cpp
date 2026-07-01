@@ -3,7 +3,7 @@
 // ============================================================
 
 #include "OcrWorkerPool.h"
-#include "OcrEngine.h"
+#include "WindowsOcrEngine.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
 #include "../core/StringUtils.h"
@@ -140,13 +140,12 @@ void OcrWorkerPool::shutdown() {
 void OcrWorkerPool::onWorkerFinished() {}
 
 void OcrWorkerPool::workerLoop(int workerId) {
-    // Per-thread Tesseract instance.
-    OcrEngine engine(settings_.tessdataPath, settings_.ocrLanguage);
+    // Windows OCR engine (built into Windows 10/11).
+    WindowsOcrEngine engine;
     if (!engine.init()) {
-        DS_ERROR("OCR", QString("Worker %1: Tesseract init failed; exiting").arg(workerId));
+        DS_ERROR("OCR", QString("Worker %1: Windows OCR init failed; exiting").arg(workerId));
         return;
     }
-    engine.setPsm(3);  // auto page segmentation
 
     QElapsedTimer cpuTimer;
     cpuTimer.start();

@@ -21,10 +21,9 @@ jobs:
   build-windows:
     name: Build on Windows Server 2022
     runs-on: windows-2022
-    # Bumped from 120 to 240 minutes because Poppler + Tesseract +
-    # Leptonica are heavy ports that take ~30-40 min to compile from
-    # source on first run (subsequent runs hit the vcpkg binary cache
-    # and are much faster).
+    # Bumped from 120 to 240 minutes because Poppler is a heavy port
+    # that takes ~20-30 min to compile from source on first run
+    # (subsequent runs hit the vcpkg binary cache and are much faster).
     timeout-minutes: 240
 
     steps:
@@ -81,27 +80,25 @@ jobs:
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add WixToolset.UI.wixext/4.0.5
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version
 
-      # NOTE: vcpkg dependencies (sqlite3, tesseract, leptonica, poppler, zlib)
+      # NOTE: vcpkg dependencies (sqlite3, poppler, zlib)
       # are installed automatically by CMake via the vcpkg manifest (vcpkg.json)
       # when we configure with -DCMAKE_TOOLCHAIN_FILE=vcpkg.cmake. No need for
-      # a separate `vcpkg install` step.
+      # a separate `vcpkg install` step. Tesseract/Leptonica are REMOVED —
+      # OCR is handled by Windows OCR (built into Windows 10/11).
 
       - name: Configure CMake (this also installs vcpkg deps from vcpkg.json)
         shell: pwsh
         run: |
-          # Tesseract + Poppler are now ENABLED so the app can:
-          #   * Extract text from born-digital PDFs (Poppler)
-          #   * OCR scanned PDFs and images (Tesseract)
-          # Previously both were OFF, which meant PDFs flagged as
-          # "needsOcr" but OCR was unavailable, so PDFs were effectively
-          # unsearchable.
+          # Poppler is ENABLED for PDF text extraction (born-digital PDFs).
+          # OCR is handled by Windows OCR (Windows.Media.Ocr via WinRT),
+          # which is built into Windows 10/11 — no third-party dependency.
           cmake -B build -S . `
             -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DVCPKG_MANIFEST_MODE=ON `
             -DDOCUSEARCH_BUILD_TESTS=ON `
-            -DDOCUSEARCH_ENABLE_TESSERACT=ON `
+            -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
             -DDOCUSEARCH_ENABLE_POPPLER=ON
           Write-Host "=== vcpkg installed packages ==="
           & C:\vcpkg\vcpkg.exe list
@@ -115,7 +112,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure -C Release
         continue-on-error: true
 
-      - name: Bundle Qt DLLs (windeployqt) + Tesseract/Poppler DLLs
+      - name: Bundle Qt DLLs (windeployqt) + Poppler DLLs
         shell: pwsh
         run: |
           $wdq = Join-Path $env:QtInstallDir "bin\windeployqt.exe"
@@ -134,29 +131,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\bin\Release\themes | Out-Null
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
-          # ---- Bundle non-Qt DLLs: Tesseract, Leptonica, Poppler, and
-          # their transitive dependencies. windeployqt only handles Qt
-          # DLLs - it doesn't know about vcpkg-installed libraries.
-          # vcpkg with manifest mode installs to build\vcpkg_installed\
-          # x64-windows\bin (NOT C:\vcpkg\installed\... which is the
-          # classic mode path). CMake's vcpkg toolchain auto-copies most
-          # DLLs during the build, but we copy them again here to be
-          # sure nothing is missed (especially indirect deps like
-          # openjpeg, freetype, etc.). ----
+          # ---- Bundle non-Qt DLLs: Poppler and its transitive deps.
+          # Tesseract/Leptonica are REMOVED — OCR uses Windows OCR.
+          # windeployqt only handles Qt DLLs - it doesn't know about
+          # vcpkg-installed libraries. We copy them from the vcpkg bin.
           $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
           if (-not (Test-Path $vcpkgBin)) {
-            # Fallback to classic vcpkg install location
             $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
           }
           if (Test-Path $vcpkgBin) {
             Write-Host "=== Copying vcpkg runtime DLLs from $vcpkgBin ==="
-            # Tesseract + Leptonica + Poppler + their deps. We copy the
-            # well-known names explicitly (more reliable than parsing
-            # dumpbin output, which can miss indirect deps).
             $runtimeDlls = @(
-              'tesseract54.dll',
-              'leptonica-1.84.0.dll',
-              'lept-1.84.0.dll',
               'poppler-cpp.dll',
               'poppler.dll',
               'openjp2.dll',
@@ -166,14 +151,12 @@ jobs:
               'libpng16.dll',
               'tiff.dll',
               'libtiff.dll',
-              'tiffxx.dll',
               'zstd.dll',
               'libzstd.dll',
               'lzma.dll',
               'liblzma.dll',
               'brotlidec.dll',
               'brotlicommon.dll',
-              'brotli.dll',
               'freetype.dll',
               'fontconfig-1.dll',
               'expat.dll',
@@ -182,31 +165,8 @@ jobs:
               'libiconv.dll',
               'charset-1.dll',
               'libcharset.dll',
-              'gobject-2.0.dll',
-              'glib-2.0.dll',
-              'gio-2.0.dll',
-              'pcre.dll',
-              'libpcre.dll',
-              'pcre2-8.dll',
-              'libpcre2-8.dll',
-              'harfbuzz.dll',
-              'libharfbuzz.dll',
-              'libwebp.dll',
-              'webp.dll',
-              'libwebpmux.dll',
-              'webpmux.dll',
-              'libwebpdemux.dll',
-              'webpdemux.dll',
-              'gif.dll',
-              'libgif.dll',
               'lcms2.dll',
-              'liblcms2.dll',
-              'curl.dll',
-              'libcurl.dll',
-              'OpenCL.dll',
-              'cairo.dll',
-              'pixman-1.dll',
-              'libpng.dll'
+              'liblcms2.dll'
             )
             $copied = 0
             foreach ($dll in $runtimeDlls) {
@@ -218,12 +178,10 @@ jobs:
             }
             Write-Host "Copied $copied runtime DLLs from vcpkg."
 
-            # Fallback: also copy every *.dll that mentions "tesseract",
-            # "lept", "poppler", "openjp", "jpeg", "png", "tiff", "freetype",
-            # "fontconfig" in its name. This catches version-suffixed names
-            # we might have missed in the explicit list above.
+            # Fallback: copy every *.dll that mentions poppler, openjp,
+            # jpeg, png, tiff, freetype, fontconfig.
             Get-ChildItem -Path $vcpkgBin -Filter "*.dll" | Where-Object {
-              $_.Name -match 'tesseract|lept|poppler|openjp|jpeg|png|tiff|freetype|fontconfig|lcms|webp|gif|zstd|lzma|brotli|expat|iconv|charset|harfbuzz|pixman|cairo'
+              $_.Name -match 'poppler|openjp|jpeg|png|tiff|freetype|fontconfig|lcms|zstd|lzma|brotli|expat|iconv|charset'
             } | ForEach-Object {
               $dst = "build\bin\Release\$($_.Name)"
               if (-not (Test-Path $dst)) {
@@ -232,30 +190,7 @@ jobs:
               }
             }
           } else {
-            Write-Host "WARNING: vcpkg bin dir not found at $vcpkgBin - OCR/Poppler DLLs may be missing from the bundle."
-          }
-
-          # ---- Bundle eng.traineddata so OCR works out-of-the-box. ----
-          # Download from the official Tesseract GitHub mirror. The file
-          # is ~10 MB and contains English language data. Users who need
-          # other languages can download more .traineddata files and drop
-          # them into the tessdata folder.
-          $tessdataDir = "build\bin\Release\tessdata"
-          if (-not (Test-Path $tessdataDir)) {
-            New-Item -ItemType Directory -Path $tessdataDir -Force | Out-Null
-          }
-          $engFile = Join-Path $tessdataDir "eng.traineddata"
-          if (-not (Test-Path $engFile)) {
-            Write-Host "=== Downloading eng.traineddata (~10 MB) ==="
-            $engUrl = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata"
-            try {
-              Invoke-WebRequest -Uri $engUrl -OutFile $engFile -UseBasicParsing -TimeoutSec 60
-              Write-Host "Downloaded eng.traineddata ($((Get-Item $engFile).Length) bytes)"
-            } catch {
-              Write-Host "WARNING: Failed to download eng.traineddata: $($_.Exception.Message)"
-              Write-Host "OCR will still work if the user manually downloads .traineddata files"
-              Write-Host "into the tessdata folder and points Settings > OCR > Tessdata path at it."
-            }
+            Write-Host "WARNING: vcpkg bin dir not found at $vcpkgBin - Poppler DLLs may be missing."
           }
 
       - name: Build portable ZIP

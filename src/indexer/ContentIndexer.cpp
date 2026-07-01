@@ -6,7 +6,7 @@
 #include "../database/FileRepository.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../ocr/OcrWorkerPool.h"
-#include "../ocr/OcrEngine.h"
+#include "../ocr/WindowsOcrEngine.h"
 #include "../core/Constants.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
@@ -128,8 +128,8 @@ QString ContentIndexer::processNow(qint64 fileId) {
                                 : Constants::OcrStatus::kNotNeeded);
 
     if (needOcr && settings_.lazyOcrEnabled) {
-        // Run OCR synchronously on this thread (with timeout).
-        OcrEngine engine(settings_.tessdataPath, settings_.ocrLanguage);
+        // Run OCR synchronously using Windows OCR.
+        WindowsOcrEngine engine;
         if (engine.init()) {
             QString ocrText = engine.ocrFile(r.path);
             if (!ocrText.isEmpty()) {

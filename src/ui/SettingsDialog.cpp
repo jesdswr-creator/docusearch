@@ -138,37 +138,29 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
-    // Only show the OCR tab if Tesseract was actually compiled in.
-    // When OCR is stubbed out, configuring tessdata path / language has
-    // no effect and would mislead the user.
+    // OCR is handled by Windows OCR (Windows.Media.Ocr), which is built
+    // into Windows 10/11. No tessdata path or language configuration is
+    // needed — Windows OCR uses the user's installed language packs.
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
-    auto* tdBrowse = new QPushButton("Browse...", this);
-    auto* tdRow = new QHBoxLayout();
-    tdRow->addWidget(tessdataEdit_);
-    tdRow->addWidget(tdBrowse);
-    ocrLay->addRow("Tessdata path", tdRow);
-
+    tessdataEdit_->setVisible(false);  // hidden, kept for compatibility
     langCombo_ = new QComboBox(this);
-    langCombo_->setEditable(true);
-    populateLangCombo();
-    langCombo_->setCurrentText(current_.ocrLanguage);
-    ocrLay->addRow("OCR language", langCombo_);
-#ifdef DOCUSEARCH_HAS_TESSERACT
-    tabs->addTab(ocrTab, "OCR");
-#else
-    // OCR compiled out: replace the tab with an informational label.
+    langCombo_->setVisible(false);  // hidden, kept for compatibility
+
     auto* ocrInfo = new QLabel(
-        "OCR is not available in this build.\n\n"
-        "Tesseract was not linked at compile time, so the OCR features "
-        "are stubbed out. Document text extraction still works for "
-        ".docx / .xlsx / .pptx / .pdf (text-layer) and plain text files.",
+        "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
+        "which is built into Windows 10/11.\n\n"
+        "No additional configuration is needed.\n"
+        "OCR uses your installed Windows language packs.\n\n"
+        "To add more OCR languages:\n"
+        "  Settings -> Time & Language -> Language -> Add a language\n"
+        "  Check 'Optical character recognition'\n\n"
+        "To OCR a file: select it and click 'OCR This File' in the preview pane.",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);
-    tabs->addTab(ocrTab, "OCR (unavailable)");
-#endif
+    tabs->addTab(ocrTab, "OCR");
 
     // -------- Appearance tab --------
     auto* appTab = new QWidget(this);
