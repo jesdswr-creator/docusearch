@@ -16,6 +16,14 @@
 
 #ifdef DOCUSEARCH_HAS_WINDOWS_OCR
 
+// Suppress runtimeobject.lib auto-linking. The WinRT ABI headers
+// (included via <windows.media.ocr.h> etc.) contain:
+//   #pragma comment(lib, "runtimeobject.lib")
+// which pulls in /INCLUDE:WINRT_CRT_MAIN, conflicting with Qt's
+// WIN32 entry point. Defining WINRT_NO_MAKE_LINK before including
+// any WinRT headers prevents the #pragma from being emitted.
+#define WINRT_NO_MAKE_LINK
+
 #include <windows.h>
 #include <wrl/client.h>
 

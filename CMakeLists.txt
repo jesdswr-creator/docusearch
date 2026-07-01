@@ -299,13 +299,9 @@ if(WIN32)
     # Enable Windows OCR via raw COM ABI + dynamic loading.
     if(MSVC)
         target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
-        # The WinRT ABI headers (#include <windows.media.ocr.h> etc.)
-        # contain #pragma comment(lib, "runtimeobject.lib") which auto-links
-        # the library. runtimeobject.lib contains /INCLUDE:WINRT_CRT_MAIN
-        # which conflicts with Qt's WIN32 entry point. We suppress the
-        # auto-linking so our dynamic LoadLibrary approach works.
-        set_target_properties(DocuSearch PROPERTIES
-            LINK_FLAGS "/MANIFEST:NO /NODEFAULTLIB:runtimeobject.lib")
+        # WINRT_NO_MAKE_LINK (defined in WindowsOcrEngine.cpp) suppresses
+        # the #pragma comment(lib, "runtimeobject.lib") from WinRT ABI
+        # headers. No /NODEFAULTLIB needed.
     endif()
 endif()
 
