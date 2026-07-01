@@ -62,6 +62,9 @@
 #include <QFileInfo>
 #include <QSet>
 #include <QElapsedTimer>
+#include <QSvgRenderer>
+#include <QPainter>
+#include <QFile>
 
 #include <sqlite3.h>
 
@@ -439,13 +442,35 @@ void MainWindow::buildToolbar() {
         "QToolButton:pressed { background: palette(dark); } "
         "QToolBar::separator { width: 1px; background: palette(mid); margin: 4px; }");
 
-    auto* addFolderAct = new QAction(QIcon(":/icons/add-folder.svg"), "Add Folder", this);
+    // Create palette-aware icons. Qt's SVG renderer doesn't honor
+    // 'currentColor', so we load the SVG, replace the stroke color
+    // with the palette's text color, and render to a QPixmap. This
+    // ensures icons are visible in both light and dark mode.
+    auto makeIcon = [](const QString& svgPath) -> QIcon {
+        QFile f(svgPath);
+        if (!f.open(QIODevice::ReadOnly)) return QIcon();
+        QString svg = QString::fromUtf8(f.readAll());
+        f.close();
+        // Replace 'currentColor' with the actual text color from the
+        // application palette. We use the palette at icon-creation time;
+        // when the theme changes, applyTheme() re-creates the toolbar.
+        QColor textColor = qApp->palette().color(QPalette::Text);
+        svg.replace("currentColor", textColor.name());
+        QSvgRenderer renderer(svg.toUtf8());
+        QPixmap pm(24, 24);
+        pm.fill(Qt::transparent);
+        QPainter painter(&pm);
+        renderer.render(&painter);
+        return QIcon(pm);
+    };
+
+    auto* addFolderAct = new QAction(makeIcon(":/icons/add-folder.svg"), "Add Folder", this);
     connect(addFolderAct, &QAction::triggered, this, [this]{
         try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
     });
     tb->addAction(addFolderAct);
 
-    auto* extractAct = new QAction(QIcon(":/icons/extract.svg"), "Extract", this);
+    auto* extractAct = new QAction(makeIcon(":/icons/extract.svg"), "Extract", this);
     connect(extractAct, &QAction::triggered, this, [this]{
         try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
     });
@@ -453,19 +478,19 @@ void MainWindow::buildToolbar() {
 
     tb->addSeparator();
 
-    auto* settingsAct = new QAction(QIcon(":/icons/settings.svg"), "Settings", this);
+    auto* settingsAct = new QAction(makeIcon(":/icons/settings.svg"), "Settings", this);
     connect(settingsAct, &QAction::triggered, this, [this]{
         try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
     });
     tb->addAction(settingsAct);
 
-    auto* themeAct = new QAction(QIcon(":/icons/theme.svg"), "Theme", this);
+    auto* themeAct = new QAction(makeIcon(":/icons/theme.svg"), "Theme", this);
     connect(themeAct, &QAction::triggered, this, [this]{
         try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
     });
     tb->addAction(themeAct);
 
-    auto* dupesAct = new QAction(QIcon(":/icons/duplicates.svg"), "Duplicates", this);
+    auto* dupesAct = new QAction(makeIcon(":/icons/duplicates.svg"), "Duplicates", this);
     connect(dupesAct, &QAction::triggered, this, [this]{
         try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
     });
@@ -508,14 +533,26 @@ void MainWindow::applyTheme() {
     QApplication::setPalette(pal);
 
     // Force-update all child widgets to pick up the new palette immediately.
-    // Some widgets (QTextEdit, QListWidget, QGroupBox) cache their palette
-    // and don't repaint unless explicitly told.
     const auto widgets = findChildren<QWidget*>();
     for (QWidget* w : widgets) {
         w->setPalette(pal);
         w->update();
     }
     update();
+
+    // Rebuild the toolbar so SVG icons get re-rendered with the new
+    // palette's text color (dark icons for light mode, light icons
+    // for dark mode). Without this, icons stay the old color after
+    // a theme toggle.
+    for (auto* tb : findChildren<QToolBar*>()) {
+        tb->clear();
+        // Re-add actions by re-calling buildToolbar logic.
+        // We can't call buildToolbar() directly because it creates a
+        // NEW toolbar. Instead, we delete the old toolbar and build
+        // a fresh one.
+        tb->deleteLater();
+    }
+    buildToolbar();
 }
 
 void MainWindow::loadSettings() {
@@ -638,6 +675,58 @@ void MainWindow::openFile(const QString& path) {
 // ============================================================
 // Folder scan + content extraction
 // ============================================================
+void MainWindow::scanFolderFast(const QString& folder) {
+    if (!repo_ || !db_ || folder.isEmpty()) return;
+    sqlite3* raw = db_->raw();
+    if (!raw) return;
+
+    int count = 0;
+    QStringList emptyExcludes;
+    FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
+        const QString path = FileUtils::toNative(fi.absoluteFilePath());
+        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath());
+        const QString filename = fi.fileName();
+        const qint64 size = fi.size();
+        const qint64 created = fi.birthTime().toSecsSinceEpoch();
+        const qint64 modified = fi.lastModified().toSecsSinceEpoch();
+        const char* ocrStat = (Constants::kDocumentExtensions.contains(ext) ||
+                               Constants::kImageExtensions.contains(ext))
+                              ? "pending" : "not_needed";
+
+        sqlite3_stmt* s = nullptr;
+        sqlite3_prepare_v2(raw,
+            "INSERT INTO Files (path, filename, extension, size, "
+            "  created_date, modified_date, indexing_status, ocr_status) "
+            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'metadata_only', ?7) "
+            "ON CONFLICT(path) DO UPDATE SET "
+            "  filename=excluded.filename, extension=excluded.extension, "
+            "  size=excluded.size, modified_date=excluded.modified_date;",
+            -1, &s, nullptr);
+        if (s) {
+            sqlite3_bind_text(s, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(s, 2, filename.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(s, 3, ext.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(s, 4, size);
+            sqlite3_bind_int64(s, 5, created);
+            sqlite3_bind_int64(s, 6, modified);
+            sqlite3_bind_text(s, 7, ocrStat, -1, SQLITE_TRANSIENT);
+            sqlite3_step(s);
+            sqlite3_finalize(s);
+        }
+
+        ++count;
+        if (count % 10 == 0) {
+            statusBar()->showMessage(
+                QString("Scanning... %1 files found").arg(count));
+            QApplication::processEvents();
+        }
+        return true;
+    });
+    updateIndexStats();
+    statusBar()->showMessage(
+        QString("Scan complete: %1 files from %2").arg(count).arg(folder), 5000);
+}
+
 void MainWindow::onAddFolder() {
     if (!repo_ || !db_) return;
     QString folder;
@@ -652,71 +741,12 @@ void MainWindow::onAddFolder() {
     try {
         statusBar()->showMessage("Scanning " + folder + " ...");
         QApplication::processEvents();
-
-        // Get the document extractor registry for content extraction
-        auto& registry = DocumentExtractorRegistry::instance();
-
-        int count = 0;
-        int contentCount = 0;
-        QStringList emptyExcludes;
-        FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
-            FileRecord r;
-            r.path         = FileUtils::toNative(fi.absoluteFilePath());
-            r.filename     = fi.fileName();
-            r.extension    = FileUtils::extensionOf(fi.absoluteFilePath());
-            r.size         = fi.size();
-            r.createdDate  = fi.birthTime();
-            r.modifiedDate = fi.lastModified();
-            r.indexingStatus = Constants::IndexingStatus::kMetadataOnly;
-            // Compute SHA-256 hash for duplicate detection. We cap at
-            // 64 MB so huge files (ISOs, videos) don't stall the scan
-            // for seconds each. Files larger than the cap get a hash
-            // of their first 64 MB, which is still good enough for
-            // dedup in practice.
-            if (settings_.hashLargeFiles) {
-                r.hash = FileUtils::sha256OfFile(r.path, 64 * 1024 * 1024);
-            }
-            // Quick scan: pending for documents/images, not_needed otherwise.
-            if (Constants::kDocumentExtensions.contains(r.extension) ||
-                Constants::kImageExtensions.contains(r.extension)) {
-                r.ocrStatus = Constants::OcrStatus::kPending;
-            } else {
-                r.ocrStatus = Constants::OcrStatus::kNotNeeded;
-            }
-            qint64 fileId = repo_->upsertFile(r);
-
-            // Extract text content for supported document types
-            if (fileId > 0 && registry.extractorFor(r.extension)) {
-                try {
-                    auto result = registry.extractByExtension(r.path, r.extension);
-                    if (!result.text.isEmpty()) {
-                        repo_->updateContent(fileId, result.text, result.source,
-                                             Constants::IndexingStatus::kContentDone,
-                                             Constants::OcrStatus::kNotNeeded);
-                        ++contentCount;
-                    }
-                } catch (...) {
-                    // Failed extraction - mark file so it can be re-tried later.
-                    try { repo_->updateStatus(fileId, Constants::IndexingStatus::kFailed); } catch (...) {}
-                }
-            }
-
-            ++count;
-            if (count % 200 == 0) {
-                statusBar()->showMessage(QString("Scanned %1 files (%2 with content)...")
-                    .arg(count).arg(contentCount));
-                QApplication::processEvents();
-            }
-            return true;
-        });
-
-        updateIndexStats();
-        statusBar()->showMessage(QString("Indexed %1 files (%2 with content) from %3")
-            .arg(count).arg(contentCount).arg(folder));
-        QMessageBox::information(this, "Indexing Complete",
-            QString("Added %1 files to the search index.\n"
-                    "%2 files have extracted text content.\n\n"
-                    "You can now search by filename AND content.").arg(count).arg(contentCount));
+        scanFolderFast(folder);
+        QMessageBox::information(this, "Scan Complete",
+            QString("Files from %1 have been added to the index.\n\n"
+                    "Click the Extract button to extract text content from "
+                    "documents (PDF, DOCX, XLSX, etc.) so you can search "
+                    "by content.").arg(folder));
     } catch (...) {
         statusBar()->showMessage("Folder scan failed.", 5000);
     }
@@ -1333,11 +1363,25 @@ void MainWindow::onOpenSettings() {
         const int rc = dlg.exec();
         refreshSavedSearches();
         if (rc == QDialog::Accepted) {
+            AppSettings oldSettings = settings_;
             settings_ = dlg.result();
             darkMode_ = settings_.darkMode;
             saveSettings();
             applyTheme();
             updateIndexStats();
+
+            // If the user added new indexed drives in Settings, scan
+            // them now so the user sees files appear immediately.
+            // Previously, adding drives in Settings did nothing — the
+            // user had to manually use Index → Add Folder to Index.
+            for (const QString& drive : settings_.indexedDrives) {
+                if (!oldSettings.indexedDrives.contains(drive)) {
+                    // New drive added — scan it.
+                    statusBar()->showMessage("Scanning " + drive + " ...");
+                    QApplication::processEvents();
+                    scanFolderFast(drive);
+                }
+            }
         }
     } catch (...) {
         statusBar()->showMessage("Settings dialog failed.", 3000);

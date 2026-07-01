@@ -84,6 +84,11 @@ private:
     void refreshSavedSearches();
     void openFile(const QString& path);
 
+    // Fast metadata-only scan of a folder. Inserts file metadata via
+    // raw SQL (no transactions, no hashing, no content extraction).
+    // Used by onAddFolder and by Settings when new drives are added.
+    void scanFolderFast(const QString& folder);
+
     // Refresh the preview pane with the currently-selected file's
     // extracted text (re-reads from the DB so newly-extracted content
     // appears immediately after an Extract run finishes).
