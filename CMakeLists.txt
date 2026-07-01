@@ -68,6 +68,9 @@ endif()
 # dependencies. This removes ~40 MB from the build and eliminates
 # the crash-prone Tesseract/Leptonica DLLs.
 
+# PkgConfig is needed for Poppler detection.
+find_package(PkgConfig QUIET)
+
 # Poppler (Qt binding preferred)
 if(DOCUSEARCH_ENABLE_POPPLER)
 if(PkgConfig_FOUND)
