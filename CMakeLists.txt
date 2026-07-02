@@ -202,7 +202,7 @@ set(APP_HEADERS
     src/documents/XlsxExtractor.h
     src/documents/PptxExtractor.h
     src/documents/DocumentExtractorRegistry.h
-    src/ocr/OcrEngine.h
+    src/ocr/WindowsOcrEngine.h
     src/ocr/OcrWorkerPool.h
     src/indexer/MetadataIndexer.h
     src/indexer/ContentIndexer.h
