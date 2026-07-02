@@ -48,18 +48,25 @@ jobs:
           Write-Host "=== Available architectures for Qt $env:QT_VERSION ==="
           python -m aqt list-qt windows desktop --arch $env:QT_VERSION
           python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
-          $msvcRoot = "C:\Qt\$env:QT_VERSION\$env:QT_ARCH"
-          if (-not (Test-Path $msvcRoot)) {
-            # Try common arch names as fallback
-            $msvcRoot = "C:\Qt\$env:QT_VERSION\win64_msvc2022_64"
+          # Find the Qt installation directory. aqtinstall creates
+          # C:\Qt\<version>\<arch>\ but the arch name may vary.
+          $msvcRoot = $null
+          $qtBase = "C:\Qt\$env:QT_VERSION"
+          if (Test-Path $qtBase) {
+            # List all subdirectories and find the MSVC one.
+            $candidates = Get-ChildItem -Path $qtBase -Directory -ErrorAction SilentlyContinue
+            foreach ($dir in $candidates) {
+              if ($dir.Name -match 'msvc') {
+                $msvcRoot = $dir.FullName
+                break
+              }
+            }
           }
-          if (-not (Test-Path $msvcRoot)) {
-            $msvcRoot = "C:\Qt\$env:QT_VERSION\win64_msvc2019_64"
+          if (-not $msvcRoot) {
+            # Broader search
+            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "win64_msvc*" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
-          if (-not (Test-Path $msvcRoot)) {
-            $msvcRoot = Get-ChildItem -Path "C:\Qt\$env:QT_VERSION" -Filter "win64_msvc*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-          }
-          if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
+          if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found. Searched: $qtBase and C:\Qt recursively" }
           $qtBin = Join-Path $msvcRoot "bin"
           Write-Host "Qt root: $msvcRoot"
           Get-ChildItem $qtBin -Filter "Qt6*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
