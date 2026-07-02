@@ -821,16 +821,38 @@ void MainWindow::onExtract() {
     statusBar()->showMessage(
         QString("Extracting content from %1 files...").arg(total));
 
-    // Native extraction ONLY. No OCR — Poppler page rendering +
-    // Tesseract was causing memory corruption crashes on certain PDFs.
+    // Process ONE file per timer tick (0ms = next event loop iteration).
+    // This keeps the UI fully responsive — each file extraction is a
+    // single Poppler/DOCX parse (typically <1 second), and between
+    // files the event loop runs normally so the window doesn't freeze.
+    auto* timer = new QTimer(this);
+    timer->setInterval(0);
+
     auto& registry = DocumentExtractorRegistry::instance();
     sqlite3* raw = db_->raw();
-    int done = 0, failed = 0;
+    int idx = 0;
+    int done = 0;
+    int failed = 0;
 
-    for (int idx = 0; idx < total; ++idx) {
+    connect(timer, &QTimer::timeout, this, [this, timer, total, &todo, &registry, raw, &idx, &done, &failed]() {
+        if (idx >= total) {
+            // All done.
+            timer->stop();
+            timer->deleteLater();
+            contentExtractionRunning_ = false;
+            updateIndexStats();
+            refreshPreviewForSelectedFile();
+            statusBar()->showMessage(
+                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+                    .arg(done).arg(failed).arg(total), 8000);
+            return;
+        }
+
         const auto& item = todo[idx];
+        statusBar()->showMessage(
+            QString("Extracting: %1/%2 (done: %3, failed: %4)...")
+                .arg(idx + 1).arg(total).arg(done).arg(failed));
 
-        // Check if file still exists.
         if (!QFileInfo::exists(item.path)) {
             if (raw) {
                 sqlite3_exec(raw,
@@ -854,10 +876,6 @@ void MainWindow::onExtract() {
             }
 
             if (ok && raw) {
-                // Write directly via raw SQL — no transactions, no
-                // repo_->updateContent (which uses begin/commit and can
-                // leave the DB in a broken state if an exception occurs
-                // mid-transaction).
                 QByteArray textBytes = extractedText.toUtf8();
                 QByteArray srcBytes = source.toUtf8();
                 qint64 charCount = extractedText.size();
@@ -890,7 +908,7 @@ void MainWindow::onExtract() {
                         .arg(item.fileId).toUtf8().constData(),
                     nullptr, nullptr, nullptr);
 
-                // 3. Update FTS index (delete old + insert new).
+                // 3. Update FTS index.
                 sqlite3_stmt* del = nullptr;
                 sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
                                    -1, &del, nullptr);
@@ -930,19 +948,10 @@ void MainWindow::onExtract() {
             }
         }
 
-        // Update status bar every file.
-        statusBar()->showMessage(
-            QString("Extracting: %1/%2 (done: %3, failed: %4)...")
-                .arg(idx + 1).arg(total).arg(done).arg(failed));
-        QApplication::processEvents();
-    }
+        ++idx;
+    });
 
-    contentExtractionRunning_ = false;
-    updateIndexStats();
-    refreshPreviewForSelectedFile();
-    statusBar()->showMessage(
-        QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-            .arg(done).arg(failed).arg(total), 8000);
+    timer->start();
 }
 
 void MainWindow::autoScanIndexedFolders() {
