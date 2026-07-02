@@ -150,14 +150,13 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
 
     auto* ocrInfo = new QLabel(
         "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
-        "which is built into Windows 10/11.\n\n"
-        "OCR uses your Windows display language automatically.\n"
-        "No separate installation or configuration is needed.\n\n"
+        "built into Windows 10/11.\n\n"
+        "OCR uses your Windows display language.\n"
+        "No installation or configuration needed.\n\n"
         "To OCR a file:\n"
-        "  1. Select a scanned PDF or image in the search results\n"
+        "  1. Select a scanned PDF or image\n"
         "  2. Click 'OCR This File' in the preview pane\n"
-        "  3. The recognized text will appear in the preview\n\n"
-        "Note: OCR works best on clear, high-resolution scans.",
+        "  3. Text appears in the preview",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);

@@ -126,7 +126,6 @@ MainWindow::MainWindow(QWidget* parent)
 
     // --- UI ------------------------------------------------------------
     buildCentral();
-    buildMenus();
     buildToolbar();
     applyTheme();
 
@@ -231,7 +230,7 @@ void MainWindow::buildCentral() {
     // ============================================================
     auto* sidebarContainer = new QWidget(centralWidget);
     sidebarContainer->setObjectName("sidebar");
-    sidebarContainer->setFixedWidth(180);
+    sidebarContainer->setFixedWidth(200);
 
     auto* sidebarLay = new QVBoxLayout(sidebarContainer);
     sidebarLay->setContentsMargins(0, 0, 0, 0);
@@ -368,7 +367,7 @@ void MainWindow::buildCentral() {
     // ============================================================
     auto* rightPanel = new QWidget(centralWidget);
     rightPanel->setObjectName("rightPanel");
-    rightPanel->setFixedWidth(280);
+    rightPanel->setFixedWidth(300);
 
     auto* rightLay = new QVBoxLayout(rightPanel);
     rightLay->setContentsMargins(8, 8, 8, 8);
@@ -974,22 +973,28 @@ void MainWindow::onExtract() {
     statusBar()->showMessage(
         QString("Extracting content from %1 files...").arg(total));
 
-    // Process ONE file per timer tick (0ms = next event loop iteration).
-    // This keeps the UI fully responsive — each file extraction is a
-    // single Poppler/DOCX parse (typically <1 second), and between
-    // files the event loop runs normally so the window doesn't freeze.
+    // CRITICAL: Use QSharedPointer to heap-allocate the extraction state
+    // so it survives after onExtract() returns. The QTimer fires
+    // asynchronously and the lambda needs access to todo/idx/done/failed.
+    // Capturing by reference (&todo, &idx) would crash because those
+    // stack variables are destroyed when onExtract() returns.
+    struct ExtractState {
+        QList<TodoItem> todo;
+        int idx = 0;
+        int done = 0;
+        int failed = 0;
+    };
+    auto state = QSharedPointer<ExtractState>::create();
+    state->todo = std::move(todo);
+
     auto* timer = new QTimer(this);
     timer->setInterval(0);
 
-    auto& registry = DocumentExtractorRegistry::instance();
-    sqlite3* raw = db_->raw();
-    int idx = 0;
-    int done = 0;
-    int failed = 0;
+    connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
+        auto& registry = DocumentExtractorRegistry::instance();
+        sqlite3* raw = db_->raw();
 
-    connect(timer, &QTimer::timeout, this, [this, timer, total, &todo, &registry, raw, &idx, &done, &failed]() {
-        if (idx >= total) {
-            // All done.
+        if (state->idx >= total) {
             timer->stop();
             timer->deleteLater();
             contentExtractionRunning_ = false;
@@ -997,14 +1002,14 @@ void MainWindow::onExtract() {
             refreshPreviewForSelectedFile();
             statusBar()->showMessage(
                 QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                    .arg(done).arg(failed).arg(total), 8000);
+                    .arg(state->done).arg(state->failed).arg(total), 8000);
             return;
         }
 
-        const auto& item = todo[idx];
+        const auto& item = state->todo[state->idx];
         statusBar()->showMessage(
             QString("Extracting: %1/%2 (done: %3, failed: %4)...")
-                .arg(idx + 1).arg(total).arg(done).arg(failed));
+                .arg(state->idx + 1).arg(total).arg(state->done).arg(state->failed));
 
         if (!QFileInfo::exists(item.path)) {
             if (raw) {
@@ -1013,7 +1018,7 @@ void MainWindow::onExtract() {
                         .arg(item.fileId).toUtf8().constData(),
                     nullptr, nullptr, nullptr);
             }
-            ++failed;
+            ++state->failed;
         } else {
             QString extractedText;
             QString source = "native";
@@ -1034,7 +1039,6 @@ void MainWindow::onExtract() {
                 qint64 charCount = extractedText.size();
                 qint64 now = QDateTime::currentSecsSinceEpoch();
 
-                // 1. Upsert DocumentText.
                 sqlite3_stmt* upd = nullptr;
                 sqlite3_prepare_v2(raw,
                     "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
@@ -1055,13 +1059,11 @@ void MainWindow::onExtract() {
                     sqlite3_finalize(upd);
                 }
 
-                // 2. Update Files status.
                 sqlite3_exec(raw,
                     QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
                         .arg(item.fileId).toUtf8().constData(),
                     nullptr, nullptr, nullptr);
 
-                // 3. Update FTS index.
                 sqlite3_stmt* del = nullptr;
                 sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
                                    -1, &del, nullptr);
@@ -1089,19 +1091,19 @@ void MainWindow::onExtract() {
                     sqlite3_step(ins);
                     sqlite3_finalize(ins);
                 }
-                ++done;
+                ++state->done;
             } else if (raw) {
                 sqlite3_exec(raw,
                     QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
                         .arg(item.fileId).toUtf8().constData(),
                     nullptr, nullptr, nullptr);
-                ++failed;
+                ++state->failed;
             } else {
-                ++failed;
+                ++state->failed;
             }
         }
 
-        ++idx;
+        ++state->idx;
     });
 
     timer->start();
@@ -1512,11 +1514,14 @@ void MainWindow::onOcrThisFile(const QString& path) {
     // Initialize Windows OCR engine.
     WindowsOcrEngine ocrEngine;
     if (!ocrEngine.init()) {
-        QMessageBox::warning(this, "OCR",
-            "Windows OCR is not available on this system.\n\n"
-            "To use OCR, install language packs via:\n"
-            "  Settings → Time & Language → Language → Add a language\n"
-            "  Check 'Optical character recognition' when adding the language.");
+        QMessageBox::information(this, "OCR",
+            "Windows OCR could not be initialized.\n\n"
+            "This is normal on some Windows 10 systems.\n"
+            "OCR requires Windows 10 version 1903 or later.\n\n"
+            "You can still:\n"
+            "  - Search by filename\n"
+            "  - Extract text from born-digital PDFs, DOCX, XLSX\n"
+            "  - Use tags, notes, and saved searches");
         return;
     }
 
