@@ -120,12 +120,12 @@ jobs:
       - name: Build (Release)
         shell: pwsh
         run: |
-          # Force clean build — delete all .obj and .tlog files to prevent
-          # MSBuild's incremental build from skipping source files.
-          # Without this, MSBuild only compiles mocs_compilation_Release.cpp
-          # and then links, causing LNK2019 (main.cpp never compiled).
-          Get-ChildItem -Path build -Filter "*.obj" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
-          Get-ChildItem -Path build -Filter "*.tlog" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+          # Force clean build — delete intermediate files to prevent
+          # MSBuild incremental build from skipping source files.
+          $objFiles = Get-ChildItem -Path build -Filter "*.obj" -Recurse -ErrorAction SilentlyContinue
+          if ($objFiles) { $objFiles | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue } }
+          $tlogFiles = Get-ChildItem -Path build -Filter "*.tlog" -Recurse -ErrorAction SilentlyContinue
+          if ($tlogFiles) { $tlogFiles | ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue } }
           cmake --build build --config Release --parallel
 
       - name: Run unit tests
