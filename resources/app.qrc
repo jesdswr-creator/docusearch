@@ -3,10 +3,26 @@
         <file>themes/dark.qss</file>
         <file>themes/light.qss</file>
         <file>icons/DocuSearch-256.png</file>
-        <file>icons/add-folder.svg</file>
-        <file>icons/extract.svg</file>
-        <file>icons/settings.svg</file>
-        <file>icons/theme.svg</file>
-        <file>icons/duplicates.svg</file>
+        <file>icons/lucide/search.svg</file>
+        <file>icons/lucide/folder-plus.svg</file>
+        <file>icons/lucide/settings.svg</file>
+        <file>icons/lucide/moon.svg</file>
+        <file>icons/lucide/sun.svg</file>
+        <file>icons/lucide/duplicate.svg</file>
+        <file>icons/lucide/file-text.svg</file>
+        <file>icons/lucide/tag.svg</file>
+        <file>icons/lucide/sticky-note.svg</file>
+        <file>icons/lucide/bar-chart-3.svg</file>
+        <file>icons/lucide/clock.svg</file>
+        <file>icons/lucide/help-circle.svg</file>
+        <file>icons/lucide/info.svg</file>
+        <file>icons/lucide/plus.svg</file>
+        <file>icons/lucide/check-circle.svg</file>
+        <file>icons/lucide/database.svg</file>
+        <file>icons/lucide/x.svg</file>
+        <file>icons/lucide/chevron-down.svg</file>
+        <file>icons/lucide/arrow-left.svg</file>
+        <file>icons/lucide/arrow-right.svg</file>
+        <file>icons/lucide/copy.svg</file>
     </qresource>
 </RCC>

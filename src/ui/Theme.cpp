@@ -396,6 +396,9 @@ QWidget#statusSection {
     border-top: 1px solid #E9ECEF;
     padding: 12px;
 }
+QLabel#statusHeader { font-size: 12px; font-weight: 600; color: #198754; }
+QLabel#statusFileCount { font-size: 12px; color: #6C757D; }
+QLabel#statusDbSize { font-size: 12px; color: #6C757D; }
 
 /* ===== Custom labels ===== */
 QLabel#titleLabel { font-size: 18px; font-weight: 600; color: #212529; }
@@ -754,6 +757,9 @@ QWidget#statusSection {
     border-top: 1px solid #333333;
     padding: 12px;
 }
+QLabel#statusHeader { font-size: 12px; font-weight: 600; color: #4CC2FF; }
+QLabel#statusFileCount { font-size: 12px; color: #A0A0A0; }
+QLabel#statusDbSize { font-size: 12px; color: #A0A0A0; }
 
 /* ===== Custom labels ===== */
 QLabel#titleLabel { font-size: 18px; font-weight: 600; color: #FFFFFF; }

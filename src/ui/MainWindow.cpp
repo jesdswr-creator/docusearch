@@ -237,19 +237,45 @@ void MainWindow::buildCentral() {
     sidebarLay->setContentsMargins(0, 0, 0, 0);
     sidebarLay->setSpacing(0);
 
-    // Navigation list (visual only — no behavior wired up yet).
+    // Navigation list with Lucide icons.
     sidebar_ = new QListWidget(sidebarContainer);
-    sidebar_->setObjectName("navItem");  // the QListWidget holds the nav items
-    const QStringList navItems = {
+    sidebar_->setObjectName("sidebar");
+    const QStringList navLabels = {
         "Search", "Saved", "Tags", "Notes",
         "Stats", "Recent", "Settings", "Help", "About"
     };
-    for (const QString& label : navItems) {
-        auto* item = new QListWidgetItem(label, sidebar_);
-        item->setData(Qt::UserRole, label);
-        // Note: QListWidgetItem itself can't carry an objectName — the
-        // parent list's objectName="navItem" plus the Theme QSS
-        // QListWidget::item selector covers per-item styling.
+    const QStringList navIcons = {
+        ":/icons/lucide/search.svg",
+        ":/icons/lucide/clock.svg",
+        ":/icons/lucide/tag.svg",
+        ":/icons/lucide/sticky-note.svg",
+        ":/icons/lucide/bar-chart-3.svg",
+        ":/icons/lucide/clock.svg",
+        ":/icons/lucide/settings.svg",
+        ":/icons/lucide/help-circle.svg",
+        ":/icons/lucide/info.svg"
+    };
+
+    // Icon renderer: load SVG, replace currentColor with palette text.
+    auto makeSidebarIcon = [](const QString& svgPath) -> QIcon {
+        QFile f(svgPath);
+        if (!f.open(QIODevice::ReadOnly)) return QIcon();
+        QString svg = QString::fromUtf8(f.readAll());
+        f.close();
+        QColor textColor = qApp->palette().color(QPalette::Text);
+        svg.replace("currentColor", textColor.name());
+        QSvgRenderer renderer(svg.toUtf8());
+        QPixmap pm(20, 20);
+        pm.fill(Qt::transparent);
+        QPainter painter(&pm);
+        renderer.render(&painter);
+        return QIcon(pm);
+    };
+
+    for (int i = 0; i < navLabels.size(); ++i) {
+        auto* item = new QListWidgetItem(makeSidebarIcon(navIcons[i]), navLabels[i], sidebar_);
+        item->setData(Qt::UserRole, navLabels[i]);
+        item->setSizeHint(QSize(180, 38));
     }
     if (sidebar_->count() > 0) {
         sidebar_->setCurrentRow(0);
@@ -264,9 +290,13 @@ void MainWindow::buildCentral() {
     statusLay->setContentsMargins(12, 8, 12, 10);
     statusLay->setSpacing(2);
 
-    sidebarFileCountLabel_ = new QLabel("Files: 0", statusSection);
+    auto* statusHeader = new QLabel("Indexed", statusSection);
+    statusHeader->setObjectName("statusHeader");
+    statusLay->addWidget(statusHeader);
+
+    sidebarFileCountLabel_ = new QLabel("0 files", statusSection);
     sidebarFileCountLabel_->setObjectName("statusFileCount");
-    sidebarDbSizeLabel_    = new QLabel("Size: 0 B", statusSection);
+    sidebarDbSizeLabel_    = new QLabel("0 B", statusSection);
     sidebarDbSizeLabel_->setObjectName("statusDbSize");
     statusLay->addWidget(sidebarFileCountLabel_);
     statusLay->addWidget(sidebarDbSizeLabel_);
@@ -578,13 +608,13 @@ void MainWindow::buildToolbar() {
     };
 
     // Parent actions to the toolbar so they're cleaned up with it.
-    auto* addFolderAct = new QAction(makeIcon(":/icons/add-folder.svg"), "Add Folder", toolbar_);
+    auto* addFolderAct = new QAction(makeIcon(":/icons/lucide/folder-plus.svg"), "Add Folder", toolbar_);
     connect(addFolderAct, &QAction::triggered, this, [this]{
         try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
     });
     toolbar_->addAction(addFolderAct);
 
-    auto* extractAct = new QAction(makeIcon(":/icons/extract.svg"), "Extract", toolbar_);
+    auto* extractAct = new QAction(makeIcon(":/icons/lucide/file-text.svg"), "Extract", toolbar_);
     connect(extractAct, &QAction::triggered, this, [this]{
         try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
     });
@@ -592,19 +622,19 @@ void MainWindow::buildToolbar() {
 
     toolbar_->addSeparator();
 
-    auto* settingsAct = new QAction(makeIcon(":/icons/settings.svg"), "Settings", toolbar_);
+    auto* settingsAct = new QAction(makeIcon(":/icons/lucide/settings.svg"), "Settings", toolbar_);
     connect(settingsAct, &QAction::triggered, this, [this]{
         try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
     });
     toolbar_->addAction(settingsAct);
 
-    auto* themeAct = new QAction(makeIcon(":/icons/theme.svg"), "Theme", toolbar_);
+    auto* themeAct = new QAction(makeIcon(darkMode_ ? ":/icons/lucide/sun.svg" : ":/icons/lucide/moon.svg"), "Theme", toolbar_);
     connect(themeAct, &QAction::triggered, this, [this]{
         try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
     });
     toolbar_->addAction(themeAct);
 
-    auto* dupesAct = new QAction(makeIcon(":/icons/duplicates.svg"), "Duplicates", toolbar_);
+    auto* dupesAct = new QAction(makeIcon(":/icons/lucide/duplicate.svg"), "Duplicates", toolbar_);
     connect(dupesAct, &QAction::triggered, this, [this]{
         try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
     });
@@ -1228,7 +1258,7 @@ void MainWindow::updateIndexStats() {
 
         // Update the sidebar status labels (bottom of the left nav).
         if (sidebarFileCountLabel_) {
-            sidebarFileCountLabel_->setText(QString("Files: %1").arg(total));
+            sidebarFileCountLabel_->setText(QString("%1 files").arg(total));
         }
         if (sidebarDbSizeLabel_) {
             qint64 dbSize = 0;
@@ -1236,8 +1266,7 @@ void MainWindow::updateIndexStats() {
                 QFile f(Config::instance().dbPath());
                 if (f.exists()) dbSize = f.size();
             }
-            sidebarDbSizeLabel_->setText(
-                QString("Size: %1").arg(Utils::formatFileSize(dbSize)));
+            sidebarDbSizeLabel_->setText(Utils::formatFileSize(dbSize));
         }
 
         // Update the hidden indexing widget (kept for stats plumbing;
