@@ -14,8 +14,8 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.7.3'
-  QT_ARCH: 'win64_msvc2019_64'
+  QT_VERSION: '6.8.1'
+  QT_ARCH: 'win64_msvc2022_64'
 
 jobs:
   build-windows:
@@ -50,7 +50,14 @@ jobs:
           python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
           $msvcRoot = "C:\Qt\$env:QT_VERSION\$env:QT_ARCH"
           if (-not (Test-Path $msvcRoot)) {
-            $msvcRoot = Get-ChildItem -Path "C:\Qt" -Filter "msvc*" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+            # Try common arch names as fallback
+            $msvcRoot = "C:\Qt\$env:QT_VERSION\win64_msvc2022_64"
+          }
+          if (-not (Test-Path $msvcRoot)) {
+            $msvcRoot = "C:\Qt\$env:QT_VERSION\win64_msvc2019_64"
+          }
+          if (-not (Test-Path $msvcRoot)) {
+            $msvcRoot = Get-ChildItem -Path "C:\Qt\$env:QT_VERSION" -Filter "win64_msvc*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $msvcRoot -or -not (Test-Path $msvcRoot)) { throw "Qt MSVC dir not found" }
           $qtBin = Join-Path $msvcRoot "bin"
