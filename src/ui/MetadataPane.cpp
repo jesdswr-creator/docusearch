@@ -13,6 +13,7 @@
 #include <QFont>
 #include <QBrush>
 #include <QColor>
+#include <QPalette>
 
 namespace DocuSearch {
 
@@ -91,8 +92,13 @@ void MetadataPane::setRecord(const FileRecord& r) {
     const QString ocrText  = humanizeStatus(r.ocrStatus);
     status_->setText(idxText);
     ocrStatus_->setText(ocrText);
-    status_->setStyleSheet(QString("color: %1;").arg(colorForStatus(r.indexingStatus)));
-    ocrStatus_->setStyleSheet(QString("color: %1;").arg(colorForStatus(r.ocrStatus)));
+    // Set text color directly via palette instead of inline stylesheet.
+    QPalette pal = status_->palette();
+    pal.setColor(QPalette::WindowText, QColor(colorForStatus(r.indexingStatus)));
+    status_->setPalette(pal);
+    pal = ocrStatus_->palette();
+    pal.setColor(QPalette::WindowText, QColor(colorForStatus(r.ocrStatus)));
+    ocrStatus_->setPalette(pal);
 }
 
 void MetadataPane::styleLabel(QLabel* lbl) {

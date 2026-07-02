@@ -45,13 +45,8 @@ IndexingProgressWidget::IndexingProgressWidget(QWidget* parent) : QWidget(parent
     headerFont.setBold(true);
     phaseLabel_->setFont(headerFont);
     phaseLabel_->setAlignment(Qt::AlignCenter);
-    phaseLabel_->setStyleSheet(
-        "QLabel {"
-        "  color: #FFFFFF;"
-        "  background: #0078D4;"
-        "  padding: 6px 10px;"
-        "  border-radius: 4px;"
-        "}");
+    // No inline stylesheet — styled via Theme QSS using objectName.
+    phaseLabel_->setObjectName("phaseLabel");
     v->addWidget(phaseLabel_);
 
     auto* gb = new QGroupBox("Indexing Status", inner);

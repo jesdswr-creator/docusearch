@@ -211,6 +211,12 @@ QLabel#sectionLabel  {
     text-transform: uppercase;
     letter-spacing: 1.2px;
 }
+QLabel#phaseLabel {
+    color: #ffffff;
+    background-color: #005fb8;
+    padding: 6px 10px;
+    border-radius: 4px;
+}
 
 /* ---- Group box ---- */
 QGroupBox {
@@ -442,6 +448,12 @@ QLabel#sectionLabel  {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1.2px;
+}
+QLabel#phaseLabel {
+    color: #ffffff;
+    background-color: #005fb8;
+    padding: 6px 10px;
+    border-radius: 4px;
 }
 
 QGroupBox {
