@@ -248,10 +248,6 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     connect(backupBtn, &QPushButton::clicked, this, &SettingsDialog::onBackupNow);
     connect(restoreBtn,&QPushButton::clicked, this, &SettingsDialog::onRestoreNow);
     connect(vacuumBtn, &QPushButton::clicked, this, &SettingsDialog::onVacuumDb);
-    connect(tdBrowse,  &QPushButton::clicked, this, [this]{
-        const QString d = QFileDialog::getExistingDirectory(this, "Tessdata folder");
-        if (!d.isEmpty()) tessdataEdit_->setText(d);
-    });
 
     // Clicking a saved search loads it into the name/query editors so
     // the user can edit it (saving with the same name overwrites).
