@@ -673,8 +673,15 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
 
-    // Apply to QApplication so ALL widgets (including tags/notes/preview) get it
+    // Apply to QApplication so ALL widgets get it
     QApplication::setPalette(pal);
+
+    // CRITICAL: Apply the Theme QSS stylesheet. Without this, the 800+
+    // lines of modern QSS in Theme.cpp (border radius, padding, hover
+    // states, sidebar styling, button styles, etc.) are never applied.
+    // Only QPalette is set above, which gives basic colors but NOT the
+    // modern Fluent Design appearance.
+    Theme::apply(darkMode_ ? Theme::Mode::Dark : Theme::Mode::Light);
 
     // Force-update all child widgets to pick up the new palette immediately.
     const auto widgets = findChildren<QWidget*>();
