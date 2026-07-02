@@ -138,25 +138,26 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
-    // OCR is handled by Windows OCR (Windows.Media.Ocr), which is built
-    // into Windows 10/11. No tessdata path or language configuration is
-    // needed — Windows OCR uses the user's installed language packs.
+    // OCR uses Windows OCR (built into Windows 10/11). No separate
+    // installation or language configuration needed — it uses the
+    // Windows display language automatically.
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
-    tessdataEdit_->setVisible(false);  // hidden, kept for compatibility
+    tessdataEdit_->setVisible(false);
     langCombo_ = new QComboBox(this);
-    langCombo_->setVisible(false);  // hidden, kept for compatibility
+    langCombo_->setVisible(false);
 
     auto* ocrInfo = new QLabel(
         "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
         "which is built into Windows 10/11.\n\n"
-        "No additional configuration is needed.\n"
-        "OCR uses your installed Windows language packs.\n\n"
-        "To add more OCR languages:\n"
-        "  Settings -> Time & Language -> Language -> Add a language\n"
-        "  Check 'Optical character recognition'\n\n"
-        "To OCR a file: select it and click 'OCR This File' in the preview pane.",
+        "OCR uses your Windows display language automatically.\n"
+        "No separate installation or configuration is needed.\n\n"
+        "To OCR a file:\n"
+        "  1. Select a scanned PDF or image in the search results\n"
+        "  2. Click 'OCR This File' in the preview pane\n"
+        "  3. The recognized text will appear in the preview\n\n"
+        "Note: OCR works best on clear, high-resolution scans.",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);

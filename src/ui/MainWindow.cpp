@@ -71,6 +71,10 @@
 #include <QSvgRenderer>
 #include <QPainter>
 #include <QFile>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 
 #include <sqlite3.h>
 
@@ -197,66 +201,168 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 // UI construction
 // ============================================================
 void MainWindow::buildCentral() {
-    mainSplitter_ = new QSplitter(Qt::Horizontal, this);
-    setCentralWidget(mainSplitter_);
+    // ---- New 4-area layout (sidebar | center | rightPanel) ----
+    //
+    //   +-----------+--------------------------+------------+
+    //   | sidebar_  | toolbar_ + searchBar_    | metadataPane_ |
+    //   | (180px)   | ----------------------   | (280px)       |
+    //   |           | results | preview        +---------------+
+    //   | nav items | (40%)  | (60%)           | tagsNotesPane_|
+    //   |           |        |                 |               |
+    //   | status    |        |                 |               |
+    //   +-----------+--------+-----------------+---------------+
+    //
+    // - Sidebar: fixed 180px QListWidget with nav items + status section
+    // - Center:  QVBoxLayout (toolbar, searchBar, centerSplitter)
+    // - Right:   fixed 280px QVBoxLayout (metadata, tags/notes)
+    //
+    // All widgets are given objectNames so Theme QSS can target them
+    // without any inline setStyleSheet() calls.
 
-    // Left: search bar + results (60% of width, min 300px)
-    auto* leftWidget = new QWidget(this);
-    leftWidget->setMinimumWidth(300);
-    auto* leftLay = new QVBoxLayout(leftWidget);
-    leftLay->setContentsMargins(8, 8, 8, 8);
-    searchBar_ = new SearchBar(leftWidget);
-    resultsPane_ = new ResultsPane(leftWidget);
-    leftLay->addWidget(searchBar_);
-    leftLay->addWidget(resultsPane_, 1);
-    mainSplitter_->addWidget(leftWidget);
+    auto* centralWidget = new QWidget(this);
+    centralWidget->setObjectName("centralWidget");
+    auto* mainLay = new QHBoxLayout(centralWidget);
+    mainLay->setContentsMargins(0, 0, 0, 0);
+    mainLay->setSpacing(0);
+    setCentralWidget(centralWidget);
 
-    // Middle: preview only (25% of width, min 200px)
-    previewPane_ = new PreviewPane(this);
-    previewPane_->setMinimumWidth(200);
+    // ============================================================
+    // 1) LEFT SIDEBAR (fixed 180px)
+    // ============================================================
+    auto* sidebarContainer = new QWidget(centralWidget);
+    sidebarContainer->setObjectName("sidebar");
+    sidebarContainer->setFixedWidth(180);
+
+    auto* sidebarLay = new QVBoxLayout(sidebarContainer);
+    sidebarLay->setContentsMargins(0, 0, 0, 0);
+    sidebarLay->setSpacing(0);
+
+    // Navigation list (visual only — no behavior wired up yet).
+    sidebar_ = new QListWidget(sidebarContainer);
+    sidebar_->setObjectName("navItem");  // the QListWidget holds the nav items
+    const QStringList navItems = {
+        "Search", "Saved", "Tags", "Notes",
+        "Stats", "Recent", "Settings", "Help", "About"
+    };
+    for (const QString& label : navItems) {
+        auto* item = new QListWidgetItem(label, sidebar_);
+        item->setData(Qt::UserRole, label);
+        // Note: QListWidgetItem itself can't carry an objectName — the
+        // parent list's objectName="navItem" plus the Theme QSS
+        // QListWidget::item selector covers per-item styling.
+    }
+    if (sidebar_->count() > 0) {
+        sidebar_->setCurrentRow(0);
+        // Visual hint: the "Search" row is the active page.
+    }
+    sidebarLay->addWidget(sidebar_, 1);
+
+    // Status section pinned to the bottom of the sidebar.
+    auto* statusSection = new QWidget(sidebarContainer);
+    statusSection->setObjectName("statusSection");
+    auto* statusLay = new QVBoxLayout(statusSection);
+    statusLay->setContentsMargins(12, 8, 12, 10);
+    statusLay->setSpacing(2);
+
+    sidebarFileCountLabel_ = new QLabel("Files: 0", statusSection);
+    sidebarFileCountLabel_->setObjectName("statusFileCount");
+    sidebarDbSizeLabel_    = new QLabel("Size: 0 B", statusSection);
+    sidebarDbSizeLabel_->setObjectName("statusDbSize");
+    statusLay->addWidget(sidebarFileCountLabel_);
+    statusLay->addWidget(sidebarDbSizeLabel_);
+
+    sidebarLay->addWidget(statusSection);
+
+    mainLay->addWidget(sidebarContainer);
+
+    // ============================================================
+    // 2) CENTER PANEL (toolbar + search bar + results|preview splitter)
+    // ============================================================
+    auto* centerWidget = new QWidget(centralWidget);
+    centerWidget->setObjectName("centerPanel");
+    auto* centerLay = new QVBoxLayout(centerWidget);
+    centerLay->setContentsMargins(8, 8, 8, 8);
+    centerLay->setSpacing(6);
+
+    // Toolbar lives at the top of the center panel, above the search bar.
+    // buildToolbar() (called next in the ctor) populates this widget with
+    // the Add Folder / Extract / Settings / Theme / Duplicates actions.
+    if (!toolbar_) {
+        toolbar_ = new QToolBar(centerWidget);
+        toolbar_->setObjectName("mainToolbar");
+        toolbar_->setMovable(false);
+        toolbar_->setIconSize(QSize(18, 18));
+        toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    }
+    centerLay->addWidget(toolbar_);
+
+    // Search bar with Search button + Saved Searches dropdown + Add Folder.
+    searchBar_ = new SearchBar(centerWidget);
+    searchBar_->setObjectName("searchBar");
+    centerLay->addWidget(searchBar_);
+
+    // Center splitter: results (left ~40%) | preview (right ~60%).
+    mainSplitter_ = new QSplitter(Qt::Horizontal, centerWidget);
+    mainSplitter_->setObjectName("centerSplitter");
+    centerLay->addWidget(mainSplitter_, 1);
+
+    // Left half: results pane (ResultsPane already contains its own
+    // count label internally, so we just embed it directly).
+    resultsPane_ = new ResultsPane(mainSplitter_);
+    resultsPane_->setObjectName("resultsPane");
+    resultsPane_->setMinimumWidth(280);
+    mainSplitter_->addWidget(resultsPane_);
+
+    // Right half: preview pane.
+    previewPane_ = new PreviewPane(mainSplitter_);
+    previewPane_->setObjectName("previewPane");
+    previewPane_->setMinimumWidth(240);
     mainSplitter_->addWidget(previewPane_);
 
-    // Right: metadata (top) + tags/notes (bottom) - 15% of width
-    rightSplitter_ = new QSplitter(Qt::Vertical, this);
-    rightSplitter_->setMinimumWidth(180);
-    rightSplitter_->setMaximumWidth(280);
-    metadataPane_   = new MetadataPane(rightSplitter_);
-    metadataPane_->setMinimumWidth(160);
-    metadataPane_->setMinimumHeight(150);
-    tagsNotesPane_  = new TagsNotesPane(rightSplitter_);
-    tagsNotesPane_->setMinimumWidth(160);
-    tagsNotesPane_->setMinimumHeight(120);
+    // Stretch factors: results=40, preview=60.
+    mainSplitter_->setStretchFactor(0, 40);
+    mainSplitter_->setStretchFactor(1, 60);
 
-    rightSplitter_->addWidget(metadataPane_);
-    rightSplitter_->addWidget(tagsNotesPane_);
-    mainSplitter_->addWidget(rightSplitter_);
-
-    // Indexing widget exists but is NOT added to any layout (invisible).
-    // Stats are shown via Index -> Index Statistics menu instead.
-    indexingWidget_ = new IndexingProgressWidget(this);
-    indexingWidget_->setVisible(false);
-
-    // Stretch factors: left=60, middle=25, right=15.
-    mainSplitter_->setStretchFactor(0, 60);
-    mainSplitter_->setStretchFactor(1, 25);
-    mainSplitter_->setStretchFactor(2, 15);
-
-    rightSplitter_->setStretchFactor(0, 60);
-    rightSplitter_->setStretchFactor(1, 40);
-
-    // Explicit initial sizes
-    const int w = width() > 0 ? width() : 1280;
+    // Reasonable initial sizes for the center splitter, accounting for
+    // the 180px sidebar and 280px right panel already deducted.
+    const int availWidth = qMax(400, width() - 180 - 280 - 16);
     QList<int> hSizes;
-    hSizes << qBound(300, int(w * 0.60), w)
-           << qBound(200, int(w * 0.25), w)
-           << qBound(160, int(w * 0.15), 280);
+    hSizes << qMax(280, int(availWidth * 0.40))
+           << qMax(300, int(availWidth * 0.60));
     mainSplitter_->setSizes(hSizes);
 
-    const int h = height() > 0 ? height() : 720;
-    QList<int> vSizes;
-    vSizes << qMax(150, int(h * 0.60))
-           << qMax(120, int(h * 0.40));
-    rightSplitter_->setSizes(vSizes);
+    mainLay->addWidget(centerWidget, 1);
+
+    // ============================================================
+    // 3) RIGHT PANEL (fixed 280px): metadata + tags/notes
+    // ============================================================
+    auto* rightPanel = new QWidget(centralWidget);
+    rightPanel->setObjectName("rightPanel");
+    rightPanel->setFixedWidth(280);
+
+    auto* rightLay = new QVBoxLayout(rightPanel);
+    rightLay->setContentsMargins(8, 8, 8, 8);
+    rightLay->setSpacing(6);
+
+    metadataPane_ = new MetadataPane(rightPanel);
+    metadataPane_->setObjectName("metadataPane");
+    metadataPane_->setMinimumHeight(150);
+    rightLay->addWidget(metadataPane_, 1);
+
+    tagsNotesPane_ = new TagsNotesPane(rightPanel);
+    tagsNotesPane_->setObjectName("tagsNotesPane");
+    tagsNotesPane_->setMinimumHeight(120);
+    rightLay->addWidget(tagsNotesPane_, 1);
+
+    mainLay->addWidget(rightPanel);
+
+    // ============================================================
+    // Hidden indexing widget (kept for stats plumbing; not visible
+    // in the new layout — stats are surfaced via the sidebar status
+    // section and the Index -> Index Statistics menu).
+    // ============================================================
+    indexingWidget_ = new IndexingProgressWidget(this);
+    indexingWidget_->setVisible(false);
 
     updateIndexStats();
 }
@@ -430,12 +536,23 @@ void MainWindow::buildMenus() {
 }
 
 void MainWindow::buildToolbar() {
-    auto* tb = addToolBar("Main");
-    tb->setMovable(false);
-    tb->setIconSize(QSize(18, 18));
+    // The toolbar widget itself is created in buildCentral() and lives
+    // at the top of the center panel. This function only (re)populates
+    // its actions, so applyTheme() can call it again to refresh icons
+    // after a palette swap without recreating the widget.
+    if (!toolbar_) return;
+
+    // Delete any previously-added actions so re-populating (e.g. on
+    // theme toggle) doesn't accumulate orphaned QActions.
+    const auto oldActions = toolbar_->actions();
+    for (QAction* act : oldActions) {
+        toolbar_->removeAction(act);
+        act->deleteLater();
+    }
+
     // Modern icon + text toolbar. No inline stylesheet — Theme QSS
     // handles QToolBar and QToolButton styling.
-    tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
     // Create palette-aware icons. Qt's SVG renderer doesn't honor
     // 'currentColor', so we load the SVG, replace the stroke color
@@ -448,7 +565,8 @@ void MainWindow::buildToolbar() {
         f.close();
         // Replace 'currentColor' with the actual text color from the
         // application palette. We use the palette at icon-creation time;
-        // when the theme changes, applyTheme() re-creates the toolbar.
+        // when the theme changes, applyTheme() re-calls buildToolbar()
+        // which re-renders the icons with the new palette.
         QColor textColor = qApp->palette().color(QPalette::Text);
         svg.replace("currentColor", textColor.name());
         QSvgRenderer renderer(svg.toUtf8());
@@ -459,37 +577,38 @@ void MainWindow::buildToolbar() {
         return QIcon(pm);
     };
 
-    auto* addFolderAct = new QAction(makeIcon(":/icons/add-folder.svg"), "Add Folder", this);
+    // Parent actions to the toolbar so they're cleaned up with it.
+    auto* addFolderAct = new QAction(makeIcon(":/icons/add-folder.svg"), "Add Folder", toolbar_);
     connect(addFolderAct, &QAction::triggered, this, [this]{
         try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
     });
-    tb->addAction(addFolderAct);
+    toolbar_->addAction(addFolderAct);
 
-    auto* extractAct = new QAction(makeIcon(":/icons/extract.svg"), "Extract", this);
+    auto* extractAct = new QAction(makeIcon(":/icons/extract.svg"), "Extract", toolbar_);
     connect(extractAct, &QAction::triggered, this, [this]{
         try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
     });
-    tb->addAction(extractAct);
+    toolbar_->addAction(extractAct);
 
-    tb->addSeparator();
+    toolbar_->addSeparator();
 
-    auto* settingsAct = new QAction(makeIcon(":/icons/settings.svg"), "Settings", this);
+    auto* settingsAct = new QAction(makeIcon(":/icons/settings.svg"), "Settings", toolbar_);
     connect(settingsAct, &QAction::triggered, this, [this]{
         try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
     });
-    tb->addAction(settingsAct);
+    toolbar_->addAction(settingsAct);
 
-    auto* themeAct = new QAction(makeIcon(":/icons/theme.svg"), "Theme", this);
+    auto* themeAct = new QAction(makeIcon(":/icons/theme.svg"), "Theme", toolbar_);
     connect(themeAct, &QAction::triggered, this, [this]{
         try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
     });
-    tb->addAction(themeAct);
+    toolbar_->addAction(themeAct);
 
-    auto* dupesAct = new QAction(makeIcon(":/icons/duplicates.svg"), "Duplicates", this);
+    auto* dupesAct = new QAction(makeIcon(":/icons/duplicates.svg"), "Duplicates", toolbar_);
     connect(dupesAct, &QAction::triggered, this, [this]{
         try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
     });
-    tb->addAction(dupesAct);
+    toolbar_->addAction(dupesAct);
 }
 
 void MainWindow::applyTheme() {
@@ -535,18 +654,15 @@ void MainWindow::applyTheme() {
     }
     update();
 
-    // Rebuild the toolbar so SVG icons get re-rendered with the new
-    // palette's text color (dark icons for light mode, light icons
-    // for dark mode). Without this, icons stay the old color after
-    // a theme toggle.
-    for (auto* tb : findChildren<QToolBar*>()) {
-        tb->clear();
-        // Re-add actions by re-calling buildToolbar logic.
-        // We can't call buildToolbar() directly because it creates a
-        // NEW toolbar. Instead, we delete the old toolbar and build
-        // a fresh one.
-        tb->deleteLater();
-    }
+    // Rebuild the toolbar's actions so SVG icons get re-rendered with
+    // the new palette's text color (dark icons for light mode, light
+    // icons for dark mode). Without this, icons stay the old color
+    // after a theme toggle.
+    //
+    // The toolbar widget itself lives inside the center panel and is
+    // reused — buildToolbar() now just clears + re-adds actions
+    // rather than creating a fresh QToolBar, so we don't need to
+    // delete/detach anything here.
     buildToolbar();
 }
 
@@ -1104,18 +1220,36 @@ void MainWindow::autoScanIndexedFolders() {
 }
 
 void MainWindow::updateIndexStats() {
-    if (!repo_ || !db_ || !indexingWidget_) return;
+    if (!repo_ || !db_) return;
     try {
         const qint64 total       = repo_->totalFiles();
         const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
         const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
-        // Update the form labels inside the indexing widget. The phase
-        // header is now a static "INDEX STATUS" label (see issue #4).
-        DocuSearch::IndexingProgress p;
-        p.filesScanned.store(total);
-        p.documentsIndexed.store(contentDone);
-        p.queueRemaining.store(metaOnly);
-        indexingWidget_->update(p);
+
+        // Update the sidebar status labels (bottom of the left nav).
+        if (sidebarFileCountLabel_) {
+            sidebarFileCountLabel_->setText(QString("Files: %1").arg(total));
+        }
+        if (sidebarDbSizeLabel_) {
+            qint64 dbSize = 0;
+            {
+                QFile f(Config::instance().dbPath());
+                if (f.exists()) dbSize = f.size();
+            }
+            sidebarDbSizeLabel_->setText(
+                QString("Size: %1").arg(Utils::formatFileSize(dbSize)));
+        }
+
+        // Update the hidden indexing widget (kept for stats plumbing;
+        // surfaces the same numbers via Index -> Index Statistics).
+        if (indexingWidget_) {
+            DocuSearch::IndexingProgress p;
+            p.filesScanned.store(total);
+            p.documentsIndexed.store(contentDone);
+            p.queueRemaining.store(metaOnly);
+            indexingWidget_->update(p);
+        }
+
         statusBar()->showMessage(
             QString("Files: %1 | Content: %2 | Metadata only: %3")
                 .arg(total).arg(contentDone).arg(metaOnly), 5000);

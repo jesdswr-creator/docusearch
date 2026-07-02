@@ -16,6 +16,10 @@ class QMenu;
 class QAction;
 class QStatusBar;
 class QTimer;
+class QToolBar;
+class QListWidget;
+class QListWidgetItem;
+class QLabel;
 
 namespace DocuSearch {
 
@@ -116,8 +120,12 @@ public:
     MetadataPane*     metadataPane_    = nullptr;
     TagsNotesPane*    tagsNotesPane_   = nullptr;
     IndexingProgressWidget* indexingWidget_  = nullptr;
-    QSplitter*        mainSplitter_    = nullptr;
-    QSplitter*        rightSplitter_   = nullptr;
+    QSplitter*        mainSplitter_    = nullptr;  // repurposed as center (results | preview) splitter
+    QSplitter*        rightSplitter_   = nullptr;  // reserved (unused in new layout)
+    QToolBar*         toolbar_         = nullptr;  // top-of-center toolbar (Add Folder, Extract, Settings, Theme, Duplicates)
+    QListWidget*      sidebar_         = nullptr;  // left navigation sidebar
+    QLabel*           sidebarFileCountLabel_ = nullptr;  // bottom-of-sidebar file count
+    QLabel*           sidebarDbSizeLabel_    = nullptr;  // bottom-of-sidebar DB size
     QTimer*           liveSearchTimer_ = nullptr;
     QTimer*           autoScanTimer_   = nullptr;
     QString           pendingQuery_;
