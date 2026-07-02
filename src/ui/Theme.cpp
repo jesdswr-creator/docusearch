@@ -185,7 +185,19 @@ QSplitter::handle:hover      { background-color: #4cc2ff; }
 
 /* ---- Status / toolbar / scroll ---- */
 QStatusBar  { background-color: #1f1f1f; color: #c0c0c0; border-top: 1px solid #2b2b2b; }
-QToolBar    { background-color: #1f1f1f; border: none; padding: 4px; spacing: 4px; }
+QToolBar    { background-color: transparent; border: none; padding: 4px; spacing: 4px; }
+QToolButton {
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    font-size: 13px;
+    color: #ffffff;
+    spacing: 6px;
+}
+QToolButton:hover { background-color: #323232; }
+QToolButton:pressed { background-color: #252525; }
+QToolBar::separator { width: 1px; background-color: #404040; margin: 4px; }
 QScrollArea { background-color: #1f1f1f; border: none; }
 QToolTip    { background-color: #2b2b2b; color: #ffffff; border: 1px solid #404040; border-radius: 6px; padding: 4px 8px; }
 
@@ -406,7 +418,19 @@ QSplitter::handle:vertical   { height: 3px; }
 QSplitter::handle:hover      { background-color: #005fb8; }
 
 QStatusBar  { background-color: #f3f3f3; color: #5a5a5a; border-top: 1px solid #e0e0e0; }
-QToolBar    { background-color: #f3f3f3; border: none; padding: 4px; spacing: 4px; }
+QToolBar    { background-color: transparent; border: none; padding: 4px; spacing: 4px; }
+QToolButton {
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    font-size: 13px;
+    color: #1f1f1f;
+    spacing: 6px;
+}
+QToolButton:hover { background-color: #e0e0e0; }
+QToolButton:pressed { background-color: #d0d0d0; }
+QToolBar::separator { width: 1px; background-color: #d0d0d0; margin: 4px; }
 QScrollArea { background-color: #f3f3f3; border: none; }
 QToolTip    { background-color: #ffffff; color: #1f1f1f; border: 1px solid #d1d1d1; border-radius: 6px; padding: 4px 8px; }
 

@@ -433,22 +433,9 @@ void MainWindow::buildToolbar() {
     auto* tb = addToolBar("Main");
     tb->setMovable(false);
     tb->setIconSize(QSize(18, 18));
-    // Modern icon + text toolbar with Fluent-style SVG icons.
+    // Modern icon + text toolbar. No inline stylesheet — Theme QSS
+    // handles QToolBar and QToolButton styling.
     tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    tb->setStyleSheet(
-        "QToolBar { background: transparent; border: none; padding: 4px; spacing: 4px; } "
-        "QToolButton { "
-        "  padding: 6px 12px; "
-        "  border-radius: 6px; "
-        "  background: transparent; "
-        "  border: none; "
-        "  font-size: 13px; "
-        "  color: palette(text); "
-        "  spacing: 6px; "
-        "} "
-        "QToolButton:hover { background: palette(midlight); } "
-        "QToolButton:pressed { background: palette(dark); } "
-        "QToolBar::separator { width: 1px; background: palette(mid); margin: 4px; }");
 
     // Create palette-aware icons. Qt's SVG renderer doesn't honor
     // 'currentColor', so we load the SVG, replace the stroke color

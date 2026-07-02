@@ -106,12 +106,13 @@ jobs:
       - name: Build (Release)
         shell: pwsh
         run: |
-          # Build ONLY the DocuSearch target first, then tests.
-          # MSBuild builds all targets simultaneously by default,
-          # which caused a race condition where the linker ran before
-          # main.cpp was compiled (LNK2019: unresolved external main).
-          cmake --build build --config Release --target DocuSearch
-          cmake --build build --config Release
+          # Force clean build — delete all .obj and .tlog files to prevent
+          # MSBuild's incremental build from skipping source files.
+          # Without this, MSBuild only compiles mocs_compilation_Release.cpp
+          # and then links, causing LNK2019 (main.cpp never compiled).
+          Get-ChildItem -Path build -Filter "*.obj" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem -Path build -Filter "*.tlog" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+          cmake --build build --config Release --parallel
 
       - name: Run unit tests
         shell: pwsh

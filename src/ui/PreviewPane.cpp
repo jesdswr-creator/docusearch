@@ -22,7 +22,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     // File path label - no hardcoded color, uses palette.
     pathLabel_ = new QLabel("Select a file to preview", this);
-    pathLabel_->setStyleSheet("font-size: 12px; padding: 2px; background: transparent; border: none;");
+    pathLabel_->setObjectName("subtitleLabel");
     pathLabel_->setWordWrap(true);
     v->addWidget(pathLabel_);
 
