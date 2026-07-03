@@ -41,22 +41,24 @@ public:
 
     QSize minimumSize() const override {
         QSize size;
+        const int m = contentsMargins().left();
         for (auto* it : items_)
             size = size.expandedTo(it->minimumSize());
-        return size + QSize(2 * margin(), 2 * margin());
+        return size + QSize(2 * m, 2 * m);
     }
 
     void setGeometry(const QRect& rect) override {
         QLayout::setGeometry(rect);
         if (items_.isEmpty()) return;
-        int x = rect.x() + margin();
-        int y = rect.y() + margin();
+        const int m = contentsMargins().left();
+        int x = rect.x() + m;
+        int y = rect.y() + m;
         const int lineHeight = 28;
         const int spacing = 6;
         for (auto* it : items_) {
             const int nextX = x + it->sizeHint().width() + spacing;
-            if (nextX - spacing > rect.right() - margin() && x > rect.x() + margin()) {
-                x = rect.x() + margin();
+            if (nextX - spacing > rect.right() - m && x > rect.x() + m) {
+                x = rect.x() + m;
                 y += lineHeight + spacing;
             }
             it->setGeometry(QRect(QPoint(x, y), it->sizeHint()));
