@@ -15,7 +15,6 @@
 #include <QFile>
 #include <QSvgRenderer>
 #include <QPainter>
-#include <QResizeEvent>
 #include <QMouseEvent>
 
 namespace DocuSearch {
@@ -253,10 +252,6 @@ bool SearchBar::eventFilter(QObject* obj, QEvent* e) {
         }
     }
     return QWidget::eventFilter(obj, e);
-}
-
-void SearchBar::resizeEvent(QResizeEvent* e) {
-    QWidget::resizeEvent(e);
 }
 
 void SearchBar::refreshIcons() {
