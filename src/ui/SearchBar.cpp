@@ -300,8 +300,12 @@ void SearchBar::setSavedSearches(const QStringList& names) {
     savedBox_->addItem("Saved Searches");
     savedBox_->addItems(names);
     savedBox_->blockSignals(false);
-    auto* m = qobject_cast<QStringListModel*>(edit_->completer()->model());
-    if (m) m->setStringList(names);
+    // Update the completer model (if a completer was set).
+    auto* completer = edit_->completer();
+    if (completer) {
+        auto* m = qobject_cast<QStringListModel*>(completer->model());
+        if (m) m->setStringList(names);
+    }
 }
 
 void SearchBar::onReturnPressed() {
