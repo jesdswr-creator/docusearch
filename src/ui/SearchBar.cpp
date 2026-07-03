@@ -125,6 +125,10 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     // ---- Search button (with Ctrl+K badge) ----
     // The reference design uses a single blue button containing:
     //   [search-icon] Search [Ctrl+K]
+    // We build this as a custom QWidget with HBoxLayout. The child
+    // QLabels are set to WA_TransparentForMouseEvents so mouse clicks
+    // pass through them to the parent widget, where our event filter
+    // catches MouseButtonPress and triggers search.
     searchBtnWidget_ = new QWidget(this);
     searchBtnWidget_->setObjectName("searchBtn");
     searchBtnWidget_->setCursor(Qt::PointingHandCursor);
@@ -137,15 +141,18 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     searchIconLbl_ = new QLabel(searchBtnWidget_);
     searchIconLbl_->setStyleSheet("background: transparent;");
     searchIconLbl_->setFixedSize(14, 14);
+    searchIconLbl_->setAttribute(Qt::WA_TransparentForMouseEvents);
     auto* searchTextLbl = new QLabel("Search", searchBtnWidget_);
     searchTextLbl->setStyleSheet(
         "background: transparent; color: #ffffff; "
         "font-size: 13.5px; font-weight: 600;");
+    searchTextLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     auto* shortcutLbl = new QLabel("Ctrl+K", searchBtnWidget_);
     shortcutLbl->setStyleSheet(
         "background: rgba(255,255,255,0.25); color: #ffffff; "
         "border-radius: 4px; padding: 2px 6px; "
         "font-size: 11px; font-weight: 500;");
+    shortcutLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     sbwLay->addWidget(searchIconLbl_);
     sbwLay->addWidget(searchTextLbl);
     sbwLay->addWidget(shortcutLbl);
