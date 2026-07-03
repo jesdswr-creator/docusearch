@@ -431,10 +431,6 @@ void MainWindow::buildCentral() {
         "Search", "Saved", "Tags", "Notes",
         "Stats", "Recent", "Settings", "Help", "About"
     };
-    const QStringList navIcons = {
-        "search", "bookmark", "tag", "sticky-note",
-        "bar-chart-3", "clock", "settings", "help-circle", "info"
-    };
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
