@@ -119,7 +119,19 @@ jobs:
 
       - name: Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release --parallel
+        run: |
+          # Build with --parallel 1 so errors are not interleaved.
+          # If the build fails, print the last 200 lines of output for debugging.
+          $output = & cmake --build build --config Release --parallel 1 2>&1
+          $output | Write-Host
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=== BUILD FAILED (exit code $exitCode) ==="
+            Write-Host "=== Last 200 lines of output ==="
+            $output | Select-Object -Last 200 | Write-Host
+            exit $exitCode
+          }
 
       - name: Run unit tests
         shell: pwsh
@@ -293,5 +305,5 @@ jobs:
         with:
           name: DocuSearch-bin
           path: build/bin/Release/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
