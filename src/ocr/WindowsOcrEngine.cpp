@@ -321,8 +321,9 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
 
 QStringList WindowsOcrEngine::availableLanguages() {
 #ifdef Q_OS_WIN
-    if (!initialized_) return {};
-    // Lazy implementation: call PowerShell to list available OCR languages.
+    // This is a static method, so we can't check initialized_ here.
+    // We just run PowerShell directly — if Windows OCR isn't available,
+    // the script will fail and we'll return an empty list.
     QProcess proc;
     proc.setProgram("powershell.exe");
     proc.setArguments({"-NoProfile", "-NonInteractive", "-Command",
