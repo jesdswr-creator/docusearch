@@ -264,7 +264,10 @@ void SearchBar::refreshIcons() {
     QColor whiteText("#ffffff");
 
     // Search icon inside input (muted gray, not text color).
-    auto* sle = qobject_cast<SearchBarSearchLineEdit*>(edit_);
+    // Use static_cast (not qobject_cast) because SearchBarSearchLineEdit
+    // doesn't have Q_OBJECT — we know edit_ was constructed as a
+    // SearchBarSearchLineEdit in the constructor.
+    auto* sle = static_cast<SearchBarSearchLineEdit*>(edit_);
     if (sle) {
         sle->setSearchIconPixmap(loadLucidePixmap("search", QColor("#9ca3af"), 16, devicePixelRatio()));
     }

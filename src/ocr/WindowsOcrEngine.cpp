@@ -147,42 +147,36 @@ bool WindowsOcrEngine::init() {
         return false;
     }
 
-    // Cast factory to IOcrEngineStatics. The vtable layout is:
-    //   0: QueryInterface
-    //   1: AddRef
-    //   2: Release
-    //   3: GetIids (IInspectable)
-    //   4: GetRuntimeClassName (IInspectable)
-    //   5: GetTrustLevel (IInspectable)
-    //   6: TryCreateFromUserProfileLanguages (IOcrEngineStatics)
+    // Cast factory to the IOcrEngineStatics vtable. In MSVC's COM ABI,
+    // the interface pointer points to an object whose first field is
+    // a pointer to the vtable. So we dereference once to get the vtable,
+    // then index into it.
+    //
+    // Vtable layout for IOcrEngineStatics (inherits IInspectable → IUnknown):
+    //   0: QueryInterface          (IUnknown)
+    //   1: AddRef                  (IUnknown)
+    //   2: Release                 (IUnknown)
+    //   3: GetIids                 (IInspectable)
+    //   4: GetRuntimeClassName     (IInspectable)
+    //   5: GetTrustLevel           (IInspectable)
+    //   6: TryCreateFromUserProfileLanguages  (IOcrEngineStatics)
     //   7: TryCreateFromLanguage
     //   8: AvailableRecognizerLanguages
     //   9: IsLanguageSupported
     //   10: MaxImageDimension
     //
-    // Each vtable slot is a function pointer (8 bytes on x64).
-    struct IOcrEngineStaticsVtbl {
-        void* QueryInterface;       // 0
-        void* AddRef;               // 1
-        void* Release;              // 2
-        void* GetIids;              // 3
-        void* GetRuntimeClassName;  // 4
-        void* GetTrustLevel;        // 5
-        void* TryCreateFromUserProfileLanguages;  // 6
-        // (we only need slot 6)
-    };
-
-    auto* factory = reinterpret_cast<IOcrEngineStaticsVtbl*>(factoryVoid);
+    // Each slot is a function pointer (8 bytes on x64).
+    void** vtable = *(void***)factoryVoid;
     typedef HRESULT (WINAPI *pfn_TryCreateFromUserProfileLanguages)(void* self, void** outEngine);
-    auto pTryCreate = reinterpret_cast<pfn_TryCreateFromUserProfileLanguages>(
-        factory->TryCreateFromUserProfileLanguages);
+    auto pTryCreate = reinterpret_cast<pfn_TryCreateFromUserProfileLanguages>(vtable[6]);
+    // Slot 2 is IUnknown::Release.
+    typedef ULONG (WINAPI *pfn_Release)(void* self);
+    auto pRelease = reinterpret_cast<pfn_Release>(vtable[2]);
 
     void* engine = nullptr;
-    hr = pTryCreate(factory, &engine);
+    hr = pTryCreate(factoryVoid, &engine);
     // Release the factory — we don't need to keep it alive.
-    typedef ULONG (WINAPI *pfn_Release)(void* self);
-    auto pRelease = reinterpret_cast<pfn_Release>(factory->Release);
-    pRelease(factory);
+    pRelease(factoryVoid);
 
     if (FAILED(hr) || !engine) {
         DS_WARN("WinOCR", QString("TryCreateFromUserProfileLanguages failed: 0x%1").arg(hr, 0, 16));
