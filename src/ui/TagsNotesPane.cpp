@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QLayout>
 #include <QList>
+#include <functional>
 
 // A simple flow layout that wraps child widgets to the next row when
 // they exceed the available width. Used to lay out tag pills.
@@ -69,12 +70,17 @@ private:
 
 namespace DocuSearch {
 
-// A clickable tag pill. Clicking emits a signal that the parent can
-// use to remove the tag (via right-click or a small × overlay).
+// A clickable tag pill. Right-click triggers the onRemove callback.
+// We use std::function instead of Qt signals/slots because Q_OBJECT
+// in a .cpp file is awkward (needs MOC processing) and the new-style
+// connect requires the sender class to have Q_OBJECT.
 class TagPill : public QPushButton {
 public:
-    explicit TagPill(const QString& text, const QString& colorClass, QWidget* parent = nullptr)
-        : QPushButton(text, parent), colorClass_(colorClass) {
+    using RemoveCallback = std::function<void()>;
+
+    explicit TagPill(const QString& text, const QString& colorClass,
+                     RemoveCallback onRemove, QWidget* parent = nullptr)
+        : QPushButton(text, parent), colorClass_(colorClass), onRemove_(std::move(onRemove)) {
         setObjectName(colorClass);
         setCursor(Qt::PointingHandCursor);
         setToolTip("Right-click to remove");
@@ -84,18 +90,17 @@ public:
 
 protected:
     void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::RightButton) {
-            emit rightClicked();
+        if (e->button() == Qt::RightButton && onRemove_) {
+            onRemove_();
+            e->accept();
         } else {
             QPushButton::mousePressEvent(e);
         }
     }
 
-signals:
-    void rightClicked();
-
 private:
     QString colorClass_;
+    RemoveCallback onRemove_;
 };
 
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
@@ -230,12 +235,8 @@ void TagsNotesPane::onAddTag() {
 }
 
 void TagsNotesPane::onRemoveTag() {
-    auto* pill = qobject_cast<TagPill*>(sender());
-    if (!pill) return;
-    const QString t = pill->text();
-    currentTags_.removeAll(t);
-    rebuildTagPills();
-    emit tagRemoved(fileId_, t);
+    // No-op — tag removal is now handled via the TagPill callback directly.
+    // This slot is kept for backward compatibility (in case other code calls it).
 }
 
 void TagsNotesPane::onNoteEdited() {
@@ -251,13 +252,19 @@ void TagsNotesPane::rebuildTagPills() {
         delete item->widget();
         delete item;
     }
-    // Build new pills with rotating color classes
+    // Build new pills with rotating color classes.
+    // Each pill carries its own remove callback (right-click to remove).
     const QStringList colorClasses = {"tagBlue", "tagGreen", "tagYellow", "tagPurple"};
     for (int i = 0; i < currentTags_.size(); ++i) {
-        const QString& t = currentTags_[i];
+        const QString t = currentTags_[i];
         const QString cls = colorClasses[i % colorClasses.size()];
-        auto* pill = new TagPill(t, cls, tagsContainer_);
-        connect(pill, &TagPill::rightClicked, this, &TagsNotesPane::onRemoveTag);
+        // Capture t by value so the callback removes the right tag.
+        auto onRemove = [this, t]() {
+            currentTags_.removeAll(t);
+            rebuildTagPills();
+            emit tagRemoved(fileId_, t);
+        };
+        auto* pill = new TagPill(t, cls, onRemove, tagsContainer_);
         tagsLayout_->addWidget(pill);
     }
 }
