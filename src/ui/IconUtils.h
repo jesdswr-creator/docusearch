@@ -15,6 +15,9 @@
 #include <QPixmap>
 #include <QString>
 #include <QColor>
+#include <QFile>
+#include <QSvgRenderer>
+#include <QPainter>
 
 namespace DocuSearch {
 
