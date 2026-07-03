@@ -46,6 +46,15 @@
 #include <windows.h>
 #include <objbase.h>
 #include <unknwn.h>
+// HSTRING and WinRT string functions are in winstring.h.
+// With WIN32_LEAN_AND_MEAN defined, windows.h doesn't include this
+// automatically, so we need it explicitly for HSTRING type used in
+// the RoGetActivationFactory / WindowsCreateString typedefs below.
+#include <winstring.h>
+// roapi.h declares RoInitialize / RoGetActivationFactory (we load
+// them dynamically via GetProcAddress, but the HSTRING type and
+// related definitions are needed at compile time).
+#include <roapi.h>
 
 // ---- Manually declare WinRT ABI function signatures ----
 
