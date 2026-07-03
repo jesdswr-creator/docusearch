@@ -216,6 +216,7 @@ set(APP_HEADERS
     src/backup/BackupManager.h
     src/win/JumpList.h
     src/ui/Theme.h
+    src/ui/IconUtils.h
     src/ui/SearchBar.h
     src/ui/ResultsPane.h
     src/ui/PreviewPane.h

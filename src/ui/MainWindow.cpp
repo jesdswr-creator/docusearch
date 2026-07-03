@@ -1,9 +1,10 @@
 // ============================================================
-// MainWindow.cpp
+// MainWindow.cpp - Top-level window with custom title bar
 // ============================================================
 
 #include "MainWindow.h"
 #include "Theme.h"
+#include "IconUtils.h"
 #include "SearchBar.h"
 #include "ResultsPane.h"
 #include "PreviewPane.h"
@@ -42,7 +43,6 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
-#include <QToolBar>
 #include <QStatusBar>
 #include <QSplitter>
 #include <QTabWidget>
@@ -57,6 +57,7 @@
 #include <QProgressDialog>
 #include <QThread>
 #include <QStyle>
+#include <QStyleFactory>
 #include <QLabel>
 #include <QPixmap>
 #include <QFuture>
@@ -75,6 +76,16 @@
 #include <QListWidgetItem>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QPushButton>
+#include <QProgressBar>
+#include <QMouseEvent>
+#include <QWindow>
+#include <QGuiApplication>
+
+#ifdef Q_OS_WIN
+#  include <windows.h>
+#  include <windowsx.h>
+#endif
 
 #include <sqlite3.h>
 
@@ -82,29 +93,88 @@
 
 namespace DocuSearch {
 
+// ============================================================
+// Custom title bar widget — handles mouse dragging to move window
+// ============================================================
+class TitleBarWidget : public QWidget {
+public:
+    explicit TitleBarWidget(MainWindow* owner, QWidget* parent = nullptr)
+        : QWidget(parent), owner_(owner) {
+        setFixedHeight(44);
+        setObjectName("titleBar");
+        setMouseTracking(true);
+    }
+
+    void setDraggableWidget(QWidget* w) { draggable_ = w; }
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) {
+            dragPos_ = e->globalPosition().toPoint() - owner_->frameGeometry().topLeft();
+            dragging_ = true;
+            e->accept();
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (dragging_ && (e->buttons() & Qt::LeftButton)) {
+            owner_->move(e->globalPosition().toPoint() - dragPos_);
+            e->accept();
+        }
+    }
+
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        dragging_ = false;
+        e->accept();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) {
+            if (owner_->isMaximized()) {
+                owner_->showNormal();
+            } else {
+                owner_->showMaximized();
+            }
+            e->accept();
+        }
+    }
+
+private:
+    MainWindow* owner_ = nullptr;
+    QWidget* draggable_ = nullptr;
+    bool dragging_ = false;
+    QPoint dragPos_;
+};
+
+// ============================================================
+// Constructor / destructor
+// ============================================================
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
 
-    setWindowTitle(QString("%1 %2 - Offline Document Search  |  by MinZ")
+    setWindowTitle(QString("%1 %2 - Offline Document Search")
                    .arg(Constants::kAppName, Constants::kAppVersion));
 
-    // --- Window sizing: 80% of available screen, capped at 1280x720, centered.
+    // Frameless window so our custom title bar replaces the native one.
+    Qt::WindowFlags flags = windowFlags();
+    flags |= Qt::FramelessWindowHint;
+    setWindowFlags(flags);
+
+    // --- Window sizing: 80% of available screen, capped at 1440x860, centered.
     QScreen* screen = QGuiApplication::primaryScreen();
     if (screen) {
         const QRect avail = screen->availableGeometry();
-        int w = qMin<int>(1280, int(avail.width()  * 0.8));
-        int h = qMin<int>(720,  int(avail.height() * 0.8));
+        int w = qMin<int>(1440, int(avail.width()  * 0.85));
+        int h = qMin<int>(860,  int(avail.height() * 0.85));
         resize(w, h);
         move(avail.x() + (avail.width()  - w) / 2,
              avail.y() + (avail.height() - h) / 2);
     } else {
-        resize(1280, 720);
+        resize(1440, 860);
     }
-    setMinimumSize(800, 500);
+    setMinimumSize(900, 600);
 
     // --- Initialize ONLY the database + search (no OCR/indexer/watcher) ---
-    // These subsystems are crash-prone without Tesseract/Poppler linked.
-    // We keep the app stable by not constructing them.
     db_   = std::make_unique<Database>(this);
     repo_ = std::make_unique<FileRepository>(*db_, this);
 
@@ -119,21 +189,42 @@ MainWindow::MainWindow(QWidget* parent)
     Schema::migrate(*db_);
 
     search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
-    // ocrPool_, indexer_, watcher_, thumbs_ are NOT constructed.
-    // Their slots in MainWindow check for null before using them.
 
     loadSettings();
 
-    // --- UI ------------------------------------------------------------
+    // --- UI ---
+    auto* centralWidget = new QWidget(this);
+    centralWidget->setObjectName("centralWidget");
+    auto* mainLay = new QVBoxLayout(centralWidget);
+    mainLay->setContentsMargins(0, 0, 0, 0);
+    mainLay->setSpacing(0);
+    setCentralWidget(centralWidget);
+
+    // Title bar at top
+    buildTitleBar();
+    mainLay->addWidget(titleBar_);
+
+    // Main 4-area layout in the middle (sidebar + center + right panel).
+    // buildCentral() creates a horizontal layout that holds sidebar +
+    // center + right panel and adds it to mainLay.
     buildCentral();
-    buildToolbar();
+
+    // Status bar at bottom (created by QMainWindow::statusBar()).
+    buildStatusBar();
+
     applyTheme();
 
-    // --- Signals (only the ones that don't need crash-prone subsystems) -
+    // --- Signals (only the ones that don't need crash-prone subsystems) ---
     connect(searchBar_, &SearchBar::searchRequested,
             this, &MainWindow::onSearch);
     connect(searchBar_, &SearchBar::savedSearchSelected,
             this, &MainWindow::onSavedSearchSelected);
+    connect(searchBar_, &SearchBar::addFolderRequested,
+            this, &MainWindow::onAddFolder);
+    connect(searchBar_, &SearchBar::refreshRequested,
+            this, &MainWindow::onRefresh);
+    connect(searchBar_, &SearchBar::filtersRequested,
+            this, &MainWindow::onFilters);
 
     connect(resultsPane_, &ResultsPane::fileSelected,
             this, &MainWindow::onFileSelected);
@@ -152,6 +243,24 @@ MainWindow::MainWindow(QWidget* parent)
     connect(tagsNotesPane_, &TagsNotesPane::noteChanged,
             this, &MainWindow::onNoteChanged);
 
+    connect(sidebarList_, &QListWidget::currentRowChanged,
+            this, &MainWindow::onSidebarClicked);
+
+    connect(openLocationBtn_, &QPushButton::clicked,
+            this, &MainWindow::onOpenLocation);
+
+    connect(titleCloseBtn_, &QPushButton::clicked,
+            qApp, &QApplication::quit);
+    connect(titleMinBtn_, &QPushButton::clicked,
+            this, &QWidget::showMinimized);
+    connect(titleMaxBtn_, &QPushButton::clicked,
+            this, [this]{
+        if (isMaximized()) showNormal();
+        else showMaximized();
+    });
+    connect(titleThemeBtn_, &QPushButton::clicked,
+            this, &MainWindow::onToggleTheme);
+
     // Live search debounce
     liveSearchTimer_ = new QTimer(this);
     liveSearchTimer_->setSingleShot(true);
@@ -161,8 +270,7 @@ MainWindow::MainWindow(QWidget* parent)
         liveSearchTimer_->start();
     });
 
-    // Auto-scan timer: 1 hour interval, runs on MAIN THREAD (no QtConcurrent).
-    // Scans indexed folders for new/modified files. processEvents() keeps UI responsive.
+    // Auto-scan timer: 1 hour interval, runs on MAIN THREAD.
     autoScanTimer_ = new QTimer(this);
     autoScanTimer_->setInterval(3600 * 1000);  // 1 hour
     connect(autoScanTimer_, &QTimer::timeout, this, [this]{
@@ -172,7 +280,7 @@ MainWindow::MainWindow(QWidget* parent)
     autoScanTimer_->start();
 
     refreshSavedSearches();
-    statusBar()->showMessage("Ready. Add files via Index -> Add Folder to Index to begin.");
+    statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 }
 
 MainWindow::~MainWindow() {
@@ -196,490 +304,357 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     QMainWindow::closeEvent(e);
 }
 
+// Handle WM_NCHITTEST on Windows so the frameless window can be resized
+// from its edges (the OS doesn't provide resize handles for frameless
+// windows, so we tell it which pixels belong to which resize border).
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+#ifdef Q_OS_WIN
+    if (eventType == "windows_generic_MSG" && message) {
+        MSG* msg = reinterpret_cast<MSG*>(message);
+        if (msg->message == WM_NCHITTEST) {
+            const LONG x = GET_X_LPARAM(msg->lParam);
+            const LONG y = GET_Y_LPARAM(msg->lParam);
+            const QRect wr = frameGeometry();
+            const int border = 6;
+            const bool onLeft   = x >= wr.left() && x < wr.left() + border;
+            const bool onRight  = x <  wr.right()  && x >= wr.right() - border;
+            const bool onTop    = y >= wr.top() && y < wr.top() + border;
+            const bool onBottom = y <  wr.bottom() && y >= wr.bottom() - border;
+            if (onTop && onLeft)     { *result = HTTOPLEFT;     return true; }
+            if (onTop && onRight)    { *result = HTTOPRIGHT;    return true; }
+            if (onBottom && onLeft)  { *result = HTBOTTOMLEFT;  return true; }
+            if (onBottom && onRight) { *result = HTBOTTOMRIGHT; return true; }
+            if (onLeft)   { *result = HTLEFT;   return true; }
+            if (onRight)  { *result = HTRIGHT;  return true; }
+            if (onTop)    { *result = HTTOP;    return true; }
+            if (onBottom) { *result = HTBOTTOM; return true; }
+        }
+    }
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
 // ============================================================
-// UI construction
+// Title bar
+// ============================================================
+void MainWindow::buildTitleBar() {
+    titleBar_ = new TitleBarWidget(this, this);
+    titleBar_->setObjectName("titleBar");
+
+    auto* h = new QHBoxLayout(titleBar_);
+    h->setContentsMargins(16, 8, 12, 8);
+    h->setSpacing(10);
+
+    // App logo (28x28 blue square with white search icon)
+    appLogoLbl_ = new QLabel(titleBar_);
+    appLogoLbl_->setObjectName("appLogo");
+    appLogoLbl_->setFixedSize(28, 28);
+    appLogoLbl_->setPixmap(loadLucidePixmap("search", QColor("#ffffff"), 16, devicePixelRatio()));
+    h->addWidget(appLogoLbl_);
+
+    // Title text: "DocuSearch 1.0.0" (bold) + "• Offline Document Search" (muted)
+    auto* titleWrap = new QWidget(titleBar_);
+    titleWrap->setStyleSheet("background: transparent;");
+    auto* twLay = new QHBoxLayout(titleWrap);
+    twLay->setContentsMargins(0, 0, 0, 0);
+    twLay->setSpacing(6);
+    titleBarText_ = new QLabel(QString("DocuSearch %1").arg(Constants::kAppVersion), titleWrap);
+    titleBarText_->setObjectName("titleBarText");
+    titleBarSubtitle_ = new QLabel("• Offline Document Search", titleWrap);
+    titleBarSubtitle_->setObjectName("titleBarSubtitle");
+    twLay->addWidget(titleBarText_);
+    twLay->addWidget(titleBarSubtitle_);
+    h->addWidget(titleWrap);
+
+    h->addStretch();
+
+    // Window control buttons (theme toggle, minimize, maximize, close)
+    titleThemeBtn_ = new QPushButton(titleBar_);
+    titleThemeBtn_->setObjectName("titleBtn");
+    titleThemeBtn_->setCursor(Qt::PointingHandCursor);
+    titleThemeBtn_->setToolTip("Toggle dark/light theme");
+    titleThemeBtn_->setFixedSize(32, 32);
+
+    titleMinBtn_ = new QPushButton(titleBar_);
+    titleMinBtn_->setObjectName("titleBtn");
+    titleMinBtn_->setCursor(Qt::PointingHandCursor);
+    titleMinBtn_->setToolTip("Minimize");
+    titleMinBtn_->setFixedSize(32, 32);
+
+    titleMaxBtn_ = new QPushButton(titleBar_);
+    titleMaxBtn_->setObjectName("titleBtn");
+    titleMaxBtn_->setCursor(Qt::PointingHandCursor);
+    titleMaxBtn_->setToolTip("Maximize");
+    titleMaxBtn_->setFixedSize(32, 32);
+
+    titleCloseBtn_ = new QPushButton(titleBar_);
+    titleCloseBtn_->setObjectName("titleBtn");
+    titleCloseBtn_->setCursor(Qt::PointingHandCursor);
+    titleCloseBtn_->setToolTip("Close");
+    titleCloseBtn_->setFixedSize(32, 32);
+
+    h->addWidget(titleThemeBtn_);
+    h->addWidget(titleMinBtn_);
+    h->addWidget(titleMaxBtn_);
+    h->addWidget(titleCloseBtn_);
+}
+
+// ============================================================
+// Central area: sidebar + (search bar + 3-panel splitter) + right panel
 // ============================================================
 void MainWindow::buildCentral() {
-    // ---- New 4-area layout (sidebar | center | rightPanel) ----
-    //
-    //   +-----------+--------------------------+------------+
-    //   | sidebar_  | toolbar_ + searchBar_    | metadataPane_ |
-    //   | (180px)   | ----------------------   | (280px)       |
-    //   |           | results | preview        +---------------+
-    //   | nav items | (40%)  | (60%)           | tagsNotesPane_|
-    //   |           |        |                 |               |
-    //   | status    |        |                 |               |
-    //   +-----------+--------+-----------------+---------------+
-    //
-    // - Sidebar: fixed 180px QListWidget with nav items + status section
-    // - Center:  QVBoxLayout (toolbar, searchBar, centerSplitter)
-    // - Right:   fixed 280px QVBoxLayout (metadata, tags/notes)
-    //
-    // All widgets are given objectNames so Theme QSS can target them
-    // without any inline setStyleSheet() calls.
+    // The central widget's main layout was created in the ctor.
+    // We add a horizontal layout containing: sidebar + center + right panel.
+    auto* centralWidget = this->centralWidget();
+    auto* mainLay = qobject_cast<QVBoxLayout*>(centralWidget->layout());
 
-    auto* centralWidget = new QWidget(this);
-    centralWidget->setObjectName("centralWidget");
-    auto* mainLay = new QHBoxLayout(centralWidget);
-    mainLay->setContentsMargins(0, 0, 0, 0);
-    mainLay->setSpacing(0);
-    setCentralWidget(centralWidget);
+    auto* hLay = new QHBoxLayout();
+    hLay->setContentsMargins(0, 0, 0, 0);
+    hLay->setSpacing(0);
+    mainLay->addLayout(hLay, 1);
 
     // ============================================================
-    // 1) LEFT SIDEBAR (fixed 180px)
+    // 1) LEFT SIDEBAR (200px)
     // ============================================================
-    auto* sidebarContainer = new QWidget(centralWidget);
-    sidebarContainer->setObjectName("sidebar");
-    sidebarContainer->setFixedWidth(200);
+    sidebar_ = new QWidget(centralWidget);
+    sidebar_->setObjectName("sidebar");
+    sidebar_->setFixedWidth(200);
+    sidebar_->setStyleSheet("background: transparent;");
 
-    auto* sidebarLay = new QVBoxLayout(sidebarContainer);
+    auto* sidebarLay = new QVBoxLayout(sidebar_);
     sidebarLay->setContentsMargins(0, 0, 0, 0);
     sidebarLay->setSpacing(0);
 
-    // Navigation list with Lucide icons.
-    sidebar_ = new QListWidget(sidebarContainer);
-    sidebar_->setObjectName("sidebar");
+    sidebarList_ = new QListWidget(sidebar_);
+    sidebarList_->setObjectName("sidebar");
     const QStringList navLabels = {
         "Search", "Saved", "Tags", "Notes",
         "Stats", "Recent", "Settings", "Help", "About"
     };
     const QStringList navIcons = {
-        ":/icons/lucide/search.svg",
-        ":/icons/lucide/clock.svg",
-        ":/icons/lucide/tag.svg",
-        ":/icons/lucide/sticky-note.svg",
-        ":/icons/lucide/bar-chart-3.svg",
-        ":/icons/lucide/clock.svg",
-        ":/icons/lucide/settings.svg",
-        ":/icons/lucide/help-circle.svg",
-        ":/icons/lucide/info.svg"
+        "search", "bookmark", "tag", "sticky-note",
+        "bar-chart-3", "clock", "settings", "help-circle", "info"
     };
-
-    // Icon renderer: load SVG, replace currentColor with palette text.
-    auto makeSidebarIcon = [](const QString& svgPath) -> QIcon {
-        QFile f(svgPath);
-        if (!f.open(QIODevice::ReadOnly)) return QIcon();
-        QString svg = QString::fromUtf8(f.readAll());
-        f.close();
-        QColor textColor = qApp->palette().color(QPalette::Text);
-        svg.replace("currentColor", textColor.name());
-        QSvgRenderer renderer(svg.toUtf8());
-        QPixmap pm(20, 20);
-        pm.fill(Qt::transparent);
-        QPainter painter(&pm);
-        renderer.render(&painter);
-        return QIcon(pm);
-    };
-
     for (int i = 0; i < navLabels.size(); ++i) {
-        auto* item = new QListWidgetItem(makeSidebarIcon(navIcons[i]), navLabels[i], sidebar_);
+        auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
         item->setSizeHint(QSize(180, 38));
     }
-    if (sidebar_->count() > 0) {
-        sidebar_->setCurrentRow(0);
-        // Visual hint: the "Search" row is the active page.
+    if (sidebarList_->count() > 0) {
+        sidebarList_->setCurrentRow(0);
     }
-    sidebarLay->addWidget(sidebar_, 1);
+    sidebarLay->addWidget(sidebarList_, 1);
 
-    // Status section pinned to the bottom of the sidebar.
-    auto* statusSection = new QWidget(sidebarContainer);
-    statusSection->setObjectName("statusSection");
-    auto* statusLay = new QVBoxLayout(statusSection);
-    statusLay->setContentsMargins(12, 8, 12, 10);
-    statusLay->setSpacing(2);
+    // Indexed status section pinned to bottom of sidebar.
+    auto* statusSection = new QWidget(sidebar_);
+    statusSection->setObjectName("indexedStatus");
+    statusSection->setStyleSheet("background: transparent;");
+    auto* sLay = new QVBoxLayout(statusSection);
+    sLay->setContentsMargins(16, 12, 16, 12);
+    sLay->setSpacing(4);
 
-    auto* statusHeader = new QLabel("Indexed", statusSection);
-    statusHeader->setObjectName("statusHeader");
-    statusLay->addWidget(statusHeader);
+    auto* headerRow = new QWidget(statusSection);
+    headerRow->setStyleSheet("background: transparent;");
+    auto* hrLay = new QHBoxLayout(headerRow);
+    hrLay->setContentsMargins(0, 0, 0, 0);
+    hrLay->setSpacing(6);
+    auto* dotLbl = new QLabel(headerRow);
+    dotLbl->setFixedSize(8, 8);
+    dotLbl->setStyleSheet(
+        "background-color: #059669; border-radius: 4px;");
+    indexedHeaderLbl_ = new QLabel("Indexed", headerRow);
+    indexedHeaderLbl_->setObjectName("indexedHeader");
+    hrLay->addWidget(dotLbl);
+    hrLay->addWidget(indexedHeaderLbl_);
+    hrLay->addStretch();
+    sLay->addWidget(headerRow);
 
-    sidebarFileCountLabel_ = new QLabel("0 files", statusSection);
-    sidebarFileCountLabel_->setObjectName("statusFileCount");
-    sidebarDbSizeLabel_    = new QLabel("0 B", statusSection);
-    sidebarDbSizeLabel_->setObjectName("statusDbSize");
-    statusLay->addWidget(sidebarFileCountLabel_);
-    statusLay->addWidget(sidebarDbSizeLabel_);
+    indexedInfoLbl_ = new QLabel("0 files\n0 B", statusSection);
+    indexedInfoLbl_->setObjectName("indexedInfo");
+    sLay->addWidget(indexedInfoLbl_);
+
+    indexedBar_ = new QProgressBar(statusSection);
+    indexedBar_->setObjectName("indexedBar");
+    indexedBar_->setRange(0, 100);
+    indexedBar_->setValue(0);
+    indexedBar_->setTextVisible(false);
+    sLay->addWidget(indexedBar_);
 
     sidebarLay->addWidget(statusSection);
 
-    mainLay->addWidget(sidebarContainer);
+    hLay->addWidget(sidebar_);
 
     // ============================================================
-    // 2) CENTER PANEL (toolbar + search bar + results|preview splitter)
+    // 2) CENTER PANEL (search bar + results | viewer splitter)
     // ============================================================
     auto* centerWidget = new QWidget(centralWidget);
-    centerWidget->setObjectName("centerPanel");
+    centerWidget->setStyleSheet("background: transparent;");
     auto* centerLay = new QVBoxLayout(centerWidget);
-    centerLay->setContentsMargins(8, 8, 8, 8);
-    centerLay->setSpacing(6);
+    centerLay->setContentsMargins(0, 0, 0, 0);
+    centerLay->setSpacing(0);
 
-    // Toolbar lives at the top of the center panel, above the search bar.
-    // buildToolbar() (called next in the ctor) populates this widget with
-    // the Add Folder / Extract / Settings / Theme / Duplicates actions.
-    if (!toolbar_) {
-        toolbar_ = new QToolBar(centerWidget);
-        toolbar_->setObjectName("mainToolbar");
-        toolbar_->setMovable(false);
-        toolbar_->setIconSize(QSize(18, 18));
-        toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    }
-    centerLay->addWidget(toolbar_);
-
-    // Search bar with Search button + Saved Searches dropdown + Add Folder.
+    // Search bar
     searchBar_ = new SearchBar(centerWidget);
-    searchBar_->setObjectName("searchBar");
     centerLay->addWidget(searchBar_);
 
-    // Center splitter: results (left ~40%) | preview (right ~60%).
+    // 3-way splitter: results | viewer | (metadata+tags)
     mainSplitter_ = new QSplitter(Qt::Horizontal, centerWidget);
-    mainSplitter_->setObjectName("centerSplitter");
+    mainSplitter_->setObjectName("mainSplitter");
+    mainSplitter_->setHandleWidth(1);
+    mainSplitter_->setChildrenCollapsible(false);
     centerLay->addWidget(mainSplitter_, 1);
 
-    // Left half: results pane (ResultsPane already contains its own
-    // count label internally, so we just embed it directly).
     resultsPane_ = new ResultsPane(mainSplitter_);
     resultsPane_->setObjectName("resultsPane");
     resultsPane_->setMinimumWidth(280);
+    resultsPane_->setMaximumWidth(420);
     mainSplitter_->addWidget(resultsPane_);
 
-    // Right half: preview pane.
     previewPane_ = new PreviewPane(mainSplitter_);
     previewPane_->setObjectName("previewPane");
-    previewPane_->setMinimumWidth(240);
+    previewPane_->setMinimumWidth(360);
     mainSplitter_->addWidget(previewPane_);
 
-    // Stretch factors: results=40, preview=60.
-    mainSplitter_->setStretchFactor(0, 40);
-    mainSplitter_->setStretchFactor(1, 60);
+    // Right panel: metadata (top) + tags/notes (bottom), stacked vertically.
+    // We wrap the vertical splitter in a fixed-width (300px) container so
+    // the splitter itself can be any height while the panel stays 300px wide.
+    auto* rightPanelWrap = new QWidget(mainSplitter_);
+    rightPanelWrap->setObjectName("metadataPanel");
+    rightPanelWrap->setFixedWidth(300);
+    rightPanelWrap->setStyleSheet("background: transparent;");
+    auto* rpLay = new QVBoxLayout(rightPanelWrap);
+    rpLay->setContentsMargins(0, 0, 0, 0);
+    rpLay->setSpacing(0);
 
-    // Reasonable initial sizes for the center splitter, accounting for
-    // the 180px sidebar and 280px right panel already deducted.
-    const int availWidth = qMax(400, width() - 180 - 280 - 16);
+    rightSplitter_ = new QSplitter(Qt::Vertical, rightPanelWrap);
+    rightSplitter_->setObjectName("rightSplitter");
+    rightSplitter_->setHandleWidth(1);
+    rightSplitter_->setChildrenCollapsible(false);
+
+    metadataPane_ = new MetadataPane(rightSplitter_);
+    metadataPane_->setObjectName("metadataPane");
+    metadataPane_->setMinimumHeight(180);
+    rightSplitter_->addWidget(metadataPane_);
+
+    tagsNotesPane_ = new TagsNotesPane(rightSplitter_);
+    tagsNotesPane_->setObjectName("tagsNotesPane");
+    tagsNotesPane_->setMinimumHeight(160);
+    rightSplitter_->addWidget(tagsNotesPane_);
+
+    rpLay->addWidget(rightSplitter_);
+    mainSplitter_->addWidget(rightPanelWrap);
+
+    // Stretch factors: results=340, viewer=flex, right=300
+    mainSplitter_->setStretchFactor(0, 0);
+    mainSplitter_->setStretchFactor(1, 1);
+    mainSplitter_->setStretchFactor(2, 0);
+
+    // Initial sizes
+    const int availWidth = qMax(800, width() - 200 - 300 - 16);
     QList<int> hSizes;
-    hSizes << qMax(280, int(availWidth * 0.40))
-           << qMax(300, int(availWidth * 0.60));
+    hSizes << qMin(420, qMax(280, int(availWidth * 0.30)))
+           << qMax(360, int(availWidth * 0.70))
+           << 300;
     mainSplitter_->setSizes(hSizes);
 
-    mainLay->addWidget(centerWidget, 1);
+    rightSplitter_->setStretchFactor(0, 1);
+    rightSplitter_->setStretchFactor(1, 1);
+    QList<int> vSizes;
+    vSizes << 400 << 300;
+    rightSplitter_->setSizes(vSizes);
 
-    // ============================================================
-    // 3) RIGHT PANEL (fixed 280px): metadata + tags/notes
-    // ============================================================
-    auto* rightPanel = new QWidget(centralWidget);
-    rightPanel->setObjectName("rightPanel");
-    rightPanel->setFixedWidth(300);
+    hLay->addWidget(centerWidget, 1);
 
-    auto* rightLay = new QVBoxLayout(rightPanel);
-    rightLay->setContentsMargins(8, 8, 8, 8);
-    rightLay->setSpacing(6);
-
-    metadataPane_ = new MetadataPane(rightPanel);
-    metadataPane_->setObjectName("metadataPane");
-    metadataPane_->setMinimumHeight(150);
-    rightLay->addWidget(metadataPane_, 1);
-
-    tagsNotesPane_ = new TagsNotesPane(rightPanel);
-    tagsNotesPane_->setObjectName("tagsNotesPane");
-    tagsNotesPane_->setMinimumHeight(120);
-    rightLay->addWidget(tagsNotesPane_, 1);
-
-    mainLay->addWidget(rightPanel);
-
-    // ============================================================
-    // Hidden indexing widget (kept for stats plumbing; not visible
-    // in the new layout — stats are surfaced via the sidebar status
-    // section and the Index -> Index Statistics menu).
-    // ============================================================
+    // Hidden indexing widget (kept for stats plumbing).
     indexingWidget_ = new IndexingProgressWidget(this);
     indexingWidget_->setVisible(false);
 
     updateIndexStats();
 }
 
-void MainWindow::buildMenus() {
-    // File menu
-    auto* fileMenu = menuBar()->addMenu("&File");
-    fileMenu->addAction("Open File...", QKeySequence::Open,
-        this, [this]{
-            if (!repo_ || !db_) return;
-            try {
-                const QString p = QFileDialog::getOpenFileName(this, "Open file");
-                if (!p.isEmpty()) openFile(p);
-            } catch (...) {
-                statusBar()->showMessage("Open file failed.", 3000);
-            }
-        });
-    fileMenu->addAction("Export Results as CSV...", QKeySequence::Save,
-        this, &MainWindow::onExportCsv);
-    fileMenu->addAction("Save Current Search...", this, [this]{
-        if (!repo_ || !db_) return;
-        try {
-            const QString q = searchBar_->text().trimmed();
-            if (q.isEmpty()) {
-                QMessageBox::information(this, "Save Search",
-                    "Type a search query first.");
-                return;
-            }
-            bool ok = false;
-            const QString name = QInputDialog::getText(this,
-                "Save Current Search", "Name:",
-                QLineEdit::Normal, QString(), &ok).trimmed();
-            if (!ok || name.isEmpty()) return;
-            repo_->saveSearch(name, q);
-            refreshSavedSearches();
-            statusBar()->showMessage("Saved search: " + name, 3000);
-        } catch (...) {
-            statusBar()->showMessage("Save search failed.", 3000);
-        }
-    });
-    fileMenu->addSeparator();
-    fileMenu->addAction("Quit", QKeySequence::Quit,
-        qApp, &QApplication::quit);
+// ============================================================
+// Status bar
+// ============================================================
+void MainWindow::buildStatusBar() {
+    auto* sb = statusBar();
+    sb->setSizeGripEnabled(false);
 
-    // Index menu
-    auto* indexMenu = menuBar()->addMenu("&Index");
-    indexMenu->addAction("Add Folder to Index...", this, [this]{
-        try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
-    });
-    indexMenu->addAction("Extract Content Now", this, [this]{
-        try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
-    });
-    indexMenu->addSeparator();
-    indexMenu->addAction("Clear Index...", this, [this]{
-        if (!repo_ || !db_) return;
-        try {
-            const auto rc = QMessageBox::question(this, "Clear Index",
-                "This will permanently delete ALL files, content, tags, and notes "
-                "from the database.\n\nAre you sure?",
-                QMessageBox::Yes | QMessageBox::No);
-            if (rc != QMessageBox::Yes) return;
-            db_->exec("DELETE FROM Files;");
-            db_->exec("DELETE FROM DocumentText;");
-            db_->exec("DELETE FROM Tags;");
-            db_->exec("DELETE FROM Notes;");
-            db_->exec("DELETE FROM SearchIndex;");
-            db_->exec("DELETE FROM IndexingLog;");
-            db_->exec("VACUUM;");
-            resultsPane_->clear();
-            updateIndexStats();
-            statusBar()->showMessage("Index cleared.", 5000);
-        } catch (...) {
-            statusBar()->showMessage("Clear index failed.", 3000);
-        }
-    });
-    indexMenu->addAction("Index Statistics", this, [this]{
-        if (!repo_ || !db_) return;
-        try {
-            const qint64 total       = repo_->totalFiles();
-            const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
-            const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
-            const qint64 failed      = repo_->countByStatus(Constants::IndexingStatus::kFailed);
-            const qint64 tags        = repo_->getAllTags().size();
-            const qint64 saved       = repo_->savedSearches().size();
-            const QString dbPath     = Config::instance().dbPath();
-            qint64 dbSize = 0;
-            {
-                QFile f(dbPath);
-                if (f.exists()) dbSize = f.size();
-            }
-            QString dbSizeStr = Utils::formatFileSize(dbSize);
+    // Left side: dot + Ready + indexed count + total size + last indexed
+    auto* left = new QWidget(sb);
+    auto* lLay = new QHBoxLayout(left);
+    lLay->setContentsMargins(0, 0, 0, 0);
+    lLay->setSpacing(16);
 
-            QMessageBox::information(this, "Index Statistics",
-                QString("<table cellspacing='4'>"
-                        "<tr><td><b>Total files:</b></td><td>%1</td></tr>"
-                        "<tr><td><b>Content indexed:</b></td><td>%2</td></tr>"
-                        "<tr><td><b>Metadata only:</b></td><td>%3</td></tr>"
-                        "<tr><td><b>Failed:</b></td><td>%4</td></tr>"
-                        "<tr><td>&nbsp;</td><td></td></tr>"
-                        "<tr><td><b>Tags:</b></td><td>%5</td></tr>"
-                        "<tr><td><b>Saved searches:</b></td><td>%6</td></tr>"
-                        "<tr><td>&nbsp;</td><td></td></tr>"
-                        "<tr><td><b>Database:</b></td><td>%7</td></tr>"
-                        "<tr><td><b>DB size:</b></td><td>%8</td></tr>"
-                        "</table>")
-                    .arg(total).arg(contentDone).arg(metaOnly).arg(failed)
-                    .arg(tags).arg(saved)
-                    .arg(dbPath).arg(dbSizeStr));
-        } catch (...) {
-            statusBar()->showMessage("Statistics failed.", 3000);
-        }
-    });
-    indexMenu->addSeparator();
-    indexMenu->addAction("Detect Duplicates", this, &MainWindow::onDetectDuplicates);
+    auto* readyRow = new QWidget(left);
+    readyRow->setStyleSheet("background: transparent;");
+    auto* rLay = new QHBoxLayout(readyRow);
+    rLay->setContentsMargins(0, 0, 0, 0);
+    rLay->setSpacing(6);
+    statusDotLbl_ = new QLabel(readyRow);
+    statusDotLbl_->setObjectName("statusDot");
+    statusReadyLbl_ = new QLabel("Ready", readyRow);
+    statusReadyLbl_->setObjectName("statusReady");
+    rLay->addWidget(statusDotLbl_);
+    rLay->addWidget(statusReadyLbl_);
+    lLay->addWidget(readyRow);
 
-    // View menu
-    auto* viewMenu = menuBar()->addMenu("&View");
-    viewMenu->addAction("Toggle Dark/Light Theme", QKeySequence("F11"),
-        this, &MainWindow::onToggleTheme);
-    viewMenu->addAction("Show Favorites Only", this, [this]{
-        if (!repo_ || !db_) return;
-        try {
-            searchBar_->setText("favorite:1");
-            onSearch("favorite:1");
-        } catch (...) {
-            statusBar()->showMessage("Filter failed.", 3000);
-        }
-    });
+    statusIndexedLbl_ = new QLabel("Indexed files: 0", left);
+    statusIndexedLbl_->setObjectName("statusInfo");
+    lLay->addWidget(statusIndexedLbl_);
 
-    // Tools menu
-    auto* toolsMenu = menuBar()->addMenu("&Tools");
-    toolsMenu->addAction("Settings...", this, &MainWindow::onOpenSettings);
+    statusSizeLbl_ = new QLabel("Total size: 0 B", left);
+    statusSizeLbl_->setObjectName("statusInfo");
+    lLay->addWidget(statusSizeLbl_);
 
-    // Help menu
-    auto* helpMenu = menuBar()->addMenu("&Help");
-    helpMenu->addAction("How to Search", this, [this]{
-        if (!repo_ || !db_) return;
-        try {
-            QMessageBox::information(this, "How to Search",
-                "<h3>Search Syntax</h3>"
-                "<table cellspacing='6'>"
-                "<tr><td><b>gold bin</b></td><td>Files containing BOTH 'gold' AND 'bin' (any order)</td></tr>"
-                "<tr><td><b>gold+bin</b></td><td>Same as above (+ = space)</td></tr>"
-                "<tr><td><b>bin gold</b></td><td>Same results as 'gold bin' (order doesn't matter)</td></tr>"
-                "<tr><td><b>\"gold bin\"</b></td><td>Exact phrase 'gold bin' in filename or content</td></tr>"
-                "<tr><td><b>gold -draft</b></td><td>Files with 'gold' but NOT 'draft'</td></tr>"
-                "<tr><td><b>rail*</b></td><td>Prefix wildcard: railway, railroad, rails, etc.</td></tr>"
-                "</table>"
-                "<h3>Filters</h3>"
-                "<table cellspacing='6'>"
-                "<tr><td><b>type:pdf</b></td><td>Only PDF files</td></tr>"
-                "<tr><td><b>type:docx</b></td><td>Only Word documents</td></tr>"
-                "<tr><td><b>type:xlsx</b></td><td>Only Excel files</td></tr>"
-                "<tr><td><b>folder:Railway</b></td><td>Only files in folders containing 'Railway'</td></tr>"
-                "<tr><td><b>date:2026</b></td><td>Only files modified in 2026</td></tr>"
-                "<tr><td><b>tag:Urgent</b></td><td>Only files tagged 'Urgent'</td></tr>"
-                "<tr><td><b>favorite:1</b></td><td>Only favorite files</td></tr>"
-                "</table>"
-                "<h3>Examples</h3>"
-                "<table cellspacing='6'>"
-                "<tr><td><b>type:pdf NOC</b></td><td>PDF files with 'NOC' in name or content</td></tr>"
-                "<tr><td><b>folder:Railway type:docx</b></td><td>Word docs in Railway folder</td></tr>"
-                "<tr><td><b>date:2026 report -draft</b></td><td>2026 files with 'report' but not 'draft'</td></tr>"
-                "</table>"
-                "<p><i>Tip: Search finds matches in both filenames AND content (after extraction).</i></p>");
-        } catch (...) {
-            statusBar()->showMessage("Help dialog failed.", 3000);
-        }
-    });
-    helpMenu->addAction("About DocuSearch", this, &MainWindow::onAbout);
-}
+    statusLastLbl_ = new QLabel("Last indexed: -", left);
+    statusLastLbl_->setObjectName("statusInfo");
+    lLay->addWidget(statusLastLbl_);
 
-void MainWindow::buildToolbar() {
-    // The toolbar widget itself is created in buildCentral() and lives
-    // at the top of the center panel. This function only (re)populates
-    // its actions, so applyTheme() can call it again to refresh icons
-    // after a palette swap without recreating the widget.
-    if (!toolbar_) return;
+    lLay->addStretch();
+    sb->addWidget(left, 1);
 
-    // Delete any previously-added actions so re-populating (e.g. on
-    // theme toggle) doesn't accumulate orphaned QActions.
-    const auto oldActions = toolbar_->actions();
-    for (QAction* act : oldActions) {
-        toolbar_->removeAction(act);
-        act->deleteLater();
-    }
-
-    // Modern icon + text toolbar. No inline stylesheet — Theme QSS
-    // handles QToolBar and QToolButton styling.
-    toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-
-    // Create palette-aware icons. Qt's SVG renderer doesn't honor
-    // 'currentColor', so we load the SVG, replace the stroke color
-    // with the palette's text color, and render to a QPixmap. This
-    // ensures icons are visible in both light and dark mode.
-    auto makeIcon = [](const QString& svgPath) -> QIcon {
-        QFile f(svgPath);
-        if (!f.open(QIODevice::ReadOnly)) return QIcon();
-        QString svg = QString::fromUtf8(f.readAll());
-        f.close();
-        // Replace 'currentColor' with the actual text color from the
-        // application palette. We use the palette at icon-creation time;
-        // when the theme changes, applyTheme() re-calls buildToolbar()
-        // which re-renders the icons with the new palette.
-        QColor textColor = qApp->palette().color(QPalette::Text);
-        svg.replace("currentColor", textColor.name());
-        QSvgRenderer renderer(svg.toUtf8());
-        QPixmap pm(24, 24);
-        pm.fill(Qt::transparent);
-        QPainter painter(&pm);
-        renderer.render(&painter);
-        return QIcon(pm);
-    };
-
-    // Parent actions to the toolbar so they're cleaned up with it.
-    auto* addFolderAct = new QAction(makeIcon(":/icons/lucide/folder-plus.svg"), "Add Folder", toolbar_);
-    connect(addFolderAct, &QAction::triggered, this, [this]{
-        try { onAddFolder(); } catch (...) { statusBar()->showMessage("Add folder failed.", 3000); }
-    });
-    toolbar_->addAction(addFolderAct);
-
-    auto* extractAct = new QAction(makeIcon(":/icons/lucide/file-text.svg"), "Extract", toolbar_);
-    connect(extractAct, &QAction::triggered, this, [this]{
-        try { onExtract(); } catch (...) { statusBar()->showMessage("Extract failed.", 3000); }
-    });
-    toolbar_->addAction(extractAct);
-
-    toolbar_->addSeparator();
-
-    auto* settingsAct = new QAction(makeIcon(":/icons/lucide/settings.svg"), "Settings", toolbar_);
-    connect(settingsAct, &QAction::triggered, this, [this]{
-        try { onOpenSettings(); } catch (...) { statusBar()->showMessage("Settings failed.", 3000); }
-    });
-    toolbar_->addAction(settingsAct);
-
-    auto* themeAct = new QAction(makeIcon(darkMode_ ? ":/icons/lucide/sun.svg" : ":/icons/lucide/moon.svg"), "Theme", toolbar_);
-    connect(themeAct, &QAction::triggered, this, [this]{
-        try { onToggleTheme(); } catch (...) { statusBar()->showMessage("Theme toggle failed.", 3000); }
-    });
-    toolbar_->addAction(themeAct);
-
-    auto* dupesAct = new QAction(makeIcon(":/icons/lucide/duplicate.svg"), "Duplicates", toolbar_);
-    connect(dupesAct, &QAction::triggered, this, [this]{
-        try { onDetectDuplicates(); } catch (...) { statusBar()->showMessage("Duplicate detection failed.", 3000); }
-    });
-    toolbar_->addAction(dupesAct);
+    // Right side: Open Original Location button
+    openLocationBtn_ = new QPushButton(sb);
+    openLocationBtn_->setObjectName("openLocationBtn");
+    openLocationBtn_->setCursor(Qt::PointingHandCursor);
+    openLocationBtn_->setText("Open Original Location");
+    openLocationBtn_->setToolTip("Open the folder containing the selected file");
+    sb->addPermanentWidget(openLocationBtn_);
 }
 
 void MainWindow::applyTheme() {
-    // Apply the initial palette based on saved darkMode_.
     QPalette pal;
     if (darkMode_) {
-        pal.setColor(QPalette::Window,          QColor(0x20, 0x20, 0x20));
-        pal.setColor(QPalette::Base,            QColor(0x2A, 0x2A, 0x2A));
-        pal.setColor(QPalette::AlternateBase,   QColor(0x26, 0x26, 0x26));
-        pal.setColor(QPalette::WindowText,      QColor(0xE0, 0xE0, 0xE0));
-        pal.setColor(QPalette::Text,            QColor(0xE0, 0xE0, 0xE0));
-        pal.setColor(QPalette::ButtonText,      QColor(0xE0, 0xE0, 0xE0));
-        pal.setColor(QPalette::Button,          QColor(0x2A, 0x2A, 0x2A));
-        pal.setColor(QPalette::Highlight,       QColor(0x00, 0x78, 0xD4));
-        pal.setColor(QPalette::HighlightedText, QColor(0xFF, 0xFF, 0xFF));
-        pal.setColor(QPalette::ToolTipBase,     QColor(0x40, 0x40, 0x40));
-        pal.setColor(QPalette::ToolTipText,     QColor(0xE0, 0xE0, 0xE0));
+        pal.setColor(QPalette::Window,          QColor(0x0f, 0x17, 0x2a));
+        pal.setColor(QPalette::Base,            QColor(0x1e, 0x29, 0x3b));
+        pal.setColor(QPalette::AlternateBase,   QColor(0x0f, 0x17, 0x2a));
+        pal.setColor(QPalette::WindowText,      QColor(0xf1, 0xf5, 0xf9));
+        pal.setColor(QPalette::Text,            QColor(0xf1, 0xf5, 0xf9));
+        pal.setColor(QPalette::ButtonText,      QColor(0xf1, 0xf5, 0xf9));
+        pal.setColor(QPalette::Button,          QColor(0x1e, 0x29, 0x3b));
+        pal.setColor(QPalette::Highlight,       QColor(0x3b, 0x82, 0xf6));
+        pal.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
+        pal.setColor(QPalette::ToolTipBase,     QColor(0x1e, 0x29, 0x3b));
+        pal.setColor(QPalette::ToolTipText,     QColor(0xf1, 0xf5, 0xf9));
     } else {
-        pal.setColor(QPalette::Window,          QColor(0xF3, 0xF3, 0xF3));
-        pal.setColor(QPalette::Base,            QColor(0xFF, 0xFF, 0xFF));
-        pal.setColor(QPalette::AlternateBase,   QColor(0xF9, 0xF9, 0xF9));
-        pal.setColor(QPalette::WindowText,      QColor(0x20, 0x20, 0x20));
-        pal.setColor(QPalette::Text,            QColor(0x20, 0x20, 0x20));
-        pal.setColor(QPalette::ButtonText,      QColor(0x20, 0x20, 0x20));
-        pal.setColor(QPalette::Button,          QColor(0xF3, 0xF3, 0xF3));
-        pal.setColor(QPalette::Highlight,       QColor(0x00, 0x78, 0xD4));
-        pal.setColor(QPalette::HighlightedText, QColor(0xFF, 0xFF, 0xFF));
-        pal.setColor(QPalette::ToolTipBase,     QColor(0xFF, 0xFF, 0xFF));
-        pal.setColor(QPalette::ToolTipText,     QColor(0x20, 0x20, 0x20));
+        pal.setColor(QPalette::Window,          QColor(0xf0, 0xf2, 0xf5));
+        pal.setColor(QPalette::Base,            QColor(0xff, 0xff, 0xff));
+        pal.setColor(QPalette::AlternateBase,   QColor(0xf9, 0xfa, 0xfb));
+        pal.setColor(QPalette::WindowText,      QColor(0x1a, 0x1a, 0x2e));
+        pal.setColor(QPalette::Text,            QColor(0x1a, 0x1a, 0x2e));
+        pal.setColor(QPalette::ButtonText,      QColor(0x1a, 0x1a, 0x2e));
+        pal.setColor(QPalette::Button,          QColor(0xff, 0xff, 0xff));
+        pal.setColor(QPalette::Highlight,       QColor(0x25, 0x63, 0xeb));
+        pal.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
+        pal.setColor(QPalette::ToolTipBase,     QColor(0xff, 0xff, 0xff));
+        pal.setColor(QPalette::ToolTipText,     QColor(0x1a, 0x1a, 0x2e));
     }
     pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
 
-    // Apply to QApplication so ALL widgets get it
     QApplication::setPalette(pal);
 
-    // CRITICAL: Apply the Theme QSS stylesheet. Without this, the 800+
-    // lines of modern QSS in Theme.cpp (border radius, padding, hover
-    // states, sidebar styling, button styles, etc.) are never applied.
-    // Only QPalette is set above, which gives basic colors but NOT the
-    // modern Fluent Design appearance.
     Theme::apply(darkMode_ ? Theme::Mode::Dark : Theme::Mode::Light);
 
     // Force-update all child widgets to pick up the new palette immediately.
@@ -690,16 +665,52 @@ void MainWindow::applyTheme() {
     }
     update();
 
-    // Rebuild the toolbar's actions so SVG icons get re-rendered with
-    // the new palette's text color (dark icons for light mode, light
-    // icons for dark mode). Without this, icons stay the old color
-    // after a theme toggle.
-    //
-    // The toolbar widget itself lives inside the center panel and is
-    // reused — buildToolbar() now just clears + re-adds actions
-    // rather than creating a fresh QToolBar, so we don't need to
-    // delete/detach anything here.
-    buildToolbar();
+    // Re-render all icons with the new palette's text color.
+    refreshAllIcons();
+}
+
+void MainWindow::refreshAllIcons() {
+    QColor textColor = qApp->palette().color(QPalette::Text);
+    QColor whiteText("#ffffff");
+
+    // ---- Sidebar icons ----
+    const QStringList navIcons = {
+        "search", "bookmark", "tag", "sticky-note",
+        "bar-chart-3", "clock", "settings", "help-circle", "info"
+    };
+    for (int i = 0; i < sidebarList_->count() && i < navIcons.size(); ++i) {
+        auto* item = sidebarList_->item(i);
+        if (!item) continue;
+        item->setIcon(loadLucideIcon(navIcons[i], textColor, 18));
+    }
+
+    // ---- Title bar icons ----
+    // App logo: white search icon on blue background (set in ctor, but
+    // re-set here in case the device pixel ratio changed).
+    appLogoLbl_->setPixmap(loadLucidePixmap("search", whiteText, 16, devicePixelRatio()));
+
+    titleThemeBtn_->setIcon(loadLucideIcon(darkMode_ ? "sun" : "moon", textColor, 16));
+    titleThemeBtn_->setIconSize(QSize(16, 16));
+
+    titleMinBtn_->setIcon(loadLucideIcon("minus", textColor, 14));
+    titleMinBtn_->setIconSize(QSize(14, 14));
+
+    titleMaxBtn_->setIcon(loadLucideIcon("square", textColor, 14));
+    titleMaxBtn_->setIconSize(QSize(14, 14));
+
+    titleCloseBtn_->setIcon(loadLucideIcon("x", textColor, 14));
+    titleCloseBtn_->setIconSize(QSize(14, 14));
+
+    // ---- Open Location button icon ----
+    openLocationBtn_->setIcon(loadLucideIcon("folder", textColor, 14));
+    openLocationBtn_->setIconSize(QSize(14, 14));
+
+    // ---- Sub-pane icon refresh ----
+    if (searchBar_)     searchBar_->refreshIcons();
+    if (resultsPane_)   resultsPane_->refreshIcons();
+    if (previewPane_)   previewPane_->refreshIcons();
+    if (metadataPane_)  metadataPane_->refreshIcons();
+    if (tagsNotesPane_) tagsNotesPane_->refreshIcons();
 }
 
 void MainWindow::loadSettings() {
@@ -750,8 +761,6 @@ void MainWindow::onLiveSearchTick() {
 
 void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     if (!repo_ || !db_) return;
-    // Track the selection so we can refresh the preview after a
-    // background extraction run finishes.
     selectedFileId_ = fileId;
     selectedPath_   = path;
     try {
@@ -764,12 +773,7 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
         }
         previewPane_->setFilePath(path);
 
-        // Thumbnail generator (thumbs_) is not constructed in this build - just
-        // clear any existing preview rather than crashing on a null pointer.
-        previewPane_->setThumbnail(QPixmap());
-
-        // Load extracted text from the DocumentText table via a direct
-        // SQLite query (avoids depending on the null indexer_).
+        // Load extracted text from DocumentText table.
         QString extracted;
         if (fileId != 0) {
             sqlite3* raw = db_->raw();
@@ -791,6 +795,10 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
         previewPane_->setExtractedText(extracted.isEmpty()
             ? "No content extracted for this file."
             : extracted);
+        previewPane_->setDocumentText(extracted);
+
+        // Page info: just 1 page for now (we don't render PDF pages).
+        previewPane_->setPageInfo(1, 1);
     } catch (...) {
         statusBar()->showMessage("Failed to load file details.", 3000);
     }
@@ -812,6 +820,23 @@ void MainWindow::onOpenOriginal(const QString& path) {
     } catch (...) {
         statusBar()->showMessage("Failed to open file.", 3000);
     }
+}
+
+void MainWindow::onOpenLocation() {
+    if (selectedPath_.isEmpty()) {
+        statusBar()->showMessage("Select a file first.", 3000);
+        return;
+    }
+    QFileInfo fi(selectedPath_);
+    const QString folder = fi.absolutePath();
+    if (folder.isEmpty()) return;
+    // Open the folder in Windows Explorer with the file selected.
+#ifdef Q_OS_WIN
+    const QString winPath = QDir::toNativeSeparators(folder);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+#else
+    QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+#endif
 }
 
 void MainWindow::openFile(const QString& path) {
@@ -891,12 +916,94 @@ void MainWindow::onAddFolder() {
         scanFolderFast(folder);
         QMessageBox::information(this, "Scan Complete",
             QString("Files from %1 have been added to the index.\n\n"
-                    "Click the Extract button to extract text content from "
-                    "documents (PDF, DOCX, XLSX, etc.) so you can search "
-                    "by content.").arg(folder));
+                    "Click the Extract button (or wait for auto-extraction) "
+                    "to extract text content from documents (PDF, DOCX, XLSX, etc.) "
+                    "so you can search by content.").arg(folder));
     } catch (...) {
         statusBar()->showMessage("Folder scan failed.", 5000);
     }
+}
+
+void MainWindow::onRefresh() {
+    // Refresh the current search results.
+    try {
+        onSearch(searchBar_->text());
+        updateIndexStats();
+        statusBar()->showMessage("Refreshed.", 2000);
+    } catch (...) {
+        statusBar()->showMessage("Refresh failed.", 3000);
+    }
+}
+
+void MainWindow::onFilters() {
+    // Toggle a simple "advanced filters" prompt for now.
+    bool ok = false;
+    const QString q = QInputDialog::getText(
+        this, "Advanced Filters",
+        "Enter filter (e.g., type:pdf, folder:Railway, date:2026, tag:Urgent):",
+        QLineEdit::Normal, searchBar_->text(), &ok);
+    if (ok && !q.isEmpty()) {
+        searchBar_->setText(q);
+        onSearch(q);
+    }
+}
+
+void MainWindow::onSidebarClicked(int row) {
+    if (row < 0) return;
+    auto* item = sidebarList_->item(row);
+    if (!item) return;
+    const QString page = item->data(Qt::UserRole).toString();
+    if (page == "Settings") {
+        onOpenSettings();
+        // Revert to "Search" so the user lands back on the search page.
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "About") {
+        onAbout();
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Help") {
+        QMessageBox::information(this, "How to Search",
+            "<h3>Search Syntax</h3>"
+            "<table cellspacing='6'>"
+            "<tr><td><b>gold bin</b></td><td>Files containing BOTH 'gold' AND 'bin'</td></tr>"
+            "<tr><td><b>\"gold bin\"</b></td><td>Exact phrase 'gold bin'</td></tr>"
+            "<tr><td><b>gold -draft</b></td><td>Files with 'gold' but NOT 'draft'</td></tr>"
+            "<tr><td><b>rail*</b></td><td>Prefix wildcard: railway, railroad, rails</td></tr>"
+            "</table>"
+            "<h3>Filters</h3>"
+            "<table cellspacing='6'>"
+            "<tr><td><b>type:pdf</b></td><td>Only PDF files</td></tr>"
+            "<tr><td><b>folder:Railway</b></td><td>Files in folders containing 'Railway'</td></tr>"
+            "<tr><td><b>date:2026</b></td><td>Files modified in 2026</td></tr>"
+            "<tr><td><b>tag:Urgent</b></td><td>Files tagged 'Urgent'</td></tr>"
+            "</table>");
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Stats") {
+        QMessageBox::information(this, "Index Statistics",
+            QString("Total files: %1\nDatabase size: %2")
+                .arg(repo_ ? repo_->totalFiles() : 0)
+                .arg([&]{
+                    QFile f(Config::instance().dbPath());
+                    return Utils::formatFileSize(f.exists() ? f.size() : 0);
+                }()));
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Saved") {
+        // Show the saved searches dropdown.
+        statusBar()->showMessage("Use the 'Saved Searches' dropdown in the search bar.", 5000);
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Tags") {
+        statusBar()->showMessage("Tags are shown in the right panel for the selected file.", 5000);
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Notes") {
+        statusBar()->showMessage("Notes are shown in the right panel for the selected file.", 5000);
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Recent") {
+        // Search for files modified in the last 30 days.
+        const QString q = "date:" + QDateTime::currentDateTime().toString("yyyy");
+        searchBar_->setText(q);
+        onSearch(q);
+        sidebarList_->setCurrentRow(0);
+    }
+    // "Search" stays as the current page.
 }
 
 void MainWindow::refreshPreviewForSelectedFile() {
@@ -919,6 +1026,7 @@ void MainWindow::refreshPreviewForSelectedFile() {
             previewPane_->setExtractedText(extracted.isEmpty()
                 ? "No content extracted for this file."
                 : extracted);
+            previewPane_->setDocumentText(extracted);
         }
     } catch (...) {
         // Silently ignore - this is just a convenience refresh.
@@ -963,8 +1071,7 @@ void MainWindow::onExtract() {
     }
 
     if (todo.isEmpty()) {
-        statusBar()->showMessage("No files need content extraction. "
-                                 "All files are already indexed.", 3000);
+        statusBar()->showMessage("No files need content extraction.", 3000);
         return;
     }
 
@@ -973,11 +1080,6 @@ void MainWindow::onExtract() {
     statusBar()->showMessage(
         QString("Extracting content from %1 files...").arg(total));
 
-    // CRITICAL: Use QSharedPointer to heap-allocate the extraction state
-    // so it survives after onExtract() returns. The QTimer fires
-    // asynchronously and the lambda needs access to todo/idx/done/failed.
-    // Capturing by reference (&todo, &idx) would crash because those
-    // stack variables are destroyed when onExtract() returns.
     struct ExtractState {
         QList<TodoItem> todo;
         int idx = 0;
@@ -1117,7 +1219,6 @@ void MainWindow::autoScanIndexedFolders() {
     autoScanRunning_ = true;
     statusBar()->showMessage("Auto-scanning for new files...");
 
-    // Gather unique top-level folders from indexed file paths.
     QSet<QString> folders;
     {
         sqlite3* raw = db_->raw();
@@ -1155,13 +1256,6 @@ void MainWindow::autoScanIndexedFolders() {
     }
 
     const QStringList folderList(folders.begin(), folders.end());
-
-    // Run the scan in a BACKGROUND THREAD to keep the UI responsive.
-    // Previously this ran on the main thread with processEvents() every
-    // 200 files, which could freeze the UI for large indexes.
-    //
-    // The worker thread opens its own sqlite3 connection (FULLMUTEX mode)
-    // so it doesn't conflict with the main thread's Database object.
     QString dbPath = Config::instance().dbPath();
     bool hashEnabled = settings_.hashLargeFiles;
     QStringList foldersCopy = folderList;
@@ -1183,7 +1277,6 @@ void MainWindow::autoScanIndexedFolders() {
                     [&](const QFileInfo& fi) -> bool {
                         const QString path = FileUtils::toNative(fi.absoluteFilePath());
 
-                        // Check if file already exists in DB.
                         sqlite3_stmt* chk = nullptr;
                         bool isNew = true;
                         if (sqlite3_prepare_v2(workerDb,
@@ -1196,7 +1289,6 @@ void MainWindow::autoScanIndexedFolders() {
                             sqlite3_finalize(chk);
                         }
 
-                        // Build file metadata.
                         const QString ext = FileUtils::extensionOf(fi.absoluteFilePath());
                         const QString hash = hashEnabled
                             ? FileUtils::sha256OfFile(path, 64 * 1024 * 1024)
@@ -1205,7 +1297,6 @@ void MainWindow::autoScanIndexedFolders() {
                         const qint64 created = fi.birthTime().toSecsSinceEpoch();
                         const qint64 modified = fi.lastModified().toSecsSinceEpoch();
 
-                        // Upsert (INSERT OR REPLACE on path).
                         sqlite3_stmt* upd = nullptr;
                         sqlite3_prepare_v2(workerDb,
                             "INSERT INTO Files (path, filename, extension, size, "
@@ -1224,9 +1315,6 @@ void MainWindow::autoScanIndexedFolders() {
                             sqlite3_bind_int64(upd, 5, created);
                             sqlite3_bind_int64(upd, 6, modified);
                             sqlite3_bind_text(upd, 7, hash.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                            // New files get 'metadata_only'; existing files
-                            // keep their current status via the ON CONFLICT
-                            // clause (we don't update indexing_status).
                             const char* idxStat = isNew ? "metadata_only" : "content_done";
                             sqlite3_bind_text(upd, 8, idxStat, -1, SQLITE_TRANSIENT);
                             const char* ocrStat = (Constants::kDocumentExtensions.contains(ext) ||
@@ -1265,21 +1353,39 @@ void MainWindow::updateIndexStats() {
         const qint64 contentDone = repo_->countByStatus(Constants::IndexingStatus::kContentDone);
         const qint64 metaOnly    = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
 
-        // Update the sidebar status labels (bottom of the left nav).
-        if (sidebarFileCountLabel_) {
-            sidebarFileCountLabel_->setText(QString("%1 files").arg(total));
+        // Sidebar status section
+        qint64 dbSize = 0;
+        {
+            QFile f(Config::instance().dbPath());
+            if (f.exists()) dbSize = f.size();
         }
-        if (sidebarDbSizeLabel_) {
-            qint64 dbSize = 0;
-            {
-                QFile f(Config::instance().dbPath());
-                if (f.exists()) dbSize = f.size();
-            }
-            sidebarDbSizeLabel_->setText(Utils::formatFileSize(dbSize));
+        if (indexedInfoLbl_) {
+            indexedInfoLbl_->setText(QString("%1 files\n%2")
+                .arg(total)
+                .arg(Utils::formatFileSize(dbSize)));
+        }
+        if (indexedBar_) {
+            // Progress = content_done / total (capped at 100).
+            int pct = total > 0 ? int((contentDone * 100) / total) : 0;
+            indexedBar_->setValue(qMin(100, pct));
         }
 
-        // Update the hidden indexing widget (kept for stats plumbing;
-        // surfaces the same numbers via Index -> Index Statistics).
+        // Status bar
+        if (statusIndexedLbl_) {
+            statusIndexedLbl_->setText(QString("Indexed files: %1").arg(total));
+        }
+        if (statusSizeLbl_) {
+            statusSizeLbl_->setText(QString("Total size: %1").arg(Utils::formatFileSize(dbSize)));
+        }
+        if (statusLastLbl_) {
+            QFile f(Config::instance().dbPath());
+            if (f.exists()) {
+                QDateTime lastMod = QFileInfo(f).lastModified();
+                statusLastLbl_->setText("Last indexed: " + lastMod.toString("dd MMM yyyy hh:mm AP"));
+            }
+        }
+
+        // Hidden indexing widget (kept for stats plumbing).
         if (indexingWidget_) {
             DocuSearch::IndexingProgress p;
             p.filesScanned.store(total);
@@ -1305,19 +1411,13 @@ void MainWindow::onStartIndexing() {
         if (!indexer_) {
             QMessageBox::information(this, "Indexing Unavailable",
                 "The indexing subsystem is disabled in this build.\n\n"
-                "To add files to the search index, use:\n"
-                "  Index -> Add Folder to Index\n\n"
-                "This manually scans a folder and adds files to the database.");
+                "To add files to the search index, use the 'Add Folder' button.");
             return;
         }
         if (settings_.indexedDrives.isEmpty()) {
             QMessageBox::information(this, "No Drives Configured",
                 "Please add drives in Settings -> Indexing first.");
             onOpenSettings();
-            return;
-        }
-        if (!indexer_) {
-            statusBar()->showMessage("Indexer not available. Use Index -> Add Folder.");
             return;
         }
         if (indexer_->isRunning()) {
@@ -1411,13 +1511,13 @@ void MainWindow::onFileAdded(const QString& path) {
 void MainWindow::onFileModified(const QString& path) {
     if (!repo_ || !db_) return;
     try {
-        if (!indexer_) return;  // indexer disabled in this build
+        if (!indexer_) return;
         FileRecord r;
         if (repo_->getByPath(path, r)) {
             indexer_->reindexFile(path);
             DS_INFO("Watcher", "Reindexing modified: " + path);
         } else {
-            onFileAdded(path);  // might be a fresh file
+            onFileAdded(path);
         }
     } catch (...) {
         DS_INFO("Watcher", "Failed to handle modify: " + path);
@@ -1494,12 +1594,8 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // Get the file's extension to decide how to OCR.
     const QString ext = FileUtils::extensionOf(path).toLower();
 
-    // Images: OCR directly.
-    // PDFs: render each page via Poppler, then OCR each page.
-    // Others: not supported.
     bool isImage = (ext == "png" || ext == "jpg" || ext == "jpeg" ||
                     ext == "bmp" || ext == "tiff" || ext == "tif" ||
                     ext == "webp" || ext == "gif");
@@ -1511,7 +1607,6 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // Initialize Windows OCR engine.
     WindowsOcrEngine ocrEngine;
     if (!ocrEngine.init()) {
         QMessageBox::information(this, "OCR",
@@ -1525,7 +1620,6 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // Show a progress dialog.
     QProgressDialog progress("Running OCR...", "Cancel", 0, 100, this);
     progress.setWindowTitle("Windows OCR");
     progress.setWindowModality(Qt::WindowModal);
@@ -1542,7 +1636,6 @@ void MainWindow::onOcrThisFile(const QString& path) {
         ocrText = ocrEngine.ocrFile(path);
         progress.setValue(100);
     } else {
-        // PDF: render each page via Poppler, then OCR.
 #ifdef DOCUSEARCH_HAS_POPPLER
         try {
             auto doc = poppler::document::load_from_file(path.toStdString());
@@ -1552,7 +1645,6 @@ void MainWindow::onOcrThisFile(const QString& path) {
             }
             poppler::page_renderer renderer;
             renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-            // Use 150 DPI for OCR (good balance of accuracy + memory).
             const int dpi = 150;
             const int maxPages = std::min(doc->pages(), 30);
             progress.setMaximum(maxPages);
@@ -1607,14 +1699,13 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // Save OCR text to database (raw SQL, no transactions).
+    // Save OCR text to database.
     {
         sqlite3* raw = db_->raw();
         if (raw) {
             QByteArray textBytes = ocrText.toUtf8();
             qint64 now = QDateTime::currentSecsSinceEpoch();
 
-            // 1. Upsert DocumentText.
             sqlite3_stmt* upd = nullptr;
             sqlite3_prepare_v2(raw,
                 "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
@@ -1634,13 +1725,11 @@ void MainWindow::onOcrThisFile(const QString& path) {
                 sqlite3_finalize(upd);
             }
 
-            // 2. Update Files status.
             sqlite3_exec(raw,
                 QString("UPDATE Files SET indexing_status='content_done', ocr_status='done' WHERE id=%1;")
                     .arg(selectedFileId_).toUtf8().constData(),
                 nullptr, nullptr, nullptr);
 
-            // 3. Update FTS index (DELETE + INSERT).
             sqlite3_stmt* del = nullptr;
             sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
                                -1, &del, nullptr);
@@ -1670,8 +1759,8 @@ void MainWindow::onOcrThisFile(const QString& path) {
         }
     }
 
-    // Show OCR text in the preview pane.
     previewPane_->setExtractedText(ocrText);
+    previewPane_->setDocumentText(ocrText);
     updateIndexStats();
     statusBar()->showMessage(
         QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
@@ -1682,9 +1771,6 @@ void MainWindow::onOpenSettings() {
     try {
         SettingsDialog dlg(settings_, repo_.get(), db_.get(), this);
 
-        // Apply button: persist + live-apply without closing the dialog.
-        // This lets the user change theme/threads and see the effect
-        // immediately, then keep tweaking.
         QObject::connect(&dlg, &SettingsDialog::settingsApplied,
             this, [this](const AppSettings& s){
                 settings_ = s;
@@ -1695,9 +1781,6 @@ void MainWindow::onOpenSettings() {
                 statusBar()->showMessage("Settings applied.", 3000);
             });
 
-        // Restore: close DB, let BackupManager overwrite the .db file,
-        // reopen DB, refresh UI. We do this here (not in the dialog)
-        // because the dialog doesn't own the Database object.
         QObject::connect(&dlg, &SettingsDialog::restoreRequested,
             this, [this](const QString& zipPath){
                 statusBar()->showMessage("Restoring database...", 0);
@@ -1722,10 +1805,6 @@ void MainWindow::onOpenSettings() {
                 }
             });
 
-        // Saved searches are persisted immediately by the dialog (via
-        // repo_->saveSearch / deleteSearch), so regardless of whether
-        // the user clicks OK or Cancel, refresh the dropdown in case
-        // they added/removed entries.
         const int rc = dlg.exec();
         refreshSavedSearches();
         if (rc == QDialog::Accepted) {
@@ -1736,13 +1815,8 @@ void MainWindow::onOpenSettings() {
             applyTheme();
             updateIndexStats();
 
-            // If the user added new indexed drives in Settings, scan
-            // them now so the user sees files appear immediately.
-            // Previously, adding drives in Settings did nothing — the
-            // user had to manually use Index → Add Folder to Index.
             for (const QString& drive : settings_.indexedDrives) {
                 if (!oldSettings.indexedDrives.contains(drive)) {
-                    // New drive added — scan it.
                     statusBar()->showMessage("Scanning " + drive + " ...");
                     QApplication::processEvents();
                     scanFolderFast(drive);
@@ -1769,7 +1843,7 @@ void MainWindow::onAbout() {
     try {
         QMessageBox::about(this, "About DocuSearch",
             QString("<div style='text-align:center;'>"
-                    "<h2 style='color:#0078D4;'>DocuSearch %1</h2>"
+                    "<h2 style='color:#2563eb;'>DocuSearch %1</h2>"
                     "<p>Offline Intelligent Document Search &amp; OCR System</p>"
                     "<p>Completely offline. No cloud. No telemetry.</p>"
                     "<hr>"
@@ -1800,7 +1874,6 @@ void MainWindow::onExportCsv() {
         QTextStream s(&f);
         s.setEncoding(QStringConverter::Utf8);
         s << "filename,path,extension,size,modified_date\n";
-        // Pull current results via re-running search
         auto hits = search_->search(searchBar_->text(), 10000);
         for (const auto& h : hits) {
             s << "\"" << h.filename << "\","
@@ -1825,7 +1898,6 @@ void MainWindow::onDetectDuplicates() {
             QMessageBox::information(this, "Duplicates", "No duplicates found by hash.");
             return;
         }
-        // Build a search-like results list
         QList<SearchHit> hits;
         for (const auto& g : groups) {
             for (const auto id : g) {

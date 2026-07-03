@@ -1,115 +1,275 @@
 // ============================================================
-// TagsNotesPane.cpp - Tags (top) + Notes (bottom), stacked vertically
+// TagsNotesPane.cpp - Tags + Notes panel matching reference design
 // ============================================================
 
 #include "TagsNotesPane.h"
+#include "IconUtils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QGroupBox>
-#include <QKeyEvent>
 #include <QScrollArea>
-#include <QLabel>
+#include <QApplication>
+#include <QPalette>
+#include <QDateTime>
+#include <QMouseEvent>
+#include <QPushButton>
+#include <QLayout>
+#include <QList>
+
+// A simple flow layout that wraps child widgets to the next row when
+// they exceed the available width. Used to lay out tag pills.
+class FlowLayout : public QLayout {
+public:
+    explicit FlowLayout(QWidget* parent = nullptr) : QLayout(parent) {}
+    ~FlowLayout() override {
+        while (auto* item = takeAt(0)) delete item;
+    }
+
+    void addItem(QLayoutItem* item) override { items_.append(item); }
+    int count() const override { return items_.size(); }
+    QLayoutItem* itemAt(int index) const override {
+        return (index >= 0 && index < items_.size()) ? items_.at(index) : nullptr;
+    }
+    QLayoutItem* takeAt(int index) override {
+        return (index >= 0 && index < items_.size()) ? items_.takeAt(index) : nullptr;
+    }
+
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    QSize sizeHint() const override { return minimumSize(); }
+
+    QSize minimumSize() const override {
+        QSize size;
+        for (auto* it : items_)
+            size = size.expandedTo(it->minimumSize());
+        return size + QSize(2 * margin(), 2 * margin());
+    }
+
+    void setGeometry(const QRect& rect) override {
+        QLayout::setGeometry(rect);
+        if (items_.isEmpty()) return;
+        int x = rect.x() + margin();
+        int y = rect.y() + margin();
+        const int lineHeight = 28;
+        const int spacing = 6;
+        for (auto* it : items_) {
+            const int nextX = x + it->sizeHint().width() + spacing;
+            if (nextX - spacing > rect.right() - margin() && x > rect.x() + margin()) {
+                x = rect.x() + margin();
+                y += lineHeight + spacing;
+            }
+            it->setGeometry(QRect(QPoint(x, y), it->sizeHint()));
+            x += it->sizeHint().width() + spacing;
+        }
+    }
+
+private:
+    QList<QLayoutItem*> items_;
+};
 
 namespace DocuSearch {
 
+// A clickable tag pill. Clicking emits a signal that the parent can
+// use to remove the tag (via right-click or a small × overlay).
+class TagPill : public QPushButton {
+public:
+    explicit TagPill(const QString& text, const QString& colorClass, QWidget* parent = nullptr)
+        : QPushButton(text, parent), colorClass_(colorClass) {
+        setObjectName(colorClass);
+        setCursor(Qt::PointingHandCursor);
+        setToolTip("Right-click to remove");
+    }
+
+    QString colorClass() const { return colorClass_; }
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::RightButton) {
+            emit rightClicked();
+        } else {
+            QPushButton::mousePressEvent(e);
+        }
+    }
+
+signals:
+    void rightClicked();
+
+private:
+    QString colorClass_;
+};
+
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
+    setObjectName("tagsNotesPanel");
+    setStyleSheet("background: transparent;");
+
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(4, 4, 4, 4);
-    outer->setSpacing(4);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
 
     // ---- Tags section ----
-    auto* tagsHeader = new QLabel("TAGS", this);
-    tagsHeader->setObjectName("sectionLabel");
-    outer->addWidget(tagsHeader);
+    auto* tagsSection = new QWidget(this);
+    tagsSection->setObjectName("tagsSection");
+    tagsSection->setStyleSheet("background: transparent;");
+    auto* tagsLay = new QVBoxLayout(tagsSection);
+    tagsLay->setContentsMargins(16, 12, 16, 12);
+    tagsLay->setSpacing(10);
 
-    // Tag input on its own row.
-    tagInput_ = new QLineEdit(this);
-    tagInput_->setPlaceholderText("Add tag...");
-    tagInput_->setMaximumHeight(26);
-    outer->addWidget(tagInput_);
+    auto* tagsHeaderRow = new QWidget(tagsSection);
+    tagsHeaderRow->setStyleSheet("background: transparent;");
+    auto* thLay = new QHBoxLayout(tagsHeaderRow);
+    thLay->setContentsMargins(0, 0, 0, 0);
+    thLay->setSpacing(6);
+    tagsHeaderLbl_ = new QLabel("Tags", tagsHeaderRow);
+    tagsHeaderLbl_->setObjectName("tagsHeader");
+    auto* tagsIconLbl = new QLabel(tagsHeaderRow);
+    tagsIconLbl->setStyleSheet("background: transparent;");
+    tagsIconLbl->setPixmap(loadLucidePixmap("tag", QColor("#6b7280"), 16, devicePixelRatio()));
+    thLay->addWidget(tagsHeaderLbl_);
+    thLay->addWidget(tagsIconLbl);
+    thLay->addStretch();
+    tagsLay->addWidget(tagsHeaderRow);
 
-    // Buttons row: Add + Remove.
-    auto* btnRow = new QHBoxLayout();
-    btnRow->setSpacing(3);
-    addTagBtn_ = new QPushButton("+ Add", this);
-    addTagBtn_->setMaximumHeight(24);
+    // Tag pills container with flow layout
+    tagsContainer_ = new QWidget(tagsSection);
+    tagsContainer_->setStyleSheet("background: transparent;");
+    tagsLayout_ = new FlowLayout(tagsContainer_);
+    tagsLay->addWidget(tagsContainer_);
+
+    // Add Tag button + hidden input
+    addTagBtn_ = new QPushButton("+ Add Tag", tagsSection);
+    addTagBtn_->setObjectName("addTagBtn");
     addTagBtn_->setCursor(Qt::PointingHandCursor);
-    addTagBtn_->setDefault(true);
-    rmTagBtn_ = new QPushButton("Remove", this);
-    rmTagBtn_->setMaximumHeight(24);
-    rmTagBtn_->setCursor(Qt::PointingHandCursor);
-    btnRow->addWidget(addTagBtn_);
-    btnRow->addWidget(rmTagBtn_);
-    outer->addLayout(btnRow);
+    tagsLay->addWidget(addTagBtn_);
 
-    // Tag list — no inline style, Theme QSS handles colors.
-    tagList_ = new QListWidget(this);
-    tagList_->setSelectionMode(QAbstractItemView::SingleSelection);
-    tagList_->setMinimumHeight(30);
-    outer->addWidget(tagList_, 1);
+    tagInput_ = new QLineEdit(tagsSection);
+    tagInput_->setPlaceholderText("Type tag name and press Enter");
+    tagInput_->setMaximumHeight(28);
+    tagInput_->hide();
+    tagsLay->addWidget(tagInput_);
+
+    outer->addWidget(tagsSection);
 
     // ---- Notes section ----
-    auto* notesHeader = new QLabel("NOTES", this);
-    notesHeader->setObjectName("sectionLabel");
-    outer->addWidget(notesHeader);
+    auto* notesSection = new QWidget(this);
+    notesSection->setObjectName("notesSection");
+    notesSection->setStyleSheet("background: transparent;");
+    auto* notesLay = new QVBoxLayout(notesSection);
+    notesLay->setContentsMargins(16, 12, 16, 12);
+    notesLay->setSpacing(10);
 
-    noteEdit_ = new QTextEdit(this);
-    noteEdit_->setPlaceholderText("Add notes...");
-    noteEdit_->setMinimumHeight(30);
-    outer->addWidget(noteEdit_, 2);
+    auto* notesHeaderRow = new QWidget(notesSection);
+    notesHeaderRow->setStyleSheet("background: transparent;");
+    auto* nhLay = new QHBoxLayout(notesHeaderRow);
+    nhLay->setContentsMargins(0, 0, 0, 0);
+    nhLay->setSpacing(6);
+    notesHeaderLbl_ = new QLabel("Notes", notesHeaderRow);
+    notesHeaderLbl_->setObjectName("notesHeader");
+    auto* notesIconLbl = new QLabel(notesHeaderRow);
+    notesIconLbl->setStyleSheet("background: transparent;");
+    notesIconLbl->setPixmap(loadLucidePixmap("sticky-note", QColor("#6b7280"), 16, devicePixelRatio()));
+    nhLay->addWidget(notesHeaderLbl_);
+    nhLay->addWidget(notesIconLbl);
+    nhLay->addStretch();
+    notesLay->addWidget(notesHeaderRow);
 
-    connect(addTagBtn_, &QPushButton::clicked, this, &TagsNotesPane::onAddTag);
-    connect(rmTagBtn_,  &QPushButton::clicked, this, &TagsNotesPane::onRemoveTag);
-    connect(tagInput_,  &QLineEdit::returnPressed, this, &TagsNotesPane::onAddTag);
-    connect(noteEdit_,  &QTextEdit::textChanged,   this, &TagsNotesPane::onNoteEdited);
+    noteEdit_ = new QTextEdit(notesSection);
+    noteEdit_->setObjectName("notesContent");
+    noteEdit_->setPlaceholderText("Add notes about this file...");
+    noteEdit_->setMinimumHeight(80);
+    noteEdit_->setMaximumHeight(160);
+    notesLay->addWidget(noteEdit_);
+
+    notesModifiedLbl_ = new QLabel(notesSection);
+    notesModifiedLbl_->setObjectName("notesModified");
+    notesModifiedLbl_->setText("Modified: -");
+    notesLay->addWidget(notesModifiedLbl_);
+
+    outer->addWidget(notesSection);
+    outer->addStretch();
+
+    // ---- Connections ----
+    connect(addTagBtn_, &QPushButton::clicked, this, [this]{
+        tagInput_->show();
+        tagInput_->setFocus();
+    });
+    connect(tagInput_, &QLineEdit::returnPressed, this, &TagsNotesPane::onAddTag);
+    connect(noteEdit_, &QTextEdit::textChanged, this, &TagsNotesPane::onNoteEdited);
 }
 
 void TagsNotesPane::setFileId(qint64 id) { fileId_ = id; }
 
 void TagsNotesPane::setTags(const QStringList& tags) {
-    tagList_->clear();
-    for (const auto& t : tags) tagList_->addItem(t);
+    currentTags_ = tags;
+    rebuildTagPills();
 }
 
 void TagsNotesPane::setNote(const QString& note) {
     noteEdit_->blockSignals(true);
     noteEdit_->setPlainText(note);
     noteEdit_->blockSignals(false);
+    notesModifiedLbl_->setText("Modified: -");
 }
 
 QStringList TagsNotesPane::tags() const {
-    QStringList out;
-    for (int i = 0; i < tagList_->count(); ++i) out << tagList_->item(i)->text();
-    return out;
+    return currentTags_;
 }
 
-QString TagsNotesPane::note() const { return noteEdit_->toPlainText(); }
+QString TagsNotesPane::note() const {
+    return noteEdit_->toPlainText();
+}
 
 void TagsNotesPane::onAddTag() {
     const QString t = tagInput_->text().trimmed();
-    if (t.isEmpty() || fileId_ == 0) return;
-    for (int i = 0; i < tagList_->count(); ++i) {
-        if (tagList_->item(i)->text() == t) {
-            tagInput_->clear();
-            return;
-        }
-    }
-    tagList_->addItem(t);
     tagInput_->clear();
+    tagInput_->hide();
+    if (t.isEmpty() || fileId_ == 0) return;
+    if (currentTags_.contains(t, Qt::CaseInsensitive)) return;
+    currentTags_.append(t);
+    rebuildTagPills();
     emit tagAdded(fileId_, t);
 }
 
 void TagsNotesPane::onRemoveTag() {
-    auto* cur = tagList_->currentItem();
-    if (!cur) return;
-    const QString t = cur->text();
-    delete cur;
+    auto* pill = qobject_cast<TagPill*>(sender());
+    if (!pill) return;
+    const QString t = pill->text();
+    currentTags_.removeAll(t);
+    rebuildTagPills();
     emit tagRemoved(fileId_, t);
 }
 
 void TagsNotesPane::onNoteEdited() {
-    if (fileId_ != 0) emit noteChanged(fileId_, noteEdit_->toPlainText());
+    if (fileId_ == 0) return;
+    const QString note = noteEdit_->toPlainText();
+    emit noteChanged(fileId_, note);
+    notesModifiedLbl_->setText("Modified: " + QDateTime::currentDateTime().toString("dd MMM yyyy hh:mm AP"));
+}
+
+void TagsNotesPane::rebuildTagPills() {
+    // Clear existing pills
+    while (auto* item = tagsLayout_->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    // Build new pills with rotating color classes
+    const QStringList colorClasses = {"tagBlue", "tagGreen", "tagYellow", "tagPurple"};
+    for (int i = 0; i < currentTags_.size(); ++i) {
+        const QString& t = currentTags_[i];
+        const QString cls = colorClasses[i % colorClasses.size()];
+        auto* pill = new TagPill(t, cls, tagsContainer_);
+        connect(pill, &TagPill::rightClicked, this, &TagsNotesPane::onRemoveTag);
+        tagsLayout_->addWidget(pill);
+    }
+}
+
+QString TagsNotesPane::colorForTag(int index) const {
+    const QStringList colors = {"tagBlue", "tagGreen", "tagYellow", "tagPurple"};
+    return colors[index % colors.size()];
+}
+
+void TagsNotesPane::refreshIcons() {
+    // Tag/note icons are static (gray) — set in the constructor.
+    // No palette-dependent icons here.
 }
 
 } // namespace DocuSearch

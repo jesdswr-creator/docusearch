@@ -8,6 +8,7 @@
 #include "../database/Database.h"
 #include "../backup/BackupManager.h"
 #include "../core/Config.h"
+#include "../ocr/WindowsOcrEngine.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -22,6 +23,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QListWidget>
 #include <sqlite3.h>
 
 namespace DocuSearch {
@@ -150,16 +152,33 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
 
     auto* ocrInfo = new QLabel(
         "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
-        "built into Windows 10/11.\n\n"
-        "OCR uses your Windows display language.\n"
-        "No installation or configuration needed.\n\n"
+        "built into Windows 10 version 1903+ and Windows 11.\n\n"
+        "OCR uses your installed Windows OCR languages (English\n"
+        "is always available; other languages can be added via\n"
+        "Windows Settings > Time & Language > Region > Language\n"
+        "> Add a language, then check 'Optical character recognition').\n\n"
+        "Implementation: WinRT is invoked via a PowerShell bridge\n"
+        "to avoid the runtimeobject.lib / Qt entry-point conflict.\n\n"
         "To OCR a file:\n"
         "  1. Select a scanned PDF or image\n"
-        "  2. Click 'OCR This File' in the preview pane\n"
-        "  3. Text appears in the preview",
+        "  2. Click the OCR button in the viewer panel\n"
+        "  3. Recognized text appears in the extracted panel below",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);
+
+    // List available OCR languages.
+    auto* langLabel = new QLabel("Available OCR languages:", this);
+    ocrLay->addRow(langLabel);
+    auto* langList = new QListWidget(this);
+    const QStringList langs = WindowsOcrEngine::availableLanguages();
+    if (langs.isEmpty()) {
+        langList->addItem("(Could not query OCR languages — try running OCR anyway.)");
+    } else {
+        for (const QString& l : langs) langList->addItem(l);
+    }
+    ocrLay->addRow(langList);
+
     tabs->addTab(ocrTab, "OCR");
 
     // -------- Appearance tab --------

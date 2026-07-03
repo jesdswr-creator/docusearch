@@ -1,7 +1,5 @@
 <RCC>
     <qresource prefix="/">
-        <file>themes/dark.qss</file>
-        <file>themes/light.qss</file>
         <file>icons/DocuSearch-256.png</file>
         <file>icons/lucide/search.svg</file>
         <file>icons/lucide/folder-plus.svg</file>
@@ -21,8 +19,36 @@
         <file>icons/lucide/database.svg</file>
         <file>icons/lucide/x.svg</file>
         <file>icons/lucide/chevron-down.svg</file>
+        <file>icons/lucide/chevron-left.svg</file>
+        <file>icons/lucide/chevron-right.svg</file>
         <file>icons/lucide/arrow-left.svg</file>
         <file>icons/lucide/arrow-right.svg</file>
         <file>icons/lucide/copy.svg</file>
+        <file>icons/lucide/home.svg</file>
+        <file>icons/lucide/bookmark.svg</file>
+        <file>icons/lucide/filter.svg</file>
+        <file>icons/lucide/refresh-cw.svg</file>
+        <file>icons/lucide/list.svg</file>
+        <file>icons/lucide/layout-grid.svg</file>
+        <file>icons/lucide/more-horizontal.svg</file>
+        <file>icons/lucide/folder.svg</file>
+        <file>icons/lucide/minus.svg</file>
+        <file>icons/lucide/square.svg</file>
+        <file>icons/lucide/maximize-2.svg</file>
+        <file>icons/lucide/rotate-cw.svg</file>
+        <file>icons/lucide/download.svg</file>
+        <file>icons/lucide/file.svg</file>
+        <file>icons/lucide/upload.svg</file>
+        <file>icons/lucide/calendar.svg</file>
+        <file>icons/lucide/lock.svg</file>
+        <file>icons/lucide/image.svg</file>
+        <file>icons/lucide/pencil.svg</file>
+        <file>icons/lucide/trash-2.svg</file>
+        <file>icons/lucide/save.svg</file>
+        <file>icons/lucide/plus-circle.svg</file>
+        <file>icons/lucide/alert-circle.svg</file>
+        <file>icons/lucide/play.svg</file>
+        <file>icons/lucide/pause.svg</file>
+        <file>icons/lucide/eye.svg</file>
     </qresource>
 </RCC>

@@ -1,13 +1,32 @@
 #pragma once
 
 // ============================================================
-// ResultsPane.h - QTableWidget-based results list
+// ResultsPane.h - Search results list matching reference design
+// ============================================================
+//
+// Layout:
+//   ┌─────────────────────────────────────────────────┐
+//   │ Search Results (36)              [Sort: ... ▾]  │  header
+//   ├─────────────────────────────────────────────────┤
+//   │ [PDF] NOC.pdf                                  ●│  item
+//   │       ...Request for issuance No Objection...   │
+//   │       57.3 KB • 20 Aug 2025                     │
+//   ├─────────────────────────────────────────────────┤
+//   │ [PDF] Additional format.pdf                     │
+//   │       ...No Statutory clearance Details...      │
+//   │       1.2 MB • 09 Sep 2025                      │
+//   └─────────────────────────────────────────────────┘
+//
+// Each item is a custom widget with:
+//   - 36x36 colored file-type badge (PDF red, DOC blue, XLS green, etc.)
+//   - Title (bold), snippet (muted), meta (smaller, more muted)
+//   - Optional blue dot on the right for the active item
 // ============================================================
 
 #include <QWidget>
-#include <QTableWidget>
-#include <QTableWidgetItem>
+#include <QListWidget>
 #include <QLabel>
+#include <QComboBox>
 #include <QList>
 #include "../core/Types.h"
 
@@ -25,25 +44,29 @@ public:
     qint64 selectedFileId() const;
     QString selectedPath() const;
 
+    void refreshIcons();
+
 signals:
     void fileSelected(qint64 fileId, const QString& path);
     void fileActivated(qint64 fileId, const QString& path);
 
 private slots:
-    void onCellClicked(int row, int col);
-    void onCellActivated(int row, int col);
+    void onItemClicked(int row);
+    void onItemDoubleClicked(int row);
+    void onSortChanged(int index);
 
 private:
-    enum Column { ColName = 0, ColType, ColSize, ColDate, ColSnippet, ColCount };
-
-    QTableWidget* table_;
-    QLabel*       countLabel_;
+    QListWidget* list_       = nullptr;
+    QLabel*      titleLbl_   = nullptr;
+    QLabel*      countLbl_   = nullptr;
+    QComboBox*   sortBox_    = nullptr;
     QList<SearchHit> current_;
 
-    void populateRow(int row, const SearchHit& h);
+    void populateItem(int row, const SearchHit& h);
     QString colorForExtension(const QString& ext) const;
     QString humanizeSize(qint64 bytes) const;
     QString stripBoldTags(const QString& s) const;
+    QString labelForExtension(const QString& ext) const;
 };
 
 } // namespace DocuSearch

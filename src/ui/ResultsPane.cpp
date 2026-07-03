@@ -1,202 +1,300 @@
 // ============================================================
-// ResultsPane.cpp - QTableWidget-based results list
+// ResultsPane.cpp - Modern search results list
 // ============================================================
 
 #include "ResultsPane.h"
+#include "IconUtils.h"
 #include "../core/StringUtils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileInfo>
-#include <QHeaderView>
-#include <QFont>
-#include <QBrush>
-#include <QColor>
+#include <QListWidgetItem>
+#include <QApplication>
+#include <QPalette>
 
 namespace DocuSearch {
 
 namespace {
-// Each Name cell carries the fileId + path as Qt::UserRole + 1 / + 2.
+// Each item carries the fileId + path as Qt::UserRole + 1 / + 2.
 const int kRoleFileId = Qt::UserRole + 1;
 const int kRolePath   = Qt::UserRole + 2;
 
-// Extension -> brand color (Office / common colors).
+// Extension -> brand color (matches the HTML design).
 const QHash<QString, QString> kExtColor = {
-    {"pdf",  "#EB4034"},   // red
-    {"doc",  "#2B579A"},   // blue
-    {"docx", "#2B579A"},
-    {"xls",  "#216746"},   // green
-    {"xlsx", "#216746"},
-    {"xlsm", "#216746"},
-    {"ppt",  "#E36C0A"},   // orange
-    {"pptx", "#E36C0A"},
-    {"txt",  "#808080"},   // gray
-    {"csv",  "#808080"},
-    {"md",   "#808080"},
-    {"rtf",  "#808080"},
-    {"jpg",  "#7030A0"},   // purple (image)
-    {"jpeg", "#7030A0"},
-    {"png",  "#7030A0"},
-    {"tif",  "#7030A0"},
-    {"tiff", "#7030A0"},
-    {"bmp",  "#7030A0"},
-    {"gif",  "#7030A0"},
-    {"webp", "#7030A0"},
+    {"pdf",  "#ef4444"},   // red
+    {"doc",  "#2563eb"},   // blue
+    {"docx", "#2563eb"},
+    {"xls",  "#16a34a"},   // green
+    {"xlsx", "#16a34a"},
+    {"xlsm", "#16a34a"},
+    {"ppt",  "#ea580c"},   // orange
+    {"pptx", "#ea580c"},
+    {"txt",  "#6b7280"},   // gray
+    {"csv",  "#6b7280"},
+    {"md",   "#6b7280"},
+    {"rtf",  "#6b7280"},
+    {"jpg",  "#7c3aed"},   // purple (image)
+    {"jpeg", "#7c3aed"},
+    {"png",  "#7c3aed"},
+    {"tif",  "#7c3aed"},
+    {"tiff", "#7c3aed"},
+    {"bmp",  "#7c3aed"},
+    {"gif",  "#7c3aed"},
+    {"webp", "#7c3aed"},
 };
 
-QString humanSize(qint64 bytes) {
-    return Utils::formatFileSize(bytes);
-}
-}
+// Extension -> 1-3 character label shown on the file badge.
+const QHash<QString, QString> kExtLabel = {
+    {"pdf",  "PDF"},
+    {"doc",  "W"},
+    {"docx", "W"},
+    {"xls",  "X"},
+    {"xlsx", "X"},
+    {"xlsm", "X"},
+    {"ppt",  "P"},
+    {"pptx", "P"},
+    {"txt",  "TXT"},
+    {"csv",  "CSV"},
+    {"md",   "MD"},
+    {"rtf",  "RTF"},
+    {"jpg",  "IMG"},
+    {"jpeg", "IMG"},
+    {"png",  "IMG"},
+    {"tif",  "IMG"},
+    {"tiff", "IMG"},
+    {"bmp",  "IMG"},
+    {"gif",  "IMG"},
+    {"webp", "IMG"},
+};
+} // namespace
 
 ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
+    setObjectName("resultsPanel");
+
     auto* v = new QVBoxLayout(this);
     v->setContentsMargins(0, 0, 0, 0);
-    v->setSpacing(4);
+    v->setSpacing(0);
 
-    countLabel_ = new QLabel("No results", this);
-    countLabel_->setObjectName("subtitleLabel");
-    v->addWidget(countLabel_);
+    // ---- Header: title + count + sort dropdown ----
+    auto* header = new QWidget(this);
+    header->setStyleSheet("background: transparent;");
+    auto* hLay = new QHBoxLayout(header);
+    hLay->setContentsMargins(16, 12, 16, 12);
+    hLay->setSpacing(8);
 
-    table_ = new QTableWidget(this);
-    table_->setColumnCount(ColCount);
-    table_->setAlternatingRowColors(true);
-    table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table_->setHorizontalHeaderLabels({"Name", "Type", "Size", "Date", "Snippet"});
-    table_->verticalHeader()->setVisible(false);
-    table_->setWordWrap(true);
-    table_->setShowGrid(false);
-    table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    titleLbl_ = new QLabel("Search Results", header);
+    titleLbl_->setObjectName("resultsTitle");
+    countLbl_ = new QLabel("(0)", header);
+    countLbl_->setObjectName("resultsCount");
+    hLay->addWidget(titleLbl_);
+    hLay->addWidget(countLbl_);
+    hLay->addStretch();
 
-    // No inline stylesheet — let the Theme QSS handle all colors so
-    // dark mode works correctly. The Theme QSS already styles
-    // QTableWidget, QHeaderView, and items with palette-aware colors.
+    sortBox_ = new QComboBox(header);
+    sortBox_->setObjectName("sortSelect");
+    sortBox_->addItem("Sort: Relevance");
+    sortBox_->addItem("Sort: Date");
+    sortBox_->addItem("Sort: Size");
+    sortBox_->addItem("Sort: Name");
+    hLay->addWidget(sortBox_);
+    v->addWidget(header);
 
-    auto* hh = table_->horizontalHeader();
-    hh->setStretchLastSection(false);
-    hh->setSectionResizeMode(ColName,    QHeaderView::Stretch);
-    hh->setSectionResizeMode(ColType,    QHeaderView::ResizeToContents);
-    hh->setSectionResizeMode(ColSize,    QHeaderView::ResizeToContents);
-    hh->setSectionResizeMode(ColDate,    QHeaderView::ResizeToContents);
-    hh->setSectionResizeMode(ColSnippet, QHeaderView::Stretch);
-    hh->setHighlightSections(false);
+    // ---- Results list ----
+    list_ = new QListWidget(this);
+    list_->setObjectName("resultsList");
+    list_->setSelectionMode(QAbstractItemView::SingleSelection);
+    list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list_->setSpacing(0);
+    v->addWidget(list_, 1);
 
-    v->addWidget(table_);
-
-    connect(table_, &QTableWidget::cellClicked,    this, &ResultsPane::onCellClicked);
-    connect(table_, &QTableWidget::cellDoubleClicked,
-            this, &ResultsPane::onCellActivated);
+    connect(list_, &QListWidget::currentRowChanged, this, &ResultsPane::onItemClicked);
+    connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it){
+        bool ok = false;
+        const qint64 id = it ? it->data(kRoleFileId).toLongLong(&ok) : 0;
+        const QString p = it ? it->data(kRolePath).toString() : QString();
+        if (ok && id != 0) emit fileActivated(id, p);
+    });
+    connect(sortBox_, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ResultsPane::onSortChanged);
 }
 
 void ResultsPane::setResults(const QList<SearchHit>& hits) {
-    table_->setRowCount(0);
-    current_.clear();
-    appendResults(hits);
-    countLabel_->setText(QString("%1 result%2").arg(hits.size())
-                         .arg(hits.size() == 1 ? "" : "s"));
+    list_->clear();
+    current_ = hits;
+    for (int i = 0; i < hits.size(); ++i) {
+        populateItem(i, hits[i]);
+    }
+    countLbl_->setText(QString("(%1)").arg(hits.size()));
 }
 
 void ResultsPane::appendResults(const QList<SearchHit>& hits) {
     for (const auto& h : hits) {
-        const int row = table_->rowCount();
-        table_->insertRow(row);
-        populateRow(row, h);
+        const int row = list_->count();
         current_.append(h);
+        populateItem(row, h);
     }
+    countLbl_->setText(QString("(%1)").arg(current_.size()));
 }
 
-void ResultsPane::populateRow(int row, const SearchHit& h) {
-    // --- Name (col 0) - bold Segoe UI, carries fileId+path in UserRole ---
-    auto* nameItem = new QTableWidgetItem(h.filename);
-    QFont nameFont("Segoe UI", 10);
-    nameFont.setBold(true);
-    nameItem->setFont(nameFont);
-    nameItem->setData(kRoleFileId, h.fileId);
-    nameItem->setData(kRolePath,   h.path);
-    nameItem->setToolTip(h.path);
-    table_->setItem(row, ColName, nameItem);
+void ResultsPane::populateItem(int row, const SearchHit& h) {
+    auto* item = new QListWidgetItem(list_);
+    item->setData(kRoleFileId, h.fileId);
+    item->setData(kRolePath, h.path);
+    item->setToolTip(h.path);
+    item->setSizeHint(QSize(280, 70));
 
-    // --- Type (col 1) - color-coded by extension ---
-    auto* typeItem = new QTableWidgetItem(h.extension.toUpper());
-    QFont typeFont("Segoe UI", 9);
-    typeFont.setBold(true);
-    typeItem->setFont(typeFont);
-    typeItem->setForeground(QBrush(QColor(colorForExtension(h.extension))));
-    typeItem->setTextAlignment(Qt::AlignCenter);
-    table_->setItem(row, ColType, typeItem);
+    // Build the item widget: file icon badge + (title / snippet / meta) + dot
+    auto* w = new QWidget(list_);
+    w->setStyleSheet("background: transparent;");
+    auto* hLay = new QHBoxLayout(w);
+    hLay->setContentsMargins(12, 10, 12, 10);
+    hLay->setSpacing(10);
 
-    // --- Size (col 2) - right-aligned, gray ---
-    auto* sizeItem = new QTableWidgetItem(humanSize(h.size));
-    sizeItem->setForeground(QBrush(QColor("#808080")));
-    sizeItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    QFont sizeFont("Segoe UI", 9);
-    sizeItem->setFont(sizeFont);
-    table_->setItem(row, ColSize, sizeItem);
+    // File-type colored badge (36x36)
+    auto* badge = new QLabel(w);
+    badge->setObjectName("fileIconBadge");
+    const QString color = colorForExtension(h.extension);
+    const QString label = labelForExtension(h.extension);
+    badge->setFixedSize(36, 36);
+    badge->setStyleSheet(QString(
+        "background-color: %1; color: #ffffff; border-radius: 8px; "
+        "font-size: 10px; font-weight: 700;").arg(color));
+    badge->setAlignment(Qt::AlignCenter);
+    badge->setText(label);
+    hLay->addWidget(badge);
 
-    // --- Date (col 3) - centered, gray, yyyy-MM-dd ---
-    auto* dateItem = new QTableWidgetItem(h.modifiedDate.toString("yyyy-MM-dd"));
-    dateItem->setForeground(QBrush(QColor("#808080")));
-    dateItem->setTextAlignment(Qt::AlignCenter);
-    dateItem->setFont(sizeFont);
-    table_->setItem(row, ColDate, dateItem);
+    // Title + snippet + meta (vertical stack)
+    auto* info = new QWidget(w);
+    info->setStyleSheet("background: transparent;");
+    auto* vLay = new QVBoxLayout(info);
+    vLay->setContentsMargins(0, 0, 0, 0);
+    vLay->setSpacing(2);
 
-    // --- Snippet (col 4) - strip <b></b>, truncate 150, gray ---
+    auto* title = new QLabel(info);
+    title->setObjectName("resultTitle");
+    title->setText(h.filename);
+    // Title color changes to dark blue when selected — handled via QSS
+    // using the list-item:selected selector on #resultTitle.
+    title->setStyleSheet("background: transparent;");
+
+    auto* snippet = new QLabel(info);
+    snippet->setObjectName("resultSnippet");
     QString snip = stripBoldTags(h.snippet);
-    if (snip.size() > 150) snip = snip.left(150) + "...";
-    auto* snipItem = new QTableWidgetItem(snip);
-    snipItem->setForeground(QBrush(QColor("#808080")));
-    QFont snipFont("Segoe UI", 9);
-    snipItem->setFont(snipFont);
-    table_->setItem(row, ColSnippet, snipItem);
+    if (snip.size() > 120) snip = snip.left(120) + "...";
+    snippet->setText(snip.isEmpty() ? "..." : snip);
+    snippet->setWordWrap(false);
+    snippet->setStyleSheet("background: transparent;");
 
-    // Row height: 56 if there's a snippet, else 40. Modern Windows 11
-    // apps use generous row heights for better readability.
-    table_->setRowHeight(row, h.snippet.isEmpty() ? 40 : 56);
+    auto* meta = new QLabel(info);
+    meta->setObjectName("resultMeta");
+    const QString dateStr = h.modifiedDate.toString("dd MMM yyyy");
+    meta->setText(QString("%1 • %2").arg(humanizeSize(h.size)).arg(dateStr));
+    meta->setStyleSheet("background: transparent;");
+
+    vLay->addWidget(title);
+    vLay->addWidget(snippet);
+    vLay->addWidget(meta);
+    hLay->addWidget(info, 1);
+
+    // Active dot on the right (visible only for the selected row)
+    auto* dot = new QLabel(w);
+    dot->setFixedSize(10, 10);
+    dot->setStyleSheet(
+        "background-color: #2563eb; border-radius: 5px; background: transparent;");
+    // We hide the dot for non-active items; the selection state is
+    // managed by the QListWidget's selection model + QSS.
+    hLay->addWidget(dot, 0, Qt::AlignTop);
+
+    item->setSizeHint(QSize(280, w->sizeHint().height()));
+    list_->setItemWidget(item, w);
 }
 
 void ResultsPane::clear() {
-    table_->setRowCount(0);
+    list_->clear();
     current_.clear();
-    countLabel_->setText("No results");
+    countLbl_->setText("(0)");
 }
 
 qint64 ResultsPane::selectedFileId() const {
-    const int row = table_->currentRow();
-    if (row < 0) return 0;
-    auto* it = table_->item(row, ColName);
-    return it ? it->data(kRoleFileId).toLongLong() : 0;
+    auto* it = list_->currentItem();
+    if (!it) return 0;
+    bool ok = false;
+    const qint64 id = it->data(kRoleFileId).toLongLong(&ok);
+    return ok ? id : 0;
 }
 
 QString ResultsPane::selectedPath() const {
-    const int row = table_->currentRow();
-    if (row < 0) return QString();
-    auto* it = table_->item(row, ColName);
+    auto* it = list_->currentItem();
     return it ? it->data(kRolePath).toString() : QString();
 }
 
-void ResultsPane::onCellClicked(int row, int /*col*/) {
-    auto* it = table_->item(row, ColName);
+void ResultsPane::onItemClicked(int row) {
+    if (row < 0 || row >= list_->count()) return;
+    auto* it = list_->item(row);
     if (!it) return;
-    emit fileSelected(it->data(kRoleFileId).toLongLong(),
-                      it->data(kRolePath).toString());
+    bool ok = false;
+    const qint64 id = it->data(kRoleFileId).toLongLong(&ok);
+    const QString p = it->data(kRolePath).toString();
+    if (ok && id != 0) emit fileSelected(id, p);
 }
 
-void ResultsPane::onCellActivated(int row, int /*col*/) {
-    auto* it = table_->item(row, ColName);
+void ResultsPane::onItemDoubleClicked(int row) {
+    if (row < 0 || row >= list_->count()) return;
+    auto* it = list_->item(row);
     if (!it) return;
-    emit fileActivated(it->data(kRoleFileId).toLongLong(),
-                       it->data(kRolePath).toString());
+    bool ok = false;
+    const qint64 id = it->data(kRoleFileId).toLongLong(&ok);
+    const QString p = it->data(kRolePath).toString();
+    if (ok && id != 0) emit fileActivated(id, p);
+}
+
+void ResultsPane::onSortChanged(int index) {
+    if (current_.isEmpty()) return;
+    QList<SearchHit> sorted = current_;
+    switch (index) {
+        case 1: // Date
+            std::sort(sorted.begin(), sorted.end(),
+                [](const SearchHit& a, const SearchHit& b){
+                    return a.modifiedDate > b.modifiedDate;
+                });
+            break;
+        case 2: // Size
+            std::sort(sorted.begin(), sorted.end(),
+                [](const SearchHit& a, const SearchHit& b){
+                    return a.size > b.size;
+                });
+            break;
+        case 3: // Name
+            std::sort(sorted.begin(), sorted.end(),
+                [](const SearchHit& a, const SearchHit& b){
+                    return a.filename.toLower() < b.filename.toLower();
+                });
+            break;
+        default: // Relevance — keep original order
+            break;
+    }
+    setResults(sorted);
+}
+
+void ResultsPane::refreshIcons() {
+    // No icons to refresh in this pane — file badges use text labels
+    // colored by extension. The QSS handles dark/light backgrounds.
 }
 
 QString ResultsPane::colorForExtension(const QString& ext) const {
     auto it = kExtColor.constFind(ext.toLower());
-    return it == kExtColor.constEnd() ? "#808080" : it.value();
+    return it == kExtColor.constEnd() ? "#6b7280" : it.value();
+}
+
+QString ResultsPane::labelForExtension(const QString& ext) const {
+    auto it = kExtLabel.constFind(ext.toLower());
+    return it == kExtLabel.constEnd() ? ext.toUpper().left(3) : it.value();
 }
 
 QString ResultsPane::humanizeSize(qint64 bytes) const {
-    return humanSize(bytes);
+    return Utils::formatFileSize(bytes);
 }
 
 QString ResultsPane::stripBoldTags(const QString& s) const {

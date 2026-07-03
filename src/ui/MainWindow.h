@@ -1,7 +1,24 @@
 #pragma once
 
 // ============================================================
-// MainWindow.h - Top-level window tying all modules together
+// MainWindow.h - Top-level window with custom title bar
+// ============================================================
+//
+// Layout (top to bottom):
+//   ┌─────────────────────────────────────────────────────────┐
+//   │ [Logo] DocuSearch 1.0.0 • Offline Document Search  ☀🌙─☐✕ │ title bar
+//   ├──────┬──────────────────────────────────┬────────────────┤
+//   │ Side │ [search bar with all buttons]    │ Metadata       │
+//   │ bar  ├──────────┬───────────────────────┤                │
+//   │      │ Results  │ Document viewer       │ Tags           │
+//   │ nav  │ (340px)  │ (flex)                │                │
+//   │      │          ├───────────────────────┤ Notes          │
+//   │      │          │ Extracted text panel  │                │
+//   │      │          │ (tabs + content)      │                │
+//   │ st.  │          │                       │                │
+//   ├──────┴──────────┴───────────────────────┴────────────────┤
+//   │ ● Ready  Indexed: 2,451  Size: 3.42 GB  Last: ...  [📁] │ status bar
+//   └─────────────────────────────────────────────────────────┘
 // ============================================================
 
 #include <QMainWindow>
@@ -20,6 +37,8 @@ class QToolBar;
 class QListWidget;
 class QListWidgetItem;
 class QLabel;
+class QPushButton;
+class QProgressBar;
 
 namespace DocuSearch {
 
@@ -46,6 +65,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 
 private slots:
     void onSearch(const QString& query);
@@ -77,31 +97,34 @@ private slots:
     void onDetectDuplicates();
     void onAddFolder();
     void onExtract();
+    void onRefresh();
+    void onFilters();
+    void onSidebarClicked(int row);
+    void onOpenLocation();
     void autoScanIndexedFolders();
 
 private:
-    void buildMenus();
-    void buildToolbar();
+    // UI builders
+    void buildTitleBar();
     void buildCentral();
+    void buildStatusBar();
     void applyTheme();
     void loadSettings();
     void saveSettings();
     void refreshSavedSearches();
     void openFile(const QString& path);
 
-    // Fast metadata-only scan of a folder. Inserts file metadata via
-    // raw SQL (no transactions, no hashing, no content extraction).
-    // Used by onAddFolder and by Settings when new drives are added.
+    // Fast metadata-only scan of a folder.
     void scanFolderFast(const QString& folder);
 
     // Refresh the preview pane with the currently-selected file's
-    // extracted text (re-reads from the DB so newly-extracted content
-    // appears immediately after an Extract run finishes).
+    // extracted text.
     void refreshPreviewForSelectedFile();
 
+    // Re-render all Lucide icons throughout the UI (call after theme toggle).
+    void refreshAllIcons();
+
 public:
-    // Update indexing widget with file counts. Q_INVOKABLE so it can be
-    // called safely via QMetaObject::invokeMethod from worker threads.
     Q_INVOKABLE void updateIndexStats();
 
     // Owned subsystems
@@ -113,31 +136,58 @@ public:
     std::unique_ptr<FileWatcher>    watcher_;
     std::unique_ptr<ThumbnailGenerator> thumbs_;
 
-    // UI
-    SearchBar*        searchBar_       = nullptr;
-    ResultsPane*      resultsPane_     = nullptr;
-    PreviewPane*      previewPane_     = nullptr;
-    MetadataPane*     metadataPane_    = nullptr;
-    TagsNotesPane*    tagsNotesPane_   = nullptr;
-    IndexingProgressWidget* indexingWidget_  = nullptr;
-    QSplitter*        mainSplitter_    = nullptr;  // repurposed as center (results | preview) splitter
-    QSplitter*        rightSplitter_   = nullptr;  // reserved (unused in new layout)
-    QToolBar*         toolbar_         = nullptr;  // top-of-center toolbar (Add Folder, Extract, Settings, Theme, Duplicates)
-    QListWidget*      sidebar_         = nullptr;  // left navigation sidebar
-    QLabel*           sidebarFileCountLabel_ = nullptr;  // bottom-of-sidebar file count
-    QLabel*           sidebarDbSizeLabel_    = nullptr;  // bottom-of-sidebar DB size
-    QTimer*           liveSearchTimer_ = nullptr;
-    QTimer*           autoScanTimer_   = nullptr;
-    QString           pendingQuery_;
+    // ---- UI widgets ----
+    // Title bar
+    QWidget*        titleBar_             = nullptr;
+    QLabel*         appLogoLbl_           = nullptr;
+    QLabel*         titleBarText_         = nullptr;
+    QLabel*         titleBarSubtitle_     = nullptr;
+    QPushButton*    titleThemeBtn_        = nullptr;
+    QPushButton*    titleMinBtn_          = nullptr;
+    QPushButton*    titleMaxBtn_          = nullptr;
+    QPushButton*    titleCloseBtn_        = nullptr;
 
-    AppSettings       settings_;
-    bool              darkMode_ = true;
-    bool              contentExtractionRunning_ = false;
-    bool              autoScanRunning_ = false;
-    // Track the currently-selected file so we can refresh its preview
-    // after a background extraction completes.
-    qint64            selectedFileId_ = 0;
-    QString           selectedPath_;
+    // Sidebar
+    QWidget*        sidebar_              = nullptr;
+    QListWidget*    sidebarList_          = nullptr;
+    QLabel*         indexedHeaderLbl_     = nullptr;
+    QLabel*         indexedInfoLbl_       = nullptr;
+    QProgressBar*   indexedBar_           = nullptr;
+
+    // Center panel
+    SearchBar*      searchBar_            = nullptr;
+    QSplitter*      mainSplitter_         = nullptr;  // 3-way: results | viewer | metadata
+    ResultsPane*    resultsPane_          = nullptr;
+    PreviewPane*    previewPane_          = nullptr;
+
+    // Right panel
+    QSplitter*      rightSplitter_        = nullptr;  // metadata | tags/notes (vertical)
+    MetadataPane*   metadataPane_         = nullptr;
+    TagsNotesPane*  tagsNotesPane_        = nullptr;
+
+    // Status bar
+    QLabel*         statusDotLbl_         = nullptr;
+    QLabel*         statusReadyLbl_       = nullptr;
+    QLabel*         statusIndexedLbl_     = nullptr;
+    QLabel*         statusSizeLbl_        = nullptr;
+    QLabel*         statusLastLbl_        = nullptr;
+    QPushButton*    openLocationBtn_      = nullptr;
+
+    // Hidden (kept for stats plumbing)
+    IndexingProgressWidget* indexingWidget_ = nullptr;
+
+    // Timers
+    QTimer*         liveSearchTimer_      = nullptr;
+    QTimer*         autoScanTimer_        = nullptr;
+    QString         pendingQuery_;
+
+    AppSettings     settings_;
+    bool            darkMode_             = true;
+    bool            contentExtractionRunning_ = false;
+    bool            autoScanRunning_      = false;
+    bool            maximized_            = false;
+    qint64          selectedFileId_       = 0;
+    QString         selectedPath_;
 };
 
 } // namespace DocuSearch
