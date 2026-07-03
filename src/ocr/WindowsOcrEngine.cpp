@@ -49,12 +49,12 @@
 // HSTRING and WinRT string functions are in winstring.h.
 // With WIN32_LEAN_AND_MEAN defined, windows.h doesn't include this
 // automatically, so we need it explicitly for HSTRING type used in
-// the RoGetActivationFactory / WindowsCreateString typedefs below.
+// the pfn_RoGetActivationFactory / pfn_WindowsCreateString typedefs below.
+// We do NOT include <roapi.h> because it might contain
+// #pragma comment(lib, ...) directives that auto-link runtimeobject.lib,
+// which conflicts with Qt's WIN32 entry point. We load all WinRT functions
+// dynamically via LoadLibrary + GetProcAddress instead.
 #include <winstring.h>
-// roapi.h declares RoInitialize / RoGetActivationFactory (we load
-// them dynamically via GetProcAddress, but the HSTRING type and
-// related definitions are needed at compile time).
-#include <roapi.h>
 
 // ---- Manually declare WinRT ABI function signatures ----
 
