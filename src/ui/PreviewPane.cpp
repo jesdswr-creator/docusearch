@@ -1,5 +1,5 @@
 // ============================================================
-// PreviewPane.cpp - Document viewer matching reference design
+// PreviewPane.cpp - Document viewer with rich preview
 // ============================================================
 
 #include "PreviewPane.h"
@@ -13,8 +13,24 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
-#include <QSaveFile>
 #include <QMessageBox>
+#include <QScrollArea>
+#include <QImage>
+#include <QPixmap>
+#include <QFileInfo>
+#include <QMenu>
+#include <QAction>
+#include <QPrintDialog>
+#include <QPrinter>
+#include <QTimer>
+#include <QRegularExpression>
+#include <QTransform>
+
+#ifdef DOCUSEARCH_HAS_POPPLER
+#  include <poppler-document.h>
+#  include <poppler-page.h>
+#  include <poppler-page-renderer.h>
+#endif
 
 namespace DocuSearch {
 
@@ -29,8 +45,14 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     auto* header = new QWidget(this);
     header->setObjectName("viewerHeader");
     auto* hLay = new QHBoxLayout(header);
-    hLay->setContentsMargins(16, 10, 16, 10);
-    hLay->setSpacing(8);
+    hLay->setContentsMargins(12, 8, 12, 8);
+    hLay->setSpacing(6);
+
+    // File type icon + filename
+    fileIconLbl_ = new QLabel(header);
+    fileIconLbl_->setFixedSize(20, 20);
+    fileIconLbl_->setStyleSheet("background: transparent;");
+    hLay->addWidget(fileIconLbl_);
 
     viewerTitle_ = new QLabel(header);
     viewerTitle_->setObjectName("viewerTitle");
@@ -46,6 +68,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     pageInput_ = new QLineEdit(header);
     pageInput_->setObjectName("pageInput");
     pageInput_->setText("1");
+    pageInput_->setMaxLength(4);
     pageTotal_ = new QLabel(header);
     pageTotal_->setObjectName("pageTotal");
     pageTotal_->setText("/ 1");
@@ -80,31 +103,54 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     hLay->addStretch();
 
-    // Action buttons: Fit, Rotate, More
-    fitBtn_ = new QPushButton(header);
-    fitBtn_->setObjectName("iconBtn");
-    fitBtn_->setCursor(Qt::PointingHandCursor);
-    fitBtn_->setToolTip("Fit to page");
-    rotateBtn_ = new QPushButton(header);
-    rotateBtn_->setObjectName("iconBtn");
-    rotateBtn_->setCursor(Qt::PointingHandCursor);
-    rotateBtn_->setToolTip("Rotate");
+    // Action buttons: Open (blue), OCR (green), More
+    openBtn_ = new QPushButton(header);
+    openBtn_->setObjectName("openBtn");
+    openBtn_->setCursor(Qt::PointingHandCursor);
+    openBtn_->setToolTip("Open in default application");
+    openBtn_->setText("Open");
+
+    ocrBtn_ = new QPushButton(header);
+    ocrBtn_->setObjectName("ocrBtn");
+    ocrBtn_->setCursor(Qt::PointingHandCursor);
+    ocrBtn_->setToolTip("Run OCR on this file (for scanned PDFs and images)");
+    ocrBtn_->setText("OCR");
+
     moreBtn_ = new QPushButton(header);
-    moreBtn_->setObjectName("iconBtn");
+    moreBtn_->setObjectName("moreActionBtn");
     moreBtn_->setCursor(Qt::PointingHandCursor);
-    moreBtn_->setToolTip("More");
-    hLay->addWidget(fitBtn_);
-    hLay->addWidget(rotateBtn_);
+    moreBtn_->setToolTip("More actions");
+    hLay->addWidget(openBtn_);
+    hLay->addWidget(ocrBtn_);
     hLay->addWidget(moreBtn_);
 
     v->addWidget(header);
 
-    // ---- Viewer body (document page text) ----
-    documentPage_ = new QTextEdit(this);
+    // ---- Viewer body ----
+    // We use a QScrollArea containing a stacked widget that can show
+    // either a page image (for PDF/image preview) or a text browser
+    // (for DOCX/XLSX/PPTX/TXT preview).
+    previewScroll_ = new QScrollArea(this);
+    previewScroll_->setWidgetResizable(true);
+    previewScroll_->setFrameShape(QFrame::NoFrame);
+    previewScroll_->setAlignment(Qt::AlignCenter);
+
+    // Page image label (for PDF/image preview)
+    pageImageLbl_ = new QLabel(previewScroll_);
+    pageImageLbl_->setAlignment(Qt::AlignCenter);
+    pageImageLbl_->setStyleSheet("background: transparent; padding: 20px;");
+    pageImageLbl_->setText("Select a file to preview");
+    pageImageLbl_->setMinimumSize(400, 500);
+
+    // Text browser (for text-based preview)
+    documentPage_ = new QTextBrowser(previewScroll_);
     documentPage_->setObjectName("documentPage");
-    documentPage_->setReadOnly(true);
+    documentPage_->setOpenExternalLinks(true);
     documentPage_->setPlaceholderText("Select a file to view its content.");
-    v->addWidget(documentPage_, 1);
+
+    // Default to text mode
+    previewScroll_->setWidget(documentPage_);
+    v->addWidget(previewScroll_, 1);
 
     // ---- Extracted panel (bottom) ----
     auto* extractedPanel = new QWidget(this);
@@ -159,7 +205,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     extractedContent_->setObjectName("extractedContent");
     extractedContent_->setReadOnly(true);
     extractedContent_->setPlaceholderText("Extracted text will appear here after content extraction.");
-    extractedContent_->setMaximumHeight(150);
+    extractedContent_->setMaximumHeight(140);
     extractedContent_->setMinimumHeight(80);
     epLay->addWidget(extractedContent_);
 
@@ -169,14 +215,14 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     actLay->setContentsMargins(16, 0, 16, 8);
     actLay->setSpacing(4);
     actLay->addStretch();
-    copyBtn_ = new QPushButton(actionsRow);
-    copyBtn_->setObjectName("extractedActionBtn");
+    copyBtn_ = new QPushButton("Copy", actionsRow);
+    copyBtn_->setObjectName("copyBtn");
     copyBtn_->setCursor(Qt::PointingHandCursor);
-    copyBtn_->setToolTip("Copy extracted text");
-    downloadBtn_ = new QPushButton(actionsRow);
-    downloadBtn_->setObjectName("extractedActionBtn");
+    copyBtn_->setToolTip("Copy extracted text to clipboard");
+    downloadBtn_ = new QPushButton("Save", actionsRow);
+    downloadBtn_->setObjectName("downloadBtn");
     downloadBtn_->setCursor(Qt::PointingHandCursor);
-    downloadBtn_->setToolTip("Download extracted text");
+    downloadBtn_->setToolTip("Save extracted text to file");
     actLay->addWidget(copyBtn_);
     actLay->addWidget(downloadBtn_);
     epLay->addWidget(actionsRow);
@@ -191,28 +237,49 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     connect(copyBtn_,     &QPushButton::clicked, this, &PreviewPane::onCopyExtracted);
     connect(downloadBtn_, &QPushButton::clicked, this, &PreviewPane::onDownloadExtracted);
     connect(tabGroup_,    &QButtonGroup::idClicked, this, &PreviewPane::onTabClicked);
+    connect(openBtn_,     &QPushButton::clicked, this, &PreviewPane::onOpenClicked);
+    connect(ocrBtn_,      &QPushButton::clicked, this, &PreviewPane::onOcrClicked);
+    connect(moreBtn_,     &QPushButton::clicked, this, &PreviewPane::onMoreClicked);
+    connect(pageInput_,   &QLineEdit::returnPressed, this, &PreviewPane::onPageInputChanged);
 
     refreshIcons();
 }
 
 void PreviewPane::setThumbnail(const QPixmap& pix) {
     Q_UNUSED(pix);
-    // Thumbnails are not shown in this version — the document text
-    // is shown directly in the viewer body.
 }
 
 void PreviewPane::setExtractedText(const QString& text) {
     currentExtracted_ = text;
-    extractedContent_->setPlainText(text);
+    if (tabExtracted_->isChecked()) {
+        extractedContent_->setPlainText(text);
+    }
 }
 
 void PreviewPane::setFilePath(const QString& path) {
     currentPath_ = path;
     if (path.isEmpty()) {
         viewerTitle_->setText("No file selected");
+        currentExt_.clear();
+        pageImageLbl_->setText("Select a file to preview");
+        pageImageLbl_->setPixmap(QPixmap());
+        documentPage_->clear();
+        return;
+    }
+    QFileInfo fi(path);
+    viewerTitle_->setText(fi.fileName());
+    currentExt_ = fi.suffix().toLower();
+
+    // Choose preview mode based on file type.
+    if (currentExt_ == "pdf") {
+        showPdfPreview();
+    } else if (currentExt_ == "png" || currentExt_ == "jpg" ||
+               currentExt_ == "jpeg" || currentExt_ == "bmp" ||
+               currentExt_ == "gif" || currentExt_ == "webp") {
+        showImagePreview(path);
     } else {
-        QFileInfo fi(path);
-        viewerTitle_->setText(fi.fileName());
+        // DOCX, XLSX, PPTX, TXT, CSV, etc. — show extracted text.
+        showTextPreview(currentDocumentText_);
     }
 }
 
@@ -224,15 +291,32 @@ void PreviewPane::setPageInfo(int currentPage, int totalPages) {
 }
 
 void PreviewPane::setDocumentText(const QString& text) {
-    documentPage_->setPlainText(text);
+    currentDocumentText_ = text;
+    // If we're in text preview mode, update the display.
+    if (!currentPath_.isEmpty()) {
+        QFileInfo fi(currentPath_);
+        const QString ext = fi.suffix().toLower();
+        if (ext != "pdf" && ext != "png" && ext != "jpg" &&
+            ext != "jpeg" && ext != "bmp" && ext != "gif" &&
+            ext != "webp") {
+            showTextPreview(text);
+        }
+    }
 }
 
 void PreviewPane::clear() {
+    pageImageLbl_->clear();
+    pageImageLbl_->setText("Select a file to preview");
     documentPage_->clear();
     extractedContent_->clear();
     viewerTitle_->setText("No file selected");
     currentPath_.clear();
+    currentExt_.clear();
     currentExtracted_.clear();
+    currentDocumentText_.clear();
+    currentPage_ = 1;
+    totalPages_ = 1;
+    updatePageDisplay();
 }
 
 void PreviewPane::onOpenClicked() {
@@ -247,6 +331,7 @@ void PreviewPane::onPrevPage() {
     if (currentPage_ > 1) {
         --currentPage_;
         updatePageDisplay();
+        renderCurrentPage();
     }
 }
 
@@ -254,22 +339,27 @@ void PreviewPane::onNextPage() {
     if (currentPage_ < totalPages_) {
         ++currentPage_;
         updatePageDisplay();
+        renderCurrentPage();
     }
 }
 
 void PreviewPane::onZoomIn() {
-    zoomPercent_ = qMin(300, zoomPercent_ + 10);
+    zoomPercent_ = qMin(400, zoomPercent_ + 25);
     updateZoomDisplay();
+    renderCurrentPage();
 }
 
 void PreviewPane::onZoomOut() {
-    zoomPercent_ = qMax(25, zoomPercent_ - 10);
+    zoomPercent_ = qMax(25, zoomPercent_ - 25);
     updateZoomDisplay();
+    renderCurrentPage();
 }
 
 void PreviewPane::onCopyExtracted() {
     if (currentExtracted_.isEmpty()) return;
     QApplication::clipboard()->setText(currentExtracted_);
+    copyBtn_->setText("Copied!");
+    QTimer::singleShot(1500, this, [this]() { copyBtn_->setText("Copy"); });
 }
 
 void PreviewPane::onDownloadExtracted() {
@@ -285,19 +375,18 @@ void PreviewPane::onDownloadExtracted() {
         s.setEncoding(QStringConverter::Utf8);
         s << currentExtracted_;
         f.close();
+        downloadBtn_->setText("Saved!");
+        QTimer::singleShot(1500, this, [this]() { downloadBtn_->setText("Save"); });
     }
 }
 
 void PreviewPane::onTabClicked(int id) {
-    // All tabs show the extracted text for now (AI Summary / Highlights
-    // / Related require additional backends we don't have). The active
-    // tab is visually indicated by the QSS :checked state.
     if (id == 0) {
         extractedContent_->setPlainText(currentExtracted_);
     } else if (id == 1) {
         extractedContent_->setPlainText(
             currentExtracted_.isEmpty()
-                ? "(AI summary not available — needs an LLM backend.)"
+                ? "(AI summary not available - needs an LLM backend.)"
                 : currentExtracted_.left(500) + "...");
     } else if (id == 2) {
         extractedContent_->setPlainText(
@@ -310,37 +399,270 @@ void PreviewPane::onTabClicked(int id) {
     }
 }
 
+void PreviewPane::onFitClicked() {
+    // Reset zoom to 100%
+    zoomPercent_ = 100;
+    updateZoomDisplay();
+    renderCurrentPage();
+}
+
+void PreviewPane::onRotateClicked() {
+    rotation_ = (rotation_ + 90) % 360;
+    renderCurrentPage();
+}
+
+void PreviewPane::onMoreClicked() {
+    auto* menu = new QMenu(this);
+    auto* printAction = new QAction("Print...", this);
+    auto* exportPdfAction = new QAction("Export as PDF...", this);
+    auto* copyPathAction = new QAction("Copy file path", this);
+    menu->addAction(printAction);
+    menu->addAction(exportPdfAction);
+    menu->addSeparator();
+    menu->addAction(copyPathAction);
+
+    connect(printAction, &QAction::triggered, this, [this]{
+        if (currentPath_.isEmpty()) return;
+        QPrinter printer;
+        QPrintDialog dlg(&printer, this);
+        if (dlg.exec() == QDialog::Accepted) {
+            documentPage_->print(&printer);
+        }
+    });
+    connect(exportPdfAction, &QAction::triggered, this, [this]{
+        if (currentPath_.isEmpty()) return;
+        const QString out = QFileDialog::getSaveFileName(
+            this, "Export as PDF",
+            QFileInfo(currentPath_).completeBaseName() + ".pdf",
+            "PDF (*.pdf)");
+        if (out.isEmpty()) return;
+        QPrinter printer(QPrinter::HighResolution);
+        printer.setOutputFormat(QPrinter::PdfFormat);
+        printer.setOutputFileName(out);
+        documentPage_->print(&printer);
+        QMessageBox::information(this, "Export", "Exported to " + out);
+    });
+    connect(copyPathAction, &QAction::triggered, this, [this]{
+        if (!currentPath_.isEmpty())
+            QApplication::clipboard()->setText(currentPath_);
+    });
+
+    menu->exec(moreBtn_->mapToGlobal(QPoint(0, moreBtn_->height())));
+    menu->deleteLater();
+}
+
+void PreviewPane::onPageInputChanged() {
+    bool ok = false;
+    const int p = pageInput_->text().toInt(&ok);
+    if (ok && p >= 1 && p <= totalPages_) {
+        currentPage_ = p;
+        updatePageDisplay();
+        renderCurrentPage();
+    } else {
+        updatePageDisplay();  // reset to current page
+    }
+}
+
 void PreviewPane::updatePageDisplay() {
     pageInput_->setText(QString::number(currentPage_));
     pageTotal_->setText(QString("/ %1").arg(totalPages_));
     prevPageBtn_->setEnabled(currentPage_ > 1);
     nextPageBtn_->setEnabled(currentPage_ < totalPages_);
+    // Show/hide page navigation for non-paged documents.
+    const bool isPaged = (currentExt_ == "pdf");
+    prevPageBtn_->setVisible(isPaged);
+    pageInput_->setVisible(isPaged);
+    pageTotal_->setVisible(isPaged);
+    nextPageBtn_->setVisible(isPaged);
 }
 
 void PreviewPane::updateZoomDisplay() {
     zoomLevel_->setText(QString::number(zoomPercent_) + "%");
-    // Apply zoom to the document page text via font scaling.
-    QFont f = documentPage_->font();
-    f.setPointSize(qMax(8, int(13 * zoomPercent_ / 100)));
-    documentPage_->setFont(f);
+}
+
+void PreviewPane::renderCurrentPage() {
+    if (currentExt_ == "pdf") {
+        showPdfPreview();
+    } else if (currentExt_ == "png" || currentExt_ == "jpg" ||
+               currentExt_ == "jpeg" || currentExt_ == "bmp" ||
+               currentExt_ == "gif" || currentExt_ == "webp") {
+        showImagePreview(currentPath_);
+    }
+}
+
+void PreviewPane::showPdfPreview() {
+#ifdef DOCUSEARCH_HAS_POPPLER
+    try {
+        auto doc = poppler::document::load_from_file(currentPath_.toStdString());
+        if (!doc || doc->pages() == 0) {
+            setPreviewMode(false);
+            documentPage_->setPlainText("Failed to open PDF for preview.");
+            return;
+        }
+        totalPages_ = doc->pages();
+        if (currentPage_ > totalPages_) currentPage_ = totalPages_;
+        updatePageDisplay();
+
+        auto* page = doc->create_page(currentPage_ - 1);  // 0-indexed
+        if (!page) {
+            setPreviewMode(false);
+            documentPage_->setPlainText("Failed to render page " + QString::number(currentPage_));
+            return;
+        }
+
+        poppler::page_renderer renderer;
+        renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
+        renderer.set_render_hint(poppler::page_renderer::antialiasing);
+
+        // DPI based on zoom level (72 DPI = 100%).
+        const int dpi = qMax(36, int(72 * zoomPercent_ / 100));
+        auto img_data = renderer.render_page(page, dpi, dpi);
+        if (!img_data.is_valid()) {
+            setPreviewMode(false);
+            documentPage_->setPlainText("Failed to render page image.");
+            return;
+        }
+
+        char* dataPtr = const_cast<char*>(img_data.data());
+        if (!dataPtr) {
+            setPreviewMode(false);
+            return;
+        }
+
+        QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
+                    img_data.width(), img_data.height(),
+                    img_data.bytes_per_row(),
+                    QImage::Format_ARGB32);
+        if (qimg.isNull()) {
+            setPreviewMode(false);
+            return;
+        }
+
+        // Apply rotation if needed.
+        if (rotation_ == 90) {
+            qimg = qimg.transformed(QTransform().rotate(90));
+        } else if (rotation_ == 180) {
+            qimg = qimg.transformed(QTransform().rotate(180));
+        } else if (rotation_ == 270) {
+            qimg = qimg.transformed(QTransform().rotate(270));
+        }
+
+        setPreviewMode(true);
+        QPixmap pix = QPixmap::fromImage(qimg);
+        pageImageLbl_->setPixmap(pix);
+        pageImageLbl_->resize(pix.size());
+    } catch (const std::exception& e) {
+        setPreviewMode(false);
+        documentPage_->setPlainText(QString("PDF preview error: %1").arg(e.what()));
+    } catch (...) {
+        setPreviewMode(false);
+        documentPage_->setPlainText("PDF preview failed.");
+    }
+#else
+    setPreviewMode(false);
+    documentPage_->setPlainText(
+        "PDF image preview requires Poppler (not linked in this build).\n\n"
+        "Extracted text is shown in the panel below.");
+#endif
+}
+
+void PreviewPane::showImagePreview(const QString& path) {
+    QImage img(path);
+    if (img.isNull()) {
+        setPreviewMode(false);
+        documentPage_->setPlainText("Failed to load image: " + path);
+        return;
+    }
+
+    // Apply zoom.
+    if (zoomPercent_ != 100) {
+        const int w = img.width() * zoomPercent_ / 100;
+        const int h = img.height() * zoomPercent_ / 100;
+        img = img.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    // Apply rotation.
+    if (rotation_ == 90) {
+        img = img.transformed(QTransform().rotate(90));
+    } else if (rotation_ == 180) {
+        img = img.transformed(QTransform().rotate(180));
+    } else if (rotation_ == 270) {
+        img = img.transformed(QTransform().rotate(270));
+    }
+
+    setPreviewMode(true);
+    QPixmap pix = QPixmap::fromImage(img);
+    pageImageLbl_->setPixmap(pix);
+    pageImageLbl_->resize(pix.size());
+    totalPages_ = 1;
+    currentPage_ = 1;
+    updatePageDisplay();
+}
+
+void PreviewPane::showTextPreview(const QString& text) {
+    setPreviewMode(false);
+    if (text.isEmpty()) {
+        documentPage_->setHtml(
+            "<div style='color: #9ca3af; text-align: center; padding: 40px;'>"
+            "<p style='font-size: 16px;'>No content extracted yet.</p>"
+            "<p style='font-size: 13px;'>Click the <b>Extract</b> button or "
+            "wait for auto-extraction to index this file's content.</p>"
+            "</div>");
+        return;
+    }
+
+    // Format the text with basic HTML for better readability.
+    // Detect sheet/slide separators (--- Sheet N --- / --- Slide N ---)
+    // and render them as headings.
+    QString html = text.toHtmlEscaped();
+    // Bold the sheet/slide separators.
+    html.replace(QRegularExpression("^(--- .+? ---)$", QRegularExpression::MultilineOption),
+                 "<h3>\\1</h3>");
+    // Convert tab-separated cells to table-like spacing.
+    html.replace("\t", " &nbsp;|&nbsp; ");
+    // Preserve line breaks.
+    html.replace("\n", "<br>");
+    documentPage_->setHtml("<div style='font-family: Segoe UI, Arial; font-size: 13px; "
+                           "line-height: 1.6; color: #1a1a2e;'>" + html + "</div>");
+}
+
+void PreviewPane::setPreviewMode(bool showImage) {
+    if (showImage) {
+        if (previewScroll_->widget() != pageImageLbl_) {
+            previewScroll_->setWidget(pageImageLbl_);
+        }
+    } else {
+        if (previewScroll_->widget() != documentPage_) {
+            previewScroll_->setWidget(documentPage_);
+        }
+    }
 }
 
 void PreviewPane::refreshIcons() {
     QColor textColor = qApp->palette().color(QPalette::Text);
+    QColor whiteText("#ffffff");
 
-    fitBtn_->setIcon(loadLucideIcon("maximize-2", textColor, 14));
-    fitBtn_->setIconSize(QSize(14, 14));
+    // File type icon in header (generic file icon)
+    fileIconLbl_->setPixmap(loadLucidePixmap("file-text", QColor("#2563eb"), 18, devicePixelRatio()));
 
-    rotateBtn_->setIcon(loadLucideIcon("rotate-cw", textColor, 14));
-    rotateBtn_->setIconSize(QSize(14, 14));
+    // More button icon
+    moreBtn_->setIcon(loadLucideIcon("more-horizontal", textColor, 16));
+    moreBtn_->setIconSize(QSize(16, 16));
 
-    moreBtn_->setIcon(loadLucideIcon("more-horizontal", textColor, 14));
-    moreBtn_->setIconSize(QSize(14, 14));
+    // Open button icon (white on blue)
+    openBtn_->setIcon(loadLucideIcon("upload", whiteText, 14));
+    openBtn_->setIconSize(QSize(14, 14));
 
-    copyBtn_->setIcon(loadLucideIcon("copy", textColor, 12));
+    // OCR button icon (white on green)
+    ocrBtn_->setIcon(loadLucideIcon("eye", whiteText, 14));
+    ocrBtn_->setIconSize(QSize(14, 14));
+
+    // Copy button icon
+    copyBtn_->setIcon(loadLucideIcon("copy", whiteText, 12));
     copyBtn_->setIconSize(QSize(12, 12));
 
-    downloadBtn_->setIcon(loadLucideIcon("download", textColor, 12));
+    // Download button icon
+    downloadBtn_->setIcon(loadLucideIcon("download", whiteText, 12));
     downloadBtn_->setIconSize(QSize(12, 12));
 }
 

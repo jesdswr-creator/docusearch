@@ -1,35 +1,44 @@
 #pragma once
 
 // ============================================================
-// PreviewPane.h - Document viewer matching reference design
+// PreviewPane.h - Document viewer with rich preview
 // ============================================================
 //
 // Layout (top to bottom):
-//   ┌──────────────────────────────────────────────────┐
-//   │ NOC.pdf  ‹ 1 /2 ›  − 100% +   [⤢][↻][⋯]          │  viewer header
-//   ├──────────────────────────────────────────────────┤
-//   │                  ┌─────────────┐                 │
-//   │                  │ Document    │                 │
-//   │                  │ page text   │  (page          │
-//   │                  │             │   thumbnails    │
-//   │                  │             │   on right)     │
-//   │                  └─────────────┘                 │
-//   ├──────────────────────────────────────────────────┤
-//   │ Extracted Text | AI Summary | Highlights | Rel.  │  tabs
-//   │ ...extracted content...                          │
-//   │                                  [copy][↓]       │
-//   └──────────────────────────────────────────────────┘
+//   ┌──────────────────────────────────────────────────────┐
+//   │ [icon] NOC.pdf  ‹ 1 /2 ›  − 100% +  [Open][OCR][⋯]  │  viewer header
+//   ├──────────────────────────────────────────────────────┤
+//   │                                                      │
+//   │   ┌─────────────────────────────────────────┐       │
+//   │   │                                         │       │
+//   │   │   Document preview (image or text)      │       │
+//   │   │                                         │       │
+//   │   └─────────────────────────────────────────┘       │
+//   │                                                      │
+//   ├──────────────────────────────────────────────────────┤
+//   │ Extracted Text | AI Summary | Highlights | Related  │  tabs
+//   │ ...extracted content...                              │
+//   │                                  [copy][↓]           │
+//   └──────────────────────────────────────────────────────┘
+//
+// Preview modes:
+//   - PDF: render each page to a QImage via Poppler, display as
+//     a scrollable stack of page images.
+//   - DOCX/XLSX/PPTX/TXT: display extracted text in a QTextBrowser
+//     with basic formatting (bold headings, sheet/slide separators).
+//   - Images (PNG/JPG): display the image directly.
 // ============================================================
 
 #include <QWidget>
 #include <QLabel>
 #include <QTextEdit>
+#include <QTextBrowser>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QPixmap>
 #include <QButtonGroup>
-
-// QButtonGroup is part of QtWidgets (no separate header since Qt 6).
+#include <QScrollArea>
+#include <QImage>
 
 namespace DocuSearch {
 
@@ -61,9 +70,14 @@ private slots:
     void onCopyExtracted();
     void onDownloadExtracted();
     void onTabClicked(int id);
+    void onFitClicked();
+    void onRotateClicked();
+    void onMoreClicked();
+    void onPageInputChanged();
 
 private:
     // Viewer header
+    QLabel*    fileIconLbl_       = nullptr;
     QLabel*    viewerTitle_       = nullptr;
     QPushButton* prevPageBtn_     = nullptr;
     QLineEdit* pageInput_         = nullptr;
@@ -72,12 +86,14 @@ private:
     QPushButton* zoomOutBtn_      = nullptr;
     QLabel*    zoomLevel_         = nullptr;
     QPushButton* zoomInBtn_       = nullptr;
-    QPushButton* fitBtn_          = nullptr;
-    QPushButton* rotateBtn_       = nullptr;
+    QPushButton* openBtn_         = nullptr;
+    QPushButton* ocrBtn_          = nullptr;
     QPushButton* moreBtn_         = nullptr;
 
     // Viewer body
-    QTextEdit* documentPage_      = nullptr;
+    QScrollArea* previewScroll_   = nullptr;
+    QLabel*      pageImageLbl_    = nullptr;  // for PDF/image preview
+    QTextBrowser* documentPage_   = nullptr;  // for text preview
 
     // Extracted panel
     QPushButton* tabExtracted_    = nullptr;
@@ -92,12 +108,20 @@ private:
     int currentPage_  = 1;
     int totalPages_   = 1;
     int zoomPercent_  = 100;
+    int rotation_     = 0;  // 0, 90, 180, 270
     QString currentPath_;
+    QString currentExt_;
     QString currentExtracted_;
+    QString currentDocumentText_;
     QButtonGroup* tabGroup_ = nullptr;
 
     void updatePageDisplay();
     void updateZoomDisplay();
+    void renderCurrentPage();
+    void showTextPreview(const QString& text);
+    void showPdfPreview();
+    void showImagePreview(const QString& path);
+    void setPreviewMode(bool showImage);  // true=image, false=text
 };
 
 } // namespace DocuSearch

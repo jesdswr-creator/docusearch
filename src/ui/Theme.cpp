@@ -492,21 +492,68 @@ QTextEdit#extractedContent {
     selection-background-color: #fef08a;
     selection-color: #1a1a2e;
 }
-QPushButton#extractedActionBtn {
+/* Preview pane action buttons */
+QPushButton#openBtn {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+QPushButton#openBtn:hover { background-color: #1d4ed8; }
+QPushButton#openBtn:pressed { background-color: #1e40af; }
+
+QPushButton#ocrBtn {
+    background-color: #059669;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+QPushButton#ocrBtn:hover { background-color: #047857; }
+QPushButton#ocrBtn:pressed { background-color: #065f46; }
+
+QPushButton#moreActionBtn {
     background-color: #ffffff;
     color: #6b7280;
-    border: 1px solid #d1d5db;
+    border: 1.5px solid #d1d5db;
     border-radius: 6px;
-    padding: 0;
-    min-width: 28px;
-    min-height: 28px;
-    max-width: 28px;
-    max-height: 28px;
-    font-size: 12px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    max-width: 32px;
+    max-height: 32px;
 }
-QPushButton#extractedActionBtn:hover {
+QPushButton#moreActionBtn:hover {
     background-color: #f3f4f6;
+    border-color: #9ca3af;
 }
+
+QPushButton#copyBtn {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#copyBtn:hover { background-color: #1d4ed8; }
+
+QPushButton#downloadBtn {
+    background-color: #059669;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#downloadBtn:hover { background-color: #047857; }
 )" R"(/* ===== Metadata panel ===== */
 QWidget#metadataPanel {
     background-color: #ffffff;
@@ -1350,19 +1397,68 @@ QTextEdit#extractedContent {
     selection-background-color: #facc15;
     selection-color: #1a1a2e;
 }
-QPushButton#extractedActionBtn {
+/* Preview pane action buttons (dark) */
+QPushButton#openBtn {
+    background-color: #3b82f6;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+QPushButton#openBtn:hover { background-color: #2563eb; }
+QPushButton#openBtn:pressed { background-color: #1d4ed8; }
+
+QPushButton#ocrBtn {
+    background-color: #10b981;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+}
+QPushButton#ocrBtn:hover { background-color: #059669; }
+QPushButton#ocrBtn:pressed { background-color: #047857; }
+
+QPushButton#moreActionBtn {
     background-color: #1e293b;
     color: #94a3b8;
-    border: 1px solid #334155;
+    border: 1.5px solid #334155;
     border-radius: 6px;
-    padding: 0;
-    min-width: 28px;
-    min-height: 28px;
-    max-width: 28px;
-    max-height: 28px;
-    font-size: 12px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    max-width: 32px;
+    max-height: 32px;
 }
-QPushButton#extractedActionBtn:hover { background-color: #334155; }
+QPushButton#moreActionBtn:hover {
+    background-color: #334155;
+    border-color: #475569;
+}
+
+QPushButton#copyBtn {
+    background-color: #3b82f6;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#copyBtn:hover { background-color: #2563eb; }
+
+QPushButton#downloadBtn {
+    background-color: #10b981;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#downloadBtn:hover { background-color: #059669; }
 )" R"(/* ===== Metadata panel ===== */
 QWidget#metadataPanel {
     background-color: #1e293b;
