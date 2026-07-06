@@ -52,6 +52,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Sql
     Network
     Svg
+    PrintSupport
 )
 qt_standard_project_setup()
 
@@ -269,6 +270,7 @@ target_link_libraries(DocuSearch PRIVATE
     Qt6::Sql
     Qt6::Network
     Qt6::Svg
+    Qt6::PrintSupport
     SQLite::SQLite3
     ZLIB::ZLIB
 )

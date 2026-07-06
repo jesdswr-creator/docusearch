@@ -324,9 +324,10 @@ jobs:
           $pluginDir = "build\bin\Release\sqldrivers"
           if (-not (Test-Path $pluginDir)) { New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null }
           Copy-Item "$qtBin\..\plugins\sqldrivers\qsqlite.dll" "$pluginDir\qsqlite.dll" -Force
-          # Also copy Qt6Concurrent and Qt6Network (used by the app)
+          # Also copy Qt6Concurrent, Qt6Network, Qt6PrintSupport (used by the app)
           Copy-Item "$qtBin\Qt6Concurrent.dll" "build\bin\Release\Qt6Concurrent.dll" -Force -ErrorAction SilentlyContinue
           Copy-Item "$qtBin\Qt6Network.dll" "build\bin\Release\Qt6Network.dll" -Force -ErrorAction SilentlyContinue
+          Copy-Item "$qtBin\Qt6PrintSupport.dll" "build\bin\Release\Qt6PrintSupport.dll" -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path build\bin\Release\themes | Out-Null
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
