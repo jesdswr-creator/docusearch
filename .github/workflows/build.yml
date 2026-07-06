@@ -87,6 +87,58 @@ jobs:
           echo "C:\vcpkg" >> $env:GITHUB_PATH
           & C:\vcpkg\vcpkg.exe --version
 
+      - name: Cache vcpkg downloads and installed packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+            C:\vcpkg\buildtrees
+            ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Pre-download sqlite3 source (workaround for SSL errors on sqlite.org)
+        shell: pwsh
+        run: |
+          # vcpkg fails to download sqlite3 from sqlite.org due to SSL connect
+          # errors (curl error 35) on GitHub Actions runners. vcpkg refuses to
+          # retry "non-transient" errors, so the whole build fails.
+          #
+          # Workaround: pre-download the sqlite3 tarball with curl --retry from
+          # multiple mirrors and place it in vcpkg's downloads folder. When vcpkg
+          # runs, it will find the file already present and skip the download.
+          $filename = "sqlite-autoconf-3530200.tar.gz"
+          $dest = "C:\vcpkg\downloads\$filename"
+          if (Test-Path $dest) {
+            $size = (Get-Item $dest).Length
+            if ($size -gt 1MB) {
+              Write-Host "sqlite3 tarball already present ($size bytes), skipping download"
+              exit 0
+            }
+          }
+          $mirrors = @(
+            "https://sqlite.org/2026/$filename",
+            "https://www.sqlite.org/2026/$filename",
+            "https://fossies.org/linux/misc/$filename",
+            "https://mirrors.kernel.org/ubuntu/pool/main/s/sqlite3/${filename}",
+            "https://github.com/nicferrier/sqlite3-prebuilt/releases/download/3.53.2/$filename"
+          )
+          foreach ($url in $mirrors) {
+            Write-Host "Attempting download from: $url"
+            & curl -L --retry 10 --retry-delay 5 --retry-connrefused --connect-timeout 30 -o $dest $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) {
+              $size = (Get-Item $dest).Length
+              if ($size -gt 1MB) {
+                Write-Host "Successfully downloaded from $url ($size bytes)"
+                exit 0
+              }
+            }
+            Write-Host "Download from $url failed (exit $LASTEXITCODE)"
+          }
+          Write-Host "WARNING: All mirrors failed. vcpkg will try on its own."
+
       - name: Install WiX v4 (pinned to avoid v7 OSMF EULA)
         shell: pwsh
         run: |
@@ -116,20 +168,45 @@ jobs:
           # error) and the workflow would continue to the Build step, which
           # then fails with "ALL_BUILD.vcxproj does not exist" because
           # CMake never generated the project files.
-          $output = & cmake -B build -S . `
-            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows `
-            -DVCPKG_MANIFEST_MODE=ON `
-            -DDOCUSEARCH_BUILD_TESTS=ON `
-            -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
-            -DDOCUSEARCH_ENABLE_POPPLER=ON 2>&1
-          $output | Out-File -FilePath configure-output.log -Encoding utf8
+          #
+          # RETRY: vcpkg downloads can fail with transient SSL errors
+          # (curl error 35). Retry the whole cmake configure up to 3 times.
+          $maxRetries = 3
+          $attempt = 0
+          $output = $null
+          $exitCode = 1
+          while ($attempt -lt $maxRetries) {
+            $attempt++
+            Write-Host ""
+            Write-Host "============================================"
+            Write-Host "=== CMake configure attempt $attempt/$maxRetries ==="
+            Write-Host "============================================"
+            # Clean any partial build dir from a previous failed attempt.
+            if (Test-Path build) { Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue }
+            $output = & cmake -B build -S . `
+              -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+              -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
+              -DVCPKG_TARGET_TRIPLET=x64-windows `
+              -DVCPKG_MANIFEST_MODE=ON `
+              -DDOCUSEARCH_BUILD_TESTS=ON `
+              -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
+              -DDOCUSEARCH_ENABLE_POPPLER=ON 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | Out-File -FilePath configure-output.log -Encoding utf8
+            if ($exitCode -eq 0 -and (Test-Path "build\ALL_BUILD.vcxproj")) {
+              Write-Host "CMake configure succeeded on attempt $attempt"
+              break
+            }
+            Write-Host "CMake configure failed on attempt $attempt (exit code $exitCode)"
+            if ($attempt -lt $maxRetries) {
+              Write-Host "Waiting 60 seconds before retry..."
+              Start-Sleep -Seconds 60
+            }
+          }
           $output | Write-Host
-          $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
             Write-Host ""
-            Write-Host "=== CMAKE CONFIGURE FAILED (exit code $exitCode) ==="
+            Write-Host "=== CMAKE CONFIGURE FAILED after $maxRetries attempts (exit code $exitCode) ==="
             Write-Host "=== Last 300 lines of output ==="
             $output | Select-Object -Last 300 | Write-Host
             $summary = "## CMake Configure Failed (exit code $exitCode)`n`n``````" + ($output | Select-Object -Last 300 | Out-String) + "``````"
