@@ -910,7 +910,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
 
 QDialog { background-color: #f0f2f5; }
 QDialogButtonBox QPushButton { min-width: 80px; }
-)")";
+)";
 
 // ============================================================
 // DARK THEME
@@ -1730,7 +1730,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
 
 QDialog { background-color: #0f172a; }
 QDialogButtonBox QPushButton { min-width: 80px; }
-)")";
+)";
 
 } // namespace
 
