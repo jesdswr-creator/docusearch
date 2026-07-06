@@ -132,8 +132,10 @@ jobs:
             Write-Host "=== BUILD FAILED (exit code $exitCode) ==="
             Write-Host "=== Last 300 lines of output ==="
             $output | Select-Object -Last 300 | Write-Host
-            # Do NOT exit yet — let the next step upload build-output.log
-            # as an artifact so we can inspect the full error offline.
+            # Also write to GITHUB_STEP_SUMMARY so the error is visible
+            # in the check-run summary (no need to expand the step log).
+            $summary = "## Build Failed (exit code $exitCode)`n`n``````" + ($output | Select-Object -Last 300 | Out-String) + "``````"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             exit $exitCode
           }
 
@@ -145,6 +147,23 @@ jobs:
           path: build-output.log
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Push build log to ci-logs branch on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path build-output.log)) { Write-Host "No build-output.log found"; exit 0 }
+          git config --global user.email "ci@docusearch.local"
+          git config --global user.name "CI Bot"
+          # Stage the log file under a folder named after the commit SHA
+          $sha = ${env:GITHUB_SHA}.Substring(0,7)
+          New-Item -ItemType Directory -Force -Path "logs/$sha" | Out-Null
+          Copy-Item build-output.log "logs/$sha/build-output.log" -Force
+          git checkout --orphan ci-logs 2>$null
+          git rm -r --cached . 2>$null
+          git add "logs/$sha/build-output.log"
+          git commit -m "Add build log for failed run $sha"
+          git push origin ci-logs --force 2>&1 | Write-Host
 
       - name: Run unit tests
         shell: pwsh
