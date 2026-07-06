@@ -293,7 +293,7 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
         "} catch {\n"
         "  Write-Output ('OCR_ERROR:' + $_.Exception.Message)\n"
         "  exit 1\n"
-        "}").arg(path.replace("'", "''"));
+        "}").arg(QString(path).replace("'", "''"));
 
     // Run PowerShell with the script. Capture stdout.
     QProcess proc;

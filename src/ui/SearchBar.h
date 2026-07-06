@@ -27,6 +27,10 @@ class QTimer;
 
 namespace DocuSearch {
 
+// Forward declaration — full definition is in SearchBar.cpp.
+// This is a QLineEdit subclass that paints a leading search icon.
+class SearchBarSearchLineEdit;
+
 class SearchBar : public QWidget {
     Q_OBJECT
 public:
@@ -58,8 +62,9 @@ private slots:
 
 private:
     // Custom QLineEdit that paints a leading search icon.
-    // Implementation is in the .cpp file (SearchBarSearchLineEdit).
-    QLineEdit*       edit_             = nullptr;
+    // Declared as SearchBarSearchLineEdit* (not QLineEdit*) so we can
+    // call setSearchIconPixmap() without a cast.
+    SearchBarSearchLineEdit* edit_    = nullptr;
     QPushButton*     clearBtn_         = nullptr;
     QWidget*         searchBtnWidget_  = nullptr;
     QLabel*          searchIconLbl_    = nullptr;

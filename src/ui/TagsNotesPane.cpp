@@ -17,8 +17,12 @@
 #include <QList>
 #include <functional>
 
+namespace DocuSearch {
+
 // A simple flow layout that wraps child widgets to the next row when
 // they exceed the available width. Used to lay out tag pills.
+// Defined inside namespace DocuSearch to match the forward declaration
+// in TagsNotesPane.h.
 class FlowLayout : public QLayout {
 public:
     explicit FlowLayout(QWidget* parent = nullptr) : QLayout(parent) {}
@@ -69,8 +73,6 @@ public:
 private:
     QList<QLayoutItem*> items_;
 };
-
-namespace DocuSearch {
 
 // A clickable tag pill. Right-click triggers the onRemove callback.
 // We use std::function instead of Qt signals/slots because Q_OBJECT

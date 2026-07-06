@@ -45,8 +45,7 @@ namespace {
 // ============================================================
 // LIGHT THEME
 // ============================================================
-const char* kLightQss = R"(
-/* ===== Global ===== */
+const char* kLightQss = R"(/* ===== Global ===== */
 * {
     font-family: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', 'Roboto', sans-serif;
     font-size: 13px;
@@ -61,8 +60,7 @@ QMainWindow, QWidget#centralWidget {
 QWidget {
     color: #1a1a2e;
 }
-
-/* ===== Title bar ===== */
+)" R"(/* ===== Title bar ===== */
 QWidget#titleBar {
     background-color: #ffffff;
     border-bottom: 1px solid #e0e0e0;
@@ -101,8 +99,7 @@ QPushButton#titleBtn#closeBtn:hover {
     background-color: #fee2e2;
     color: #dc2626;
 }
-
-/* ===== Sidebar (left nav) ===== */
+)" R"(/* ===== Sidebar (left nav) ===== */
 QWidget#sidebar {
     background-color: #ffffff;
     border-right: 1px solid #e5e7eb;
@@ -160,14 +157,13 @@ QProgressBar#indexedBar::chunk {
     background-color: #059669;
     border-radius: 2px;
 }
-
-/* ===== Search bar area ===== */
+)" R"(/* ===== Search bar area ===== */
 QWidget#searchBarArea {
     background-color: #ffffff;
     border-bottom: 1px solid #e5e7eb;
 }
 
-/* Search input with leading icon — achieved via QLineEdit + QLineEdit action */
+/* Search input with leading icon -- achieved via QLineEdit + QLineEdit action */
 QLineEdit#searchInput {
     background-color: #ffffff;
     color: #1a1a2e;
@@ -250,8 +246,7 @@ QPushButton#iconBtn:hover {
 QPushButton#iconBtn:pressed {
     background-color: #f3f4f6;
 }
-
-/* ===== Results panel ===== */
+)" R"(/* ===== Results panel ===== */
 QWidget#resultsPanel {
     background-color: #ffffff;
     border-right: 1px solid #e5e7eb;
@@ -299,7 +294,7 @@ QComboBox#sortSelect QAbstractItemView {
     outline: 0;
 }
 
-/* Result items list — QListWidget with custom item widgets */
+/* Result items list -- QListWidget with custom item widgets */
 QListWidget#resultsList {
     background-color: #ffffff;
     border: none;
@@ -343,8 +338,7 @@ QLabel#fileIconBadge {
     border-radius: 8px;
     qproperty-alignment: AlignCenter;
 }
-
-/* ===== Viewer panel ===== */
+)" R"(/* ===== Viewer panel ===== */
 QWidget#viewerPanel {
     background-color: #f3f4f6;
 }
@@ -456,8 +450,7 @@ QLabel#thumbNum {
     background: transparent;
     qproperty-alignment: AlignCenter;
 }
-
-/* ===== Extracted text panel (bottom of viewer) ===== */
+)" R"(/* ===== Extracted text panel (bottom of viewer) ===== */
 QWidget#extractedPanel {
     background-color: #ffffff;
     border-top: 1px solid #e5e7eb;
@@ -504,8 +497,7 @@ QPushButton#extractedActionBtn {
 QPushButton#extractedActionBtn:hover {
     background-color: #f3f4f6;
 }
-
-/* ===== Metadata panel ===== */
+)" R"(/* ===== Metadata panel ===== */
 QWidget#metadataPanel {
     background-color: #ffffff;
     border-left: 1px solid #e5e7eb;
@@ -646,8 +638,7 @@ QLabel#notesModified {
     color: #9ca3af;
     background: transparent;
 }
-
-/* ===== Status bar ===== */
+)" R"(/* ===== Status bar ===== */
 QStatusBar {
     background-color: #ffffff;
     color: #6b7280;
@@ -685,8 +676,7 @@ QPushButton#openLocationBtn {
 QPushButton#openLocationBtn:hover {
     background-color: #f3f4f6;
 }
-
-/* ===== Generic widgets ===== */
+)" R"(/* ===== Generic widgets ===== */
 QLineEdit {
     background-color: #ffffff;
     color: #1a1a2e;
@@ -920,13 +910,12 @@ QScrollBar::add-page, QScrollBar::sub-page {
 
 QDialog { background-color: #f0f2f5; }
 QDialogButtonBox QPushButton { min-width: 80px; }
-)";
+)")";
 
 // ============================================================
 // DARK THEME
 // ============================================================
-const char* kDarkQss = R"(
-/* ===== Global ===== */
+const char* kDarkQss = R"(/* ===== Global ===== */
 * {
     font-family: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', 'Roboto', sans-serif;
     font-size: 13px;
@@ -941,8 +930,7 @@ QMainWindow, QWidget#centralWidget {
 QWidget {
     color: #f1f5f9;
 }
-
-/* ===== Title bar ===== */
+)" R"(/* ===== Title bar ===== */
 QWidget#titleBar {
     background-color: #1e293b;
     border-bottom: 1px solid #334155;
@@ -981,8 +969,7 @@ QPushButton#titleBtn#closeBtn:hover {
     background-color: #7f1d1d;
     color: #fef2f2;
 }
-
-/* ===== Sidebar ===== */
+)" R"(/* ===== Sidebar ===== */
 QWidget#sidebar {
     background-color: #1e293b;
     border-right: 1px solid #334155;
@@ -1040,8 +1027,7 @@ QProgressBar#indexedBar::chunk {
     background-color: #10b981;
     border-radius: 2px;
 }
-
-/* ===== Search bar area ===== */
+)" R"(/* ===== Search bar area ===== */
 QWidget#searchBarArea {
     background-color: #1e293b;
     border-bottom: 1px solid #334155;
@@ -1116,8 +1102,7 @@ QPushButton#iconBtn:hover {
     color: #cbd5e1;
 }
 QPushButton#iconBtn:pressed { background-color: #0f172a; }
-
-/* ===== Results panel ===== */
+)" R"(/* ===== Results panel ===== */
 QWidget#resultsPanel {
     background-color: #1e293b;
     border-right: 1px solid #334155;
@@ -1206,8 +1191,7 @@ QLabel#fileIconBadge {
     border-radius: 8px;
     qproperty-alignment: AlignCenter;
 }
-
-/* ===== Viewer panel ===== */
+)" R"(/* ===== Viewer panel ===== */
 QWidget#viewerPanel {
     background-color: #0f172a;
 }
@@ -1315,8 +1299,7 @@ QLabel#thumbNum {
     background: transparent;
     qproperty-alignment: AlignCenter;
 }
-
-/* ===== Extracted text panel ===== */
+)" R"(/* ===== Extracted text panel ===== */
 QWidget#extractedPanel {
     background-color: #1e293b;
     border-top: 1px solid #334155;
@@ -1359,8 +1342,7 @@ QPushButton#extractedActionBtn {
     font-size: 12px;
 }
 QPushButton#extractedActionBtn:hover { background-color: #334155; }
-
-/* ===== Metadata panel ===== */
+)" R"(/* ===== Metadata panel ===== */
 QWidget#metadataPanel {
     background-color: #1e293b;
     border-left: 1px solid #334155;
@@ -1497,8 +1479,7 @@ QLabel#notesModified {
     color: #64748b;
     background: transparent;
 }
-
-/* ===== Status bar ===== */
+)" R"(/* ===== Status bar ===== */
 QStatusBar {
     background-color: #1e293b;
     color: #94a3b8;
@@ -1534,8 +1515,7 @@ QPushButton#openLocationBtn {
     font-size: 12px;
 }
 QPushButton#openLocationBtn:hover { background-color: #334155; }
-
-/* ===== Generic widgets ===== */
+)" R"(/* ===== Generic widgets ===== */
 QLineEdit {
     background-color: #0f172a;
     color: #f1f5f9;
@@ -1750,7 +1730,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
 
 QDialog { background-color: #0f172a; }
 QDialogButtonBox QPushButton { min-width: 80px; }
-)";
+)")";
 
 } // namespace
 
