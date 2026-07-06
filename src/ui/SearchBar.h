@@ -6,15 +6,14 @@
 //
 // Layout (left to right):
 //   [icon: search] [input field...............] [x clear]
-//   [Search Btn (Ctrl+K badge)]
 //   [Saved Searches ▾]
-//   [Filters]
-//   <stretch>
-//   [+ Add Folder]
+//   [Filters]  [+ Add Folder]
 //   [icon: refresh] [icon: list] [icon: grid] [icon: more]
 //
 // The search input has a leading search icon and a trailing clear
 // button. The clear button is only visible when the input has text.
+// Search is triggered automatically on typing (300ms debounce) or
+// pressing Enter — no separate "Search" button is needed.
 // ============================================================
 
 #include <QWidget>
@@ -28,7 +27,6 @@ class QTimer;
 namespace DocuSearch {
 
 // Forward declaration — full definition is in SearchBar.cpp.
-// This is a QLineEdit subclass that paints a leading search icon.
 class SearchBarSearchLineEdit;
 
 class SearchBar : public QWidget {
@@ -41,8 +39,6 @@ public:
     void setPlaceholder(const QString& s);
     void setSavedSearches(const QStringList& names);
 
-    // Re-render all icons with the current palette's text color.
-    // Call after a theme toggle so dark/light icons stay readable.
     void refreshIcons();
 
 signals:
@@ -51,7 +47,6 @@ signals:
     void addFolderRequested();
     void refreshRequested();
     void filtersRequested();
-    void advancedFiltersToggled(bool on);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* e) override;
@@ -61,13 +56,8 @@ private slots:
     void onTextChanged(const QString& s);
 
 private:
-    // Custom QLineEdit that paints a leading search icon.
-    // Declared as SearchBarSearchLineEdit* (not QLineEdit*) so we can
-    // call setSearchIconPixmap() without a cast.
     SearchBarSearchLineEdit* edit_    = nullptr;
     QPushButton*     clearBtn_         = nullptr;
-    QWidget*         searchBtnWidget_  = nullptr;
-    QLabel*          searchIconLbl_    = nullptr;
     QComboBox*       savedBox_         = nullptr;
     QPushButton*     filtersBtn_       = nullptr;
     QPushButton*     addFolderBtn_     = nullptr;

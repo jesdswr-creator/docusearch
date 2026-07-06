@@ -40,30 +40,40 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
                                QWidget* parent)
     : QDialog(parent), current_(current), repo_(repo), db_(db) {
     setWindowTitle("Settings - DocuSearch");
-    setMinimumWidth(640);
-    setMinimumHeight(560);
+    setMinimumWidth(720);
+    setMinimumHeight(600);
 
     auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(12, 12, 12, 12);
+    outer->setSpacing(8);
     auto* tabs  = new QTabWidget(this);
     outer->addWidget(tabs);
 
     // -------- Indexing tab --------
     auto* indexingTab = new QWidget(this);
     auto* idxLay = new QVBoxLayout(indexingTab);
+    idxLay->setContentsMargins(12, 12, 12, 12);
+    idxLay->setSpacing(10);
 
     // Drives
     auto* drvBox = new QGroupBox("Indexed Drives / Folders", this);
     auto* drvLay = new QVBoxLayout(drvBox);
+    drvLay->setSpacing(6);
     drivesList_ = new QListWidget(this);
     drivesList_->addItems(current_.indexedDrives);
+    drivesList_->setMinimumHeight(80);
     drvLay->addWidget(drivesList_);
     auto* drvRow = new QHBoxLayout();
+    drvRow->setSpacing(6);
     driveInput_ = new QLineEdit(this);
     driveInput_->setPlaceholderText("e.g., D:\\  (or click Browse...)");
     auto* browseBtn = new QPushButton("Browse...", this);
+    browseBtn->setMinimumWidth(80);
     auto* addDrvBtn = new QPushButton("Add", this);
+    addDrvBtn->setMinimumWidth(70);
     auto* rmDrvBtn  = new QPushButton("Remove", this);
-    drvRow->addWidget(driveInput_);
+    rmDrvBtn->setMinimumWidth(70);
+    drvRow->addWidget(driveInput_, 1);
     drvRow->addWidget(browseBtn);
     drvRow->addWidget(addDrvBtn);
     drvRow->addWidget(rmDrvBtn);
@@ -73,16 +83,22 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // Excludes
     auto* exBox = new QGroupBox("Excluded Folders", this);
     auto* exLay = new QVBoxLayout(exBox);
+    exLay->setSpacing(6);
     excludesList_ = new QListWidget(this);
     excludesList_->addItems(current_.excludedFolders);
+    excludesList_->setMinimumHeight(60);
     exLay->addWidget(excludesList_);
     auto* exRow = new QHBoxLayout();
+    exRow->setSpacing(6);
     excludeInput_ = new QLineEdit(this);
     excludeInput_->setPlaceholderText("e.g., D:\\Movies");
     auto* browseExBtn = new QPushButton("Browse...", this);
+    browseExBtn->setMinimumWidth(80);
     auto* addExBtn = new QPushButton("Add", this);
+    addExBtn->setMinimumWidth(70);
     auto* rmExBtn  = new QPushButton("Remove", this);
-    exRow->addWidget(excludeInput_);
+    rmExBtn->setMinimumWidth(70);
+    exRow->addWidget(excludeInput_, 1);
     exRow->addWidget(browseExBtn);
     exRow->addWidget(addExBtn);
     exRow->addWidget(rmExBtn);
@@ -92,15 +108,20 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // Excluded extensions
     auto* extBox = new QGroupBox("Excluded Extensions (in addition to defaults)", this);
     auto* extLay = new QVBoxLayout(extBox);
+    extLay->setSpacing(6);
     excludedExtList_ = new QListWidget(this);
     excludedExtList_->addItems(current_.excludedExtensions);
+    excludedExtList_->setMinimumHeight(60);
     extLay->addWidget(excludedExtList_);
     auto* extRow = new QHBoxLayout();
+    extRow->setSpacing(6);
     extInput_ = new QLineEdit(this);
     extInput_->setPlaceholderText("e.g., iso");
     auto* addExtBtn = new QPushButton("Add", this);
+    addExtBtn->setMinimumWidth(70);
     auto* rmExtBtn  = new QPushButton("Remove", this);
-    extRow->addWidget(extInput_);
+    rmExtBtn->setMinimumWidth(70);
+    extRow->addWidget(extInput_, 1);
     extRow->addWidget(addExtBtn);
     extRow->addWidget(rmExtBtn);
     extLay->addLayout(extRow);

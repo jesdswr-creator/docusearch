@@ -1,5 +1,15 @@
 // ============================================================
-// PptxExtractor.cpp - read ppt/slides/slideN.xml <a:t> runs
+// PptxExtractor.cpp - read ALL slides from ppt/slides/slideN.xml
+// ============================================================
+//
+// Strategy (same as XlsxExtractor):
+//   1. Extract the entire PPTX ZIP to a temp dir in ONE PowerShell call.
+//   2. Find all slide files matching ppt/slides/slide*.xml.
+//   3. Parse each slide's <a:t> runs, prefixed with "--- Slide N ---".
+//
+// Previously this used a separate PowerShell call per slide (up to 200
+// calls), which was extremely slow and could fail on large PPTX files
+// due to cumulative timeouts. The new approach is ~100x faster.
 // ============================================================
 
 #include "PptxExtractor.h"
@@ -10,42 +20,70 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QDir>
+#include <QFileInfo>
+#include <QRegularExpression>
 
 namespace DocuSearch {
 
 namespace {
-QByteArray extractInnerFromZip3(const QString& zipPath, const QString& innerPath) {
-    QTemporaryDir tmpDir;
-    if (!tmpDir.isValid()) return {};
+
+// Extract an entire ZIP into a temp directory using a SINGLE PowerShell
+// call (Windows) or `unzip` (other platforms).
+bool extractZipToDir(const QString& zipPath, const QString& outDir) {
     QProcess proc;
-    proc.setWorkingDirectory(tmpDir.path());
     proc.setProcessChannelMode(QProcess::MergedChannels);
 #ifdef Q_OS_WIN
-    // Make a mutable copy of zipPath so we can escape single quotes for PowerShell.
     QString safeZip = zipPath;
     safeZip.replace("'", "''");
+    QString safeOut = outDir;
+    safeOut.replace("'", "''");
     const QString script = QString(
         "$ErrorActionPreference='SilentlyContinue';"
         "Add-Type -AssemblyName System.IO.Compression.FileSystem;"
-        "$z=[System.IO.Compression.ZipFile]::OpenRead('%1');"
-        "$e=$z.Entries | Where-Object {$_.FullName -eq '%2'};"
-        "if($e){$s=New-Object System.IO.MemoryStream;$e.Open().CopyTo($s);"
-        "[System.IO.File]::WriteAllBytes('%3\\extracted.bin',$s.ToArray())}"
-        "$z.Dispose();").arg(safeZip, innerPath, tmpDir.path());
+        "[System.IO.Compression.ZipFile]::ExtractToDirectory('%1','%2');")
+        .arg(safeZip, safeOut);
     proc.start("powershell", {"-NoProfile", "-Command", script});
 #else
-    proc.start("unzip", {"-p", zipPath, innerPath});
+    proc.start("unzip", {"-o", "-q", zipPath, "-d", outDir});
 #endif
-    if (!proc.waitForStarted(3000)) return {};
-    if (!proc.waitForFinished(15000)) { proc.kill(); return {}; }
-#ifdef Q_OS_WIN
-    QFile out(tmpDir.path() + "/extracted.bin");
-    if (out.open(QIODevice::ReadOnly)) return out.readAll();
-    return {};
-#else
-    return proc.readAllStandardOutput();
-#endif
+    if (!proc.waitForStarted(3000)) return false;
+    if (!proc.waitForFinished(60000)) { proc.kill(); return false; }
+    return proc.exitCode() == 0;
 }
+
+// Read a file from the extracted dir.
+QByteArray readFileFromDir(const QString& baseDir, const QString& relativePath) {
+    QFile f(QDir(baseDir).absoluteFilePath(relativePath));
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return f.readAll();
+}
+
+// Find all slide files in ppt/slides/ and return them sorted by slide number.
+// Files are named slide1.xml, slide2.xml, etc.
+QList<QPair<int, QString>> findSlideFiles(const QString& baseDir) {
+    QList<QPair<int, QString>> out;
+    const QString slidesDir = QDir(baseDir).absoluteFilePath("ppt/slides");
+    QDir dir(slidesDir);
+    if (!dir.exists()) return out;
+
+    const QRegularExpression re("^slide(\\d+)\\.xml$");
+    const QStringList files = dir.entryList(QStringList() << "slide*.xml", QDir::Files);
+    for (const QString& fn : files) {
+        const auto m = re.match(fn);
+        if (m.hasMatch()) {
+            const int num = m.captured(1).toInt();
+            out.append({num, "ppt/slides/" + fn});
+        }
+    }
+    // Sort by slide number.
+    std::sort(out.begin(), out.end(),
+              [](const QPair<int, QString>& a, const QPair<int, QString>& b) {
+                  return a.first < b.first;
+              });
+    return out;
+}
+
 } // namespace
 
 QStringList PptxExtractor::supportedExtensions() const {
@@ -55,11 +93,36 @@ QStringList PptxExtractor::supportedExtensions() const {
 ExtractionResult PptxExtractor::extract(const QString& path) {
     ExtractionResult r;
     r.source = "native";
+
+    QTemporaryDir tmpDir;
+    if (!tmpDir.isValid()) {
+        r.errorMessage = "Failed to create temp dir for .pptx extraction.";
+        return r;
+    }
+
+    // 1) Extract entire ZIP in ONE call (much faster than per-slide).
+    if (!extractZipToDir(path, tmpDir.path())) {
+        r.errorMessage = "Failed to extract .pptx ZIP.";
+        DS_WARN("Pptx", r.errorMessage + " (path=" + path + ")");
+        return r;
+    }
+
+    // 2) Find all slide files, sorted by slide number.
+    const QList<QPair<int, QString>> slides = findSlideFiles(tmpDir.path());
+    if (slides.isEmpty()) {
+        r.errorMessage = "No slides found in .pptx";
+        return r;
+    }
+
+    // 3) Parse each slide's <a:t> runs.
     QString text;
-    for (int i = 1; i <= 200; ++i) {
-        const QString inner = QString("ppt/slides/slide%1.xml").arg(i);
-        const QByteArray xml = extractInnerFromZip3(path, inner);
-        if (xml.isEmpty()) break;
+    for (const auto& s : slides) {
+        const int slideNum = s.first;
+        const QString relPath = s.second;
+        const QByteArray xml = readFileFromDir(tmpDir.path(), relPath);
+        if (xml.isEmpty()) continue;
+
+        text.append("--- Slide " + QString::number(slideNum) + " ---\n");
 
         QXmlStreamReader xs(xml);
         while (!xs.atEnd()) {
@@ -74,10 +137,12 @@ ExtractionResult PptxExtractor::extract(const QString& path) {
         }
         text.append('\n');
     }
+
     if (text.isEmpty()) {
-        r.errorMessage = "No slides found in .pptx";
+        r.errorMessage = "No text found in .pptx slides";
         return r;
     }
+
     r.text = Utils::stripControlChars(text);
     return r;
 }

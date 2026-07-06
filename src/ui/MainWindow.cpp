@@ -414,11 +414,11 @@ void MainWindow::buildCentral() {
     mainLay->addLayout(hLay, 1);
 
     // ============================================================
-    // 1) LEFT SIDEBAR (200px)
+    // 1) LEFT SIDEBAR (170px — compact professional width)
     // ============================================================
     sidebar_ = new QWidget(centralWidget);
     sidebar_->setObjectName("sidebar");
-    sidebar_->setFixedWidth(200);
+    sidebar_->setFixedWidth(170);
     sidebar_->setStyleSheet("background: transparent;");
 
     auto* sidebarLay = new QVBoxLayout(sidebar_);
@@ -434,7 +434,7 @@ void MainWindow::buildCentral() {
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
-        item->setSizeHint(QSize(180, 38));
+        item->setSizeHint(QSize(150, 36));
     }
     if (sidebarList_->count() > 0) {
         sidebarList_->setCurrentRow(0);
@@ -546,7 +546,7 @@ void MainWindow::buildCentral() {
     mainSplitter_->setStretchFactor(2, 0);
 
     // Initial sizes
-    const int availWidth = qMax(800, width() - 200 - 300 - 16);
+    const int availWidth = qMax(800, width() - 170 - 300 - 16);
     QList<int> hSizes;
     hSizes << qMin(420, qMax(280, int(availWidth * 0.30)))
            << qMax(360, int(availWidth * 0.70))
@@ -661,8 +661,14 @@ void MainWindow::applyTheme() {
     }
     update();
 
-    // Re-render all icons with the new palette's text color.
-    refreshAllIcons();
+    // Defer icon refresh to the next event loop iteration so the
+    // palette change is painted immediately (the user sees the
+    // background/text color switch instantly). Icon re-rendering
+    // involves SVG loading + QPixmap rendering which takes ~200ms
+    // for all 49 icons — deferring it makes the toggle feel instant.
+    QTimer::singleShot(0, this, [this]() {
+        refreshAllIcons();
+    });
 }
 
 void MainWindow::refreshAllIcons() {

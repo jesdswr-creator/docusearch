@@ -181,70 +181,80 @@ QLineEdit#searchInput:hover {
     border-color: #9ca3af;
 }
 
-QPushButton#searchBtn {
+/* Add Folder button — primary action, blue */
+QPushButton#addFolderBtn {
     background-color: #2563eb;
     color: #ffffff;
     border: none;
     border-radius: 8px;
-    padding: 9px 18px;
-    font-size: 13.5px;
+    padding: 8px 16px;
+    font-size: 13px;
     font-weight: 600;
-    text-align: left;
-    padding-left: 12px;
 }
-QPushButton#searchBtn:hover {
+QPushButton#addFolderBtn:hover {
     background-color: #1d4ed8;
 }
-QPushButton#searchBtn:pressed {
+QPushButton#addFolderBtn:pressed {
     background-color: #1e40af;
 }
 
-QPushButton#shortcutBadge {
-    background-color: rgba(255,255,255,0.25);
-    color: #ffffff;
-    border: none;
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 11px;
-    font-weight: 500;
-    min-width: 32px;
-}
-
-/* Toolbar / action buttons */
-QPushButton#toolbarBtn {
-    background-color: #ffffff;
-    color: #374151;
-    border: 1.5px solid #d1d5db;
+/* Filters button — purple accent */
+QPushButton#filtersBtn {
+    background-color: #f3e8ff;
+    color: #7c3aed;
+    border: 1.5px solid #c4b5fd;
     border-radius: 8px;
     padding: 8px 14px;
     font-size: 13px;
-    text-align: left;
+    font-weight: 500;
 }
-QPushButton#toolbarBtn:hover {
-    background-color: #f9fafb;
-    border-color: #9ca3af;
+QPushButton#filtersBtn:hover {
+    background-color: #e9d5ff;
+    border-color: #a78bfa;
 }
-QPushButton#toolbarBtn:pressed {
-    background-color: #f3f4f6;
+QPushButton#filtersBtn:pressed {
+    background-color: #ddd6fe;
 }
 
-QPushButton#iconBtn {
+/* Refresh button — green accent */
+QPushButton#refreshBtn {
+    background-color: #dcfce7;
+    color: #059669;
+    border: 1.5px solid #86efac;
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 38px;
+    min-height: 38px;
+    max-width: 38px;
+    max-height: 38px;
+}
+QPushButton#refreshBtn:hover {
+    background-color: #bbf7d0;
+    border-color: #4ade80;
+}
+QPushButton#refreshBtn:pressed {
+    background-color: #86efac;
+}
+
+/* List / Grid / More — neutral with colored hover */
+QPushButton#listBtn, QPushButton#gridBtn, QPushButton#moreBtn {
     background-color: #ffffff;
     color: #6b7280;
     border: 1.5px solid #d1d5db;
     border-radius: 8px;
     padding: 6px;
-    min-width: 36px;
-    min-height: 36px;
-    max-width: 36px;
-    max-height: 36px;
+    min-width: 38px;
+    min-height: 38px;
+    max-width: 38px;
+    max-height: 38px;
 }
-QPushButton#iconBtn:hover {
-    background-color: #f9fafb;
-    color: #374151;
+QPushButton#listBtn:hover, QPushButton#gridBtn:hover, QPushButton#moreBtn:hover {
+    background-color: #eff6ff;
+    border-color: #93c5fd;
+    color: #2563eb;
 }
-QPushButton#iconBtn:pressed {
-    background-color: #f3f4f6;
+QPushButton#listBtn:pressed, QPushButton#gridBtn:pressed, QPushButton#moreBtn:pressed {
+    background-color: #dbeafe;
 }
 )" R"(/* ===== Results panel ===== */
 QWidget#resultsPanel {
@@ -1046,62 +1056,73 @@ QLineEdit#searchInput:focus { border: 1.5px solid #3b82f6; }
 QLineEdit#searchInput:hover { border-color: #475569; }
 QLineEdit#searchInput::placeholder { color: #64748b; }
 
-QPushButton#searchBtn {
+/* Add Folder button — primary action, blue */
+QPushButton#addFolderBtn {
     background-color: #3b82f6;
     color: #ffffff;
     border: none;
     border-radius: 8px;
-    padding: 9px 18px;
-    font-size: 13.5px;
+    padding: 8px 16px;
+    font-size: 13px;
     font-weight: 600;
-    text-align: left;
-    padding-left: 12px;
 }
-QPushButton#searchBtn:hover { background-color: #2563eb; }
-QPushButton#searchBtn:pressed { background-color: #1d4ed8; }
+QPushButton#addFolderBtn:hover { background-color: #2563eb; }
+QPushButton#addFolderBtn:pressed { background-color: #1d4ed8; }
 
-QPushButton#shortcutBadge {
-    background-color: rgba(255,255,255,0.25);
-    color: #ffffff;
-    border: none;
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 11px;
-    font-weight: 500;
-    min-width: 32px;
-}
-
-QPushButton#toolbarBtn {
-    background-color: #1e293b;
-    color: #cbd5e1;
-    border: 1.5px solid #334155;
+/* Filters button — purple accent */
+QPushButton#filtersBtn {
+    background-color: #581c87;
+    color: #d8b4fe;
+    border: 1.5px solid #7c3aed;
     border-radius: 8px;
     padding: 8px 14px;
     font-size: 13px;
-    text-align: left;
+    font-weight: 500;
 }
-QPushButton#toolbarBtn:hover {
-    background-color: #334155;
-    border-color: #475569;
+QPushButton#filtersBtn:hover {
+    background-color: #6b21a8;
+    border-color: #a78bfa;
 }
-QPushButton#toolbarBtn:pressed { background-color: #0f172a; }
+QPushButton#filtersBtn:pressed { background-color: #4c1d95; }
 
-QPushButton#iconBtn {
+/* Refresh button — green accent */
+QPushButton#refreshBtn {
+    background-color: #14532d;
+    color: #86efac;
+    border: 1.5px solid #16a34a;
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 38px;
+    min-height: 38px;
+    max-width: 38px;
+    max-height: 38px;
+}
+QPushButton#refreshBtn:hover {
+    background-color: #166534;
+    border-color: #4ade80;
+}
+QPushButton#refreshBtn:pressed { background-color: #052e16; }
+
+/* List / Grid / More — neutral with blue hover */
+QPushButton#listBtn, QPushButton#gridBtn, QPushButton#moreBtn {
     background-color: #1e293b;
     color: #94a3b8;
     border: 1.5px solid #334155;
     border-radius: 8px;
     padding: 6px;
-    min-width: 36px;
-    min-height: 36px;
-    max-width: 36px;
-    max-height: 36px;
+    min-width: 38px;
+    min-height: 38px;
+    max-width: 38px;
+    max-height: 38px;
 }
-QPushButton#iconBtn:hover {
-    background-color: #334155;
-    color: #cbd5e1;
+QPushButton#listBtn:hover, QPushButton#gridBtn:hover, QPushButton#moreBtn:hover {
+    background-color: #1e3a8a;
+    border-color: #3b82f6;
+    color: #93c5fd;
 }
-QPushButton#iconBtn:pressed { background-color: #0f172a; }
+QPushButton#listBtn:pressed, QPushButton#gridBtn:pressed, QPushButton#moreBtn:pressed {
+    background-color: #1e293b;
+}
 )" R"(/* ===== Results panel ===== */
 QWidget#resultsPanel {
     background-color: #1e293b;

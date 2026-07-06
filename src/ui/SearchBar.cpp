@@ -21,14 +21,14 @@ namespace DocuSearch {
 
 // A QLineEdit subclass that paints a leading search icon inside the
 // input. We give the input a left text margin so typed text doesn't
-// overlap the icon. Exposed as a public nested class via SearchBar.h.
+// overlap the icon.
 class SearchBarSearchLineEdit : public QLineEdit {
 public:
     explicit SearchBarSearchLineEdit(QWidget* parent = nullptr) : QLineEdit(parent) {
         setObjectName("searchInput");
-        setPlaceholderText("Search documents...");
-        setMinimumHeight(36);
-        setMaximumHeight(36);
+        setPlaceholderText("Search documents... (Ctrl+K to focus)");
+        setMinimumHeight(38);
+        setMaximumHeight(38);
         setTextMargins(36, 0, 36, 0);
     }
 
@@ -52,14 +52,12 @@ private:
 };
 
 // A small container widget that holds the search QLineEdit plus an
-// overlaid clear button on the right. Both children are positioned
-// manually in resizeEvent so the clear button visually overlaps the
-// input's right padding area.
+// overlaid clear button on the right.
 class SearchInputWrap : public QWidget {
 public:
     explicit SearchInputWrap(QWidget* parent = nullptr) : QWidget(parent) {
-        setMinimumHeight(36);
-        setMaximumHeight(36);
+        setMinimumHeight(38);
+        setMaximumHeight(38);
         setStyleSheet("background: transparent;");
     }
 
@@ -100,12 +98,15 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
 
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(16, 10, 16, 10);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     // ---- Search input wrap (input + clear button overlay) ----
+    // This is the ONLY search bar. Pressing Enter or typing triggers
+    // search automatically (via autoSearchTimer_). No separate
+    // "Search" button is needed.
     auto* inputWrap = new SearchInputWrap(this);
-    inputWrap->setMaximumWidth(420);
-    inputWrap->setMinimumWidth(280);
+    inputWrap->setMaximumWidth(500);
+    inputWrap->setMinimumWidth(300);
 
     edit_ = new SearchBarSearchLineEdit;
     inputWrap->setLineEdit(edit_);
@@ -114,92 +115,56 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     clearBtn_->setCursor(Qt::PointingHandCursor);
     clearBtn_->setToolTip("Clear search");
     clearBtn_->setFixedSize(22, 22);
-    // Style as a small circular gray button with X icon.
     clearBtn_->setStyleSheet(
         "QPushButton { background-color: #e5e7eb; border: none; border-radius: 11px; }"
         "QPushButton:hover { background-color: #d1d5db; }");
     clearBtn_->hide();
     inputWrap->setClearButton(clearBtn_);
 
-    // ---- Search button (with Ctrl+K badge) ----
-    // The reference design uses a single blue button containing:
-    //   [search-icon] Search [Ctrl+K]
-    // We build this as a custom QWidget with HBoxLayout. The child
-    // QLabels are set to WA_TransparentForMouseEvents so mouse clicks
-    // pass through them to the parent widget, where our event filter
-    // catches MouseButtonPress and triggers search.
-    searchBtnWidget_ = new QWidget(this);
-    searchBtnWidget_->setObjectName("searchBtn");
-    searchBtnWidget_->setCursor(Qt::PointingHandCursor);
-    searchBtnWidget_->setMinimumHeight(36);
-    searchBtnWidget_->setMaximumHeight(36);
-    searchBtnWidget_->installEventFilter(this);
-    auto* sbwLay = new QHBoxLayout(searchBtnWidget_);
-    sbwLay->setContentsMargins(12, 0, 6, 0);
-    sbwLay->setSpacing(6);
-    searchIconLbl_ = new QLabel(searchBtnWidget_);
-    searchIconLbl_->setStyleSheet("background: transparent;");
-    searchIconLbl_->setFixedSize(14, 14);
-    searchIconLbl_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto* searchTextLbl = new QLabel("Search", searchBtnWidget_);
-    searchTextLbl->setStyleSheet(
-        "background: transparent; color: #ffffff; "
-        "font-size: 13.5px; font-weight: 600;");
-    searchTextLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto* shortcutLbl = new QLabel("Ctrl+K", searchBtnWidget_);
-    shortcutLbl->setStyleSheet(
-        "background: rgba(255,255,255,0.25); color: #ffffff; "
-        "border-radius: 4px; padding: 2px 6px; "
-        "font-size: 11px; font-weight: 500;");
-    shortcutLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-    sbwLay->addWidget(searchIconLbl_);
-    sbwLay->addWidget(searchTextLbl);
-    sbwLay->addWidget(shortcutLbl);
-
     // ---- Saved searches dropdown ----
     savedBox_ = new QComboBox(this);
     savedBox_->setToolTip("Saved searches");
     savedBox_->addItem("Saved Searches");
-    savedBox_->setMinimumHeight(36);
-    savedBox_->setMaximumHeight(36);
+    savedBox_->setMinimumHeight(38);
+    savedBox_->setMaximumHeight(38);
     savedBox_->setCursor(Qt::PointingHandCursor);
-    savedBox_->setMinimumWidth(140);
+    savedBox_->setMinimumWidth(130);
 
-    // ---- Filters button ----
+    // ---- Filters button (colored accent) ----
     filtersBtn_ = new QPushButton(this);
-    filtersBtn_->setObjectName("toolbarBtn");
+    filtersBtn_->setObjectName("filtersBtn");
     filtersBtn_->setCursor(Qt::PointingHandCursor);
     filtersBtn_->setText("Filters");
-    filtersBtn_->setMinimumHeight(36);
-    filtersBtn_->setMaximumHeight(36);
+    filtersBtn_->setMinimumHeight(38);
+    filtersBtn_->setMaximumHeight(38);
+    filtersBtn_->setToolTip("Advanced filters");
 
-    // ---- Add Folder button ----
+    // ---- Add Folder button (primary action — blue) ----
     addFolderBtn_ = new QPushButton(this);
-    addFolderBtn_->setObjectName("toolbarBtn");
+    addFolderBtn_->setObjectName("addFolderBtn");
     addFolderBtn_->setCursor(Qt::PointingHandCursor);
     addFolderBtn_->setText("Add Folder");
-    addFolderBtn_->setMinimumHeight(36);
-    addFolderBtn_->setMaximumHeight(36);
+    addFolderBtn_->setMinimumHeight(38);
+    addFolderBtn_->setMaximumHeight(38);
+    addFolderBtn_->setToolTip("Add a folder to the index");
 
     // ---- Icon buttons: Refresh, List, Grid, More ----
-    auto makeIconBtn = [this](const QString& tooltip) -> QPushButton* {
+    auto makeIconBtn = [this](const QString& tooltip, const QString& objName) -> QPushButton* {
         auto* b = new QPushButton(this);
-        b->setObjectName("iconBtn");
+        b->setObjectName(objName);
         b->setCursor(Qt::PointingHandCursor);
         b->setToolTip(tooltip);
         return b;
     };
-    refreshBtn_ = makeIconBtn("Refresh");
-    listBtn_    = makeIconBtn("List view");
-    gridBtn_    = makeIconBtn("Grid view");
-    moreBtn_    = makeIconBtn("More");
+    refreshBtn_ = makeIconBtn("Refresh", "refreshBtn");
+    listBtn_    = makeIconBtn("List view", "listBtn");
+    gridBtn_    = makeIconBtn("Grid view", "gridBtn");
+    moreBtn_    = makeIconBtn("More", "moreBtn");
 
     // ---- Assemble layout ----
-    layout->addWidget(inputWrap);
-    layout->addWidget(searchBtnWidget_);
+    layout->addWidget(inputWrap, 1);  // input takes available space
     layout->addWidget(savedBox_);
     layout->addWidget(filtersBtn_);
-    layout->addStretch();
     layout->addWidget(addFolderBtn_);
     layout->addWidget(refreshBtn_);
     layout->addWidget(listBtn_);
@@ -243,14 +208,6 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
 }
 
 bool SearchBar::eventFilter(QObject* obj, QEvent* e) {
-    // Search button click → trigger search.
-    if (obj == searchBtnWidget_) {
-        if (e->type() == QEvent::MouseButtonPress ||
-            e->type() == QEvent::MouseButtonDblClick) {
-            onReturnPressed();
-            return true;
-        }
-    }
     return QWidget::eventFilter(obj, e);
 }
 
@@ -259,8 +216,6 @@ void SearchBar::refreshIcons() {
     QColor whiteText("#ffffff");
 
     // Search icon inside input (muted gray, not text color).
-    // edit_ is now declared as SearchBarSearchLineEdit* in the header,
-    // so we can call setSearchIconPixmap() directly without a cast.
     if (edit_) {
         edit_->setSearchIconPixmap(loadLucidePixmap("search", QColor("#9ca3af"), 16, devicePixelRatio()));
     }
@@ -269,18 +224,16 @@ void SearchBar::refreshIcons() {
     clearBtn_->setIcon(loadLucideIcon("x", QColor("#6b7280"), 12));
     clearBtn_->setIconSize(QSize(12, 12));
 
-    // Search button icon (white on blue)
-    if (searchIconLbl_) {
-        searchIconLbl_->setPixmap(loadLucidePixmap("search", whiteText, 14, devicePixelRatio()));
-    }
-
-    filtersBtn_->setIcon(loadLucideIcon("filter", textColor, 16));
+    // Filters button icon (purple accent)
+    filtersBtn_->setIcon(loadLucideIcon("filter", QColor("#7c3aed"), 16));
     filtersBtn_->setIconSize(QSize(16, 16));
 
-    addFolderBtn_->setIcon(loadLucideIcon("plus", textColor, 16));
+    // Add Folder button icon (white on blue)
+    addFolderBtn_->setIcon(loadLucideIcon("plus", whiteText, 16));
     addFolderBtn_->setIconSize(QSize(16, 16));
 
-    refreshBtn_->setIcon(loadLucideIcon("refresh-cw", textColor, 16));
+    // Icon buttons with colored icons
+    refreshBtn_->setIcon(loadLucideIcon("refresh-cw", QColor("#059669"), 16));
     refreshBtn_->setIconSize(QSize(16, 16));
 
     listBtn_->setIcon(loadLucideIcon("list", textColor, 16));
@@ -303,7 +256,6 @@ void SearchBar::setSavedSearches(const QStringList& names) {
     savedBox_->addItem("Saved Searches");
     savedBox_->addItems(names);
     savedBox_->blockSignals(false);
-    // Update the completer model (if a completer was set).
     auto* completer = edit_->completer();
     if (completer) {
         auto* m = qobject_cast<QStringListModel*>(completer->model());
