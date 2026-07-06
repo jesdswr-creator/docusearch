@@ -28,17 +28,20 @@ bool Database::open(const QString& path, QString* err) {
         return false;
     }
 
-    // Recommended pragmas for performance and durability on office PCs.
+    // Recommended pragmas for performance on low-end systems (4GB RAM).
+    // cache_size reduced to 32MB (from 64MB) and mmap_size to 128MB
+    // (from 256MB) to leave more RAM for Qt + PDF rendering + OCR.
     const QStringList pragmas = {
         "PRAGMA journal_mode = WAL;",
         "PRAGMA synchronous  = NORMAL;",
         "PRAGMA temp_store   = MEMORY;",
-        "PRAGMA cache_size   = -65536;",   // ~64MB
-        "PRAGMA mmap_size    = 268435456;", // 256MB
+        "PRAGMA cache_size   = -32768;",   // ~32MB (reduced for 4GB RAM systems)
+        "PRAGMA mmap_size    = 134217728;", // 128MB (reduced from 256MB)
         "PRAGMA foreign_keys = ON;",
         "PRAGMA busy_timeout = 5000;",
         "PRAGMA encoding     = 'UTF-8';",
         "PRAGMA automatic_index = OFF;",
+        "PRAGMA wal_autocheckpoint = 500;",  // checkpoint every 500 pages
     };
     for (const auto& p : pragmas) {
         if (sqlite3_exec(db_, p.toUtf8().constData(), nullptr, nullptr, nullptr) != SQLITE_OK) {

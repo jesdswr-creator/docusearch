@@ -65,7 +65,7 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             if (q.trimmed().isEmpty()) ++emptyPages;
             all.append(q);
             all.append('\n');
-            if (all.size() > 1'000'000) break; // cap text size
+            if (all.size() > 500'000) break; // cap text size (~500KB) for memory
         }
         r.text = Utils::stripControlChars(all);
         if (maxPages > 0 && emptyPages * 2 > maxPages) r.needsOcr = true;

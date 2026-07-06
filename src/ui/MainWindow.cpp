@@ -1124,6 +1124,19 @@ void MainWindow::onExtract() {
             }
             ++state->failed;
         } else {
+            // Skip files that are too large (protects low-end systems).
+            QFileInfo fi(item.path);
+            if (fi.size() > Constants::kMaxFilesizeToExtract) {
+                if (raw) {
+                    sqlite3_exec(raw,
+                        QString("UPDATE Files SET indexing_status='skipped' WHERE id=%1;")
+                            .arg(item.fileId).toUtf8().constData(),
+                        nullptr, nullptr, nullptr);
+                }
+                ++state->failed;
+                // Don't return — fall through to ++state->idx at the end.
+            } else {
+
             QString extractedText;
             QString source = "native";
             bool ok = false;
@@ -1135,6 +1148,11 @@ void MainWindow::onExtract() {
                 ok = true;
             } catch (...) {
                 ok = false;
+            }
+
+            // Cap extracted text size to protect memory on low-end systems.
+            if (ok && extractedText.size() > Constants::kMaxExtractTextChars) {
+                extractedText = extractedText.left(Constants::kMaxExtractTextChars) + "\n\n[... text truncated for memory ...]";
             }
 
             if (ok && raw) {
@@ -1205,6 +1223,7 @@ void MainWindow::onExtract() {
             } else {
                 ++state->failed;
             }
+            }  // close the else (file not too large)
         }
 
         ++state->idx;
@@ -1647,8 +1666,8 @@ void MainWindow::onOcrThisFile(const QString& path) {
             }
             poppler::page_renderer renderer;
             renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-            const int dpi = 150;
-            const int maxPages = std::min(doc->pages(), 30);
+            const int dpi = Constants::kPdfOcrDpi;
+            const int maxPages = std::min(doc->pages(), Constants::kMaxPdfOcrPages);
             progress.setMaximum(maxPages);
 
             for (int i = 0; i < maxPages; ++i) {

@@ -4,6 +4,7 @@
 
 #include "PreviewPane.h"
 #include "IconUtils.h"
+#include "../core/Constants.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -500,6 +501,10 @@ void PreviewPane::showPdfPreview() {
             return;
         }
         totalPages_ = doc->pages();
+        // Cap preview pages for memory on low-end systems.
+        if (totalPages_ > Constants::kMaxPdfPreviewPages) {
+            totalPages_ = Constants::kMaxPdfPreviewPages;
+        }
         if (currentPage_ > totalPages_) currentPage_ = totalPages_;
         updatePageDisplay();
 
@@ -514,8 +519,10 @@ void PreviewPane::showPdfPreview() {
         renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
         renderer.set_render_hint(poppler::page_renderer::antialiasing);
 
-        // DPI based on zoom level (72 DPI = 100%).
-        const int dpi = qMax(36, int(72 * zoomPercent_ / 100));
+        // DPI based on zoom level. Use kPdfPreviewDpi (96) as base
+        // instead of 72 for better text readability without too much memory.
+        const int baseDpi = Constants::kPdfPreviewDpi;
+        const int dpi = qMax(36, int(baseDpi * zoomPercent_ / 100));
         auto img_data = renderer.render_page(page, dpi, dpi);
         if (!img_data.is_valid()) {
             setPreviewMode(false);

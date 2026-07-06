@@ -29,6 +29,15 @@ constexpr int     kBatchSize               = 500;  // DB transaction batch
 constexpr qint64  kLazyOcrTimeoutMs        = 30000;
 constexpr int     kFileWatcherBufferBytes  = 65536;
 
+// Performance limits for low-end systems (4GB RAM)
+constexpr int     kMaxPdfPreviewPages      = 30;    // max pages rendered for preview
+constexpr int     kMaxPdfOcrPages          = 20;    // max pages OCR'd per file
+constexpr int     kMaxExtractTextChars     = 500000; // ~500KB text cap per file
+constexpr int     kPdfPreviewDpi           = 96;    // DPI for PDF preview rendering
+constexpr int     kPdfOcrDpi               = 150;   // DPI for OCR (lower = faster, less memory)
+constexpr int     kExtractionBatchSize     = 50;    // files per extraction batch (memory)
+constexpr qint64  kMaxFilesizeToExtract    = 100 * 1024 * 1024; // 100MB max for extraction
+
 // Priority bands (days since modified)
 constexpr int kPriority1Days = 30;
 constexpr int kPriority2Days = 365;
