@@ -121,17 +121,30 @@ jobs:
         shell: pwsh
         run: |
           # Build with --parallel 1 so errors are not interleaved.
-          # If the build fails, print the last 200 lines of output for debugging.
+          # Always save full output to build-output.log so it can be
+          # uploaded as an artifact on failure for offline debugging.
           $output = & cmake --build build --config Release --parallel 1 2>&1
+          $output | Out-File -FilePath build-output.log -Encoding utf8
           $output | Write-Host
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
             Write-Host ""
             Write-Host "=== BUILD FAILED (exit code $exitCode) ==="
-            Write-Host "=== Last 200 lines of output ==="
-            $output | Select-Object -Last 200 | Write-Host
+            Write-Host "=== Last 300 lines of output ==="
+            $output | Select-Object -Last 300 | Write-Host
+            # Do NOT exit yet — let the next step upload build-output.log
+            # as an artifact so we can inspect the full error offline.
             exit $exitCode
           }
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: build-output-log
+          path: build-output.log
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Run unit tests
         shell: pwsh
