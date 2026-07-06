@@ -21,6 +21,10 @@ jobs:
   build-windows:
     name: Build on Windows Server 2022
     runs-on: windows-2022
+    # Need contents:write permission to push the ci-logs branch on failure.
+    permissions:
+      contents: write
+      actions: read
     # Bumped from 120 to 240 minutes because Poppler is a heavy port
     # that takes ~20-30 min to compile from source on first run
     # (subsequent runs hit the vcpkg binary cache and are much faster).
@@ -106,14 +110,40 @@ jobs:
           # Poppler is ENABLED for PDF text extraction (born-digital PDFs).
           # OCR is handled by Windows OCR (Windows.Media.Ocr via WinRT),
           # which is built into Windows 10/11 — no third-party dependency.
-          cmake -B build -S . `
+          #
+          # CRITICAL: Capture output and check exit code. Previously the
+          # configure step could fail silently (e.g. due to a CMakeLists.txt
+          # error) and the workflow would continue to the Build step, which
+          # then fails with "ALL_BUILD.vcxproj does not exist" because
+          # CMake never generated the project files.
+          $output = & cmake -B build -S . `
             -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="$env:QtInstallDir" `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DVCPKG_MANIFEST_MODE=ON `
             -DDOCUSEARCH_BUILD_TESTS=ON `
             -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
-            -DDOCUSEARCH_ENABLE_POPPLER=ON
+            -DDOCUSEARCH_ENABLE_POPPLER=ON 2>&1
+          $output | Out-File -FilePath configure-output.log -Encoding utf8
+          $output | Write-Host
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=== CMAKE CONFIGURE FAILED (exit code $exitCode) ==="
+            Write-Host "=== Last 300 lines of output ==="
+            $output | Select-Object -Last 300 | Write-Host
+            $summary = "## CMake Configure Failed (exit code $exitCode)`n`n``````" + ($output | Select-Object -Last 300 | Out-String) + "``````"
+            $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            exit $exitCode
+          }
+          # Verify that ALL_BUILD.vcxproj was actually generated.
+          if (-not (Test-Path "build\ALL_BUILD.vcxproj")) {
+            Write-Host "=== ERROR: build\ALL_BUILD.vcxproj was not generated! ==="
+            Write-Host "=== CMake configure did not error out, but the project file is missing. ==="
+            Write-Host "=== Full configure output: ==="
+            $output | Write-Host
+            exit 1
+          }
           Write-Host "=== vcpkg installed packages ==="
           & C:\vcpkg\vcpkg.exe list
 
@@ -152,17 +182,23 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          if (-not (Test-Path build-output.log)) { Write-Host "No build-output.log found"; exit 0 }
           git config --global user.email "ci@docusearch.local"
           git config --global user.name "CI Bot"
-          # Stage the log file under a folder named after the commit SHA
           $sha = ${env:GITHUB_SHA}.Substring(0,7)
           New-Item -ItemType Directory -Force -Path "logs/$sha" | Out-Null
-          Copy-Item build-output.log "logs/$sha/build-output.log" -Force
+          if (Test-Path build-output.log) {
+            Copy-Item build-output.log "logs/$sha/build-output.log" -Force
+          }
+          if (Test-Path configure-output.log) {
+            Copy-Item configure-output.log "logs/$sha/configure-output.log" -Force
+          }
+          if (-not (Test-Path "logs/$sha/build-output.log") -and -not (Test-Path "logs/$sha/configure-output.log")) {
+            Write-Host "No log files found"; exit 0
+          }
           git checkout --orphan ci-logs 2>$null
           git rm -r --cached . 2>$null
-          git add "logs/$sha/build-output.log"
-          git commit -m "Add build log for failed run $sha"
+          git add "logs/$sha/*.log"
+          git commit -m "Add build logs for failed run $sha"
           git push origin ci-logs --force 2>&1 | Write-Host
 
       - name: Run unit tests
