@@ -109,6 +109,9 @@ jobs:
           # Workaround: pre-download the sqlite3 tarball with curl --retry from
           # multiple mirrors and place it in vcpkg's downloads folder. When vcpkg
           # runs, it will find the file already present and skip the download.
+          #
+          # This step is BEST-EFFORT: if all mirrors fail, we exit 0 anyway and
+          # let the cmake configure retry loop handle it.
           $filename = "sqlite-autoconf-3530200.tar.gz"
           $dest = "C:\vcpkg\downloads\$filename"
           if (Test-Path $dest) {
@@ -122,22 +125,47 @@ jobs:
             "https://sqlite.org/2026/$filename",
             "https://www.sqlite.org/2026/$filename",
             "https://fossies.org/linux/misc/$filename",
-            "https://mirrors.kernel.org/ubuntu/pool/main/s/sqlite3/${filename}",
-            "https://github.com/nicferrier/sqlite3-prebuilt/releases/download/3.53.2/$filename"
+            "https://fossies.org/linux/misc/sqlite-3.53.2.tar.gz"
           )
+          $downloaded = $false
           foreach ($url in $mirrors) {
             Write-Host "Attempting download from: $url"
-            & curl -L --retry 10 --retry-delay 5 --retry-connrefused --connect-timeout 30 -o $dest $url
+            # Try curl first
+            & curl -L --retry 10 --retry-delay 5 --retry-connrefused --connect-timeout 30 --max-time 120 -o $dest $url 2>&1 | Write-Host
             if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) {
               $size = (Get-Item $dest).Length
               if ($size -gt 1MB) {
-                Write-Host "Successfully downloaded from $url ($size bytes)"
-                exit 0
+                Write-Host "Successfully downloaded from $url via curl ($size bytes)"
+                $downloaded = $true
+                break
               }
             }
-            Write-Host "Download from $url failed (exit $LASTEXITCODE)"
+            Remove-Item $dest -ErrorAction SilentlyContinue
+            # Try PowerShell Invoke-WebRequest as fallback
+            Write-Host "curl failed, trying Invoke-WebRequest from: $url"
+            try {
+              $ProgressPreference = 'SilentlyContinue'
+              Invoke-WebRequest -Uri $url -OutFile $dest -TimeoutSec 120 -UseBasicParsing
+              if (Test-Path $dest) {
+                $size = (Get-Item $dest).Length
+                if ($size -gt 1MB) {
+                  Write-Host "Successfully downloaded from $url via Invoke-WebRequest ($size bytes)"
+                  $downloaded = $true
+                  break
+                }
+              }
+            } catch {
+              Write-Host "Invoke-WebRequest failed: $_"
+            }
+            Remove-Item $dest -ErrorAction SilentlyContinue
           }
-          Write-Host "WARNING: All mirrors failed. vcpkg will try on its own."
+          if (-not $downloaded) {
+            Write-Host "WARNING: All mirrors failed. vcpkg will try on its own during cmake configure."
+            # Exit 0 so this step doesn't fail the workflow — the cmake
+            # configure retry loop will handle the download.
+            exit 0
+          }
+          exit 0
 
       - name: Install WiX v4 (pinned to avoid v7 OSMF EULA)
         shell: pwsh
