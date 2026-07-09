@@ -12,26 +12,35 @@
 #include <QCoreApplication>
 #include <QFile>
 
-// RapidOcrCpp headers
+// RapidOcrCpp headers — wrapped in #ifdef so the app still builds
+// even if RapidOcrCpp is not available (OCR will be disabled).
+#ifdef DOCUSEARCH_HAS_RAPIDOCR
 #include "RapidOcr/OcrLiteAPI.h"
 #include "RapidOcr/OcrStructAPI.h"
+#endif
 
 namespace DocuSearch {
 
 WindowsOcrEngine::WindowsOcrEngine() = default;
 
 WindowsOcrEngine::~WindowsOcrEngine() {
+#ifdef DOCUSEARCH_HAS_RAPIDOCR
     if (ocrLite_) {
         delete static_cast<OcrLite*>(ocrLite_);
         ocrLite_ = nullptr;
     }
+#endif
 }
 
 bool WindowsOcrEngine::init() {
     if (initialized_) return true;
 
+#ifndef DOCUSEARCH_HAS_RAPIDOCR
+    DS_WARN("OCR", "RapidOCR not compiled in. OCR unavailable.");
+    return false;
+#else
+
     // Find the models directory.
-    // Check: <appDir>/models, <exeDir>/models
     const QString appDir = QCoreApplication::applicationDirPath();
     QStringList candidates = {
         appDir + "/models",
@@ -40,7 +49,6 @@ bool WindowsOcrEngine::init() {
     };
 
     for (const auto& dir : candidates) {
-        // Check for the 3 required ONNX model files + keys file.
         if (QFileInfo::exists(dir + "/ch_PP-OCRv4_det_infer.onnx") &&
             QFileInfo::exists(dir + "/ch_ppocr_mobile_v2.0_cls_infer.onnx") &&
             QFileInfo::exists(dir + "/ch_PP-OCRv4_rec_infer.onnx") &&
@@ -57,13 +65,11 @@ bool WindowsOcrEngine::init() {
         return false;
     }
 
-    // Create the OcrLite instance.
     auto* ocr = new OcrLite();
     ocr->setProvider("OnnxRuntime");
-    ocr->setNumThread(2);  // Low thread count for low-end PCs
-    ocr->initLogger(false, false, false);  // No logging for production
+    ocr->setNumThread(2);
+    ocr->initLogger(false, false, false);
 
-    // Load the models.
     const std::string detPath  = (modelsDir_ + "/ch_PP-OCRv4_det_infer.onnx").toStdString();
     const std::string clsPath  = (modelsDir_ + "/ch_ppocr_mobile_v2.0_cls_infer.onnx").toStdString();
     const std::string recPath  = (modelsDir_ + "/ch_PP-OCRv4_rec_infer.onnx").toStdString();
@@ -79,33 +85,30 @@ bool WindowsOcrEngine::init() {
     initialized_ = true;
     DS_INFO("OCR", "RapidOCR engine initialized (models: " + modelsDir_ + ")");
     return true;
+#endif
 }
 
 QString WindowsOcrEngine::ocrImage(const QImage& img) {
+#ifndef DOCUSEARCH_HAS_RAPIDOCR
+    Q_UNUSED(img);
+    return {};
+#else
     if (!initialized_ || !ocrLite_) return {};
 
     auto* ocr = static_cast<OcrLite*>(ocrLite_);
-
-    // Convert QImage to RGB888 format for RapidOCR.
     QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
     if (rgbImg.isNull()) return {};
 
-    // Use detectBitmap for direct in-memory OCR (no temp file needed).
     OcrResult result = ocr->detectBitmap(
         rgbImg.bits(),
         rgbImg.width(),
         rgbImg.height(),
-        3,  // channels (RGB)
-        50,    // padding
-        1024,  // maxSideLen (cap image size for speed)
-        0.5f,  // boxScoreThresh
-        0.3f,  // boxThresh
-        1.6f,  // unClipRatio
-        true,  // doAngle
-        true   // mostAngle
+        3,
+        50, 1024,
+        0.5f, 0.3f, 1.6f,
+        true, true
     );
 
-    // Extract text from all text blocks.
     QString text;
     for (const auto& block : result.textBlocks) {
         if (!block.text.empty()) {
@@ -113,24 +116,27 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
         }
     }
     return text.trimmed();
+#endif
 }
 
 QString WindowsOcrEngine::ocrFile(const QString& path) {
+#ifndef DOCUSEARCH_HAS_RAPIDOCR
+    Q_UNUSED(path);
+    return {};
+#else
     if (!initialized_ || !ocrLite_) return {};
     if (!QFileInfo::exists(path)) return {};
 
-    // Load the image via QImage, then OCR it.
     QImage img(path);
     if (img.isNull()) {
         DS_WARN("OCR", "Failed to load image: " + path);
         return {};
     }
-
     return ocrImage(img);
+#endif
 }
 
 QStringList WindowsOcrEngine::availableLanguages() {
-    // RapidOCR with PP-OCRv4 models supports these languages:
     return {"en", "zh", "chinese_sim", "chinese_tra", "korean", "japanese"};
 }
 

@@ -97,8 +97,17 @@ find_package(ZLIB REQUIRED)
 # ============================================================
 # RapidOcrCpp — pure C++ OCR (no Python, no PowerShell)
 # ============================================================
-# Fetch RapidOcrCpp source via FetchContent (shallow clone, no submodules).
-# Dependencies (OpenCV + ONNX Runtime) are provided by vcpkg.
+# RapidOcrCpp requires OpenCV and ONNX Runtime. These are provided by
+# vcpkg. We set the ROOT variables BEFORE FetchContent so that
+# RapidOcrCpp's FindDepsPath.cmake finds them.
+if(MSVC)
+    set(VCPKG_INSTALLED_DIR ${CMAKE_BINARY_DIR}/vcpkg_installed)
+    set(OpenCV_ROOT      ${VCPKG_INSTALLED_DIR}/x64-windows/share/opencv4)
+    set(onnxruntime_ROOT ${VCPKG_INSTALLED_DIR}/x64-windows/share/onnxruntime)
+    # Also set DEPS_PATH to vcpkg installed dir for RapidOcrCpp's FindDepsPath.cmake
+    set(DEPS_PATH ${VCPKG_INSTALLED_DIR}/x64-windows)
+endif()
+
 include(FetchContent)
 FetchContent_Declare(
     rapidocr_cpp
@@ -116,6 +125,15 @@ set(BUILD_SHARED_LIBS       ON  CACHE BOOL "" FORCE)
 set(BUILD_OUTPUT_BIN        OFF CACHE BOOL "" FORCE)
 set(BUILD_OUTPUT_TEST       OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(rapidocr_cpp)
+
+# The RapidOcrCpp target may be named "RapidOcr" (not "RapidOcr::Core").
+# Check which target exists and create an alias if needed.
+if(TARGET RapidOcr::Core)
+    # Already has the namespaced target — nothing to do
+elseif(TARGET RapidOcr)
+    # Create the alias our code expects
+    add_library(RapidOcr::Core ALIAS RapidOcr)
+endif()
 
 # ============================================================
 # Bundled SQLite3 (fallback)
@@ -296,10 +314,20 @@ target_link_libraries(DocuSearch PRIVATE
     Qt6::PrintSupport
     SQLite::SQLite3
     ZLIB::ZLIB
-    RapidOcr::Core
-    ${OpenCV_LIBS}
-    onnxruntime
 )
+
+# Link RapidOcr — handle both possible target names
+if(TARGET RapidOcr::Core)
+    target_link_libraries(DocuSearch PRIVATE RapidOcr::Core)
+    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
+    message(STATUS "RapidOCR: enabled (target: RapidOcr::Core)")
+elseif(TARGET RapidOcr)
+    target_link_libraries(DocuSearch PRIVATE RapidOcr)
+    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
+    message(STATUS "RapidOCR: enabled (target: RapidOcr)")
+else()
+    message(WARNING "RapidOcr target not found — OCR will be disabled")
+endif()
 
 if(POPPLER_FOUND)
     target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
