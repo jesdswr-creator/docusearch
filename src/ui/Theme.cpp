@@ -262,12 +262,12 @@ QPushButton#listBtn:pressed, QPushButton#gridBtn:pressed, QPushButton#moreBtn:pr
 )" R"(/* ===== Results panel ===== */
 QWidget#resultsPanel {
     background-color: #ffffff;
-    border-right: 1px solid #e5e7eb;
+    border-right: 2px solid #2563eb;
 }
 QLabel#resultsTitle {
     font-size: 14px;
     font-weight: 700;
-    color: #1a1a2e;
+    color: #1e40af;
     background: transparent;
 }
 QLabel#resultsCount {
@@ -564,7 +564,7 @@ QPushButton#downloadBtn:hover { background-color: #047857; }
 )" R"(/* ===== Metadata panel ===== */
 QWidget#metadataPanel {
     background-color: #ffffff;
-    border-left: 1px solid #e5e7eb;
+    border-left: 2px solid #7c3aed;
 }
 QLabel#metadataTitle {
     font-size: 14px;

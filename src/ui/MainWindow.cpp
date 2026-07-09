@@ -670,15 +670,22 @@ void MainWindow::refreshAllIcons() {
     QColor textColor = qApp->palette().color(QPalette::Text);
     QColor whiteText("#ffffff");
 
-    // ---- Sidebar icons ----
+    // ---- Sidebar icons (each with a distinct color for premium feel) ----
     const QStringList navIcons = {
         "search", "bookmark", "tag", "sticky-note",
         "bar-chart-3", "clock", "settings", "help-circle", "info"
     };
+    // Distinct colors for each nav item: blue, purple, green, yellow,
+    // indigo, orange, gray, teal, pink
+    const QStringList navColors = {
+        "#2563eb", "#7c3aed", "#059669", "#d97706",
+        "#4f46e5", "#ea580c", "#6b7280", "#0d9488", "#db2777"
+    };
     for (int i = 0; i < sidebarList_->count() && i < navIcons.size(); ++i) {
         auto* item = sidebarList_->item(i);
         if (!item) continue;
-        item->setIcon(loadLucideIcon(navIcons[i], textColor, 18));
+        QColor iconColor(navColors[i % navColors.size()]);
+        item->setIcon(loadLucideIcon(navIcons[i], iconColor, 18));
     }
 
     // ---- Title bar icons ----
@@ -1639,9 +1646,11 @@ void MainWindow::onOcrThisFile(const QString& path) {
     WindowsOcrEngine ocrEngine;
     if (!ocrEngine.init()) {
         QMessageBox::information(this, "OCR",
-            "Windows OCR could not be initialized.\n\n"
-            "This is normal on some Windows 10 systems.\n"
-            "OCR requires Windows 10 version 1903 or later.\n\n"
+            "RapidOCR could not be initialized.\n\n"
+            "To use OCR, install Python and the rapidocr package:\n"
+            "  1. Install Python 3.8+ from python.org\n"
+            "  2. Run: pip install rapidocr_onnxruntime\n"
+            "  3. Ensure ONNX models are in the 'models' folder\n\n"
             "You can still:\n"
             "  - Search by filename\n"
             "  - Extract text from born-digital PDFs, DOCX, XLSX\n"
@@ -1650,7 +1659,7 @@ void MainWindow::onOcrThisFile(const QString& path) {
     }
 
     QProgressDialog progress("Running OCR...", "Cancel", 0, 100, this);
-    progress.setWindowTitle("Windows OCR");
+    progress.setWindowTitle("RapidOCR");
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(0);
     progress.setValue(0);

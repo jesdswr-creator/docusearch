@@ -153,6 +153,7 @@ set(APP_SOURCES
     src/documents/DocumentExtractorRegistry.cpp
     # ocr
     src/ocr/WindowsOcrEngine.cpp
+    src/ocr/RapidOcrEngine.cpp
     src/ocr/OcrWorkerPool.cpp
     # indexer
     src/indexer/MetadataIndexer.cpp
@@ -204,6 +205,7 @@ set(APP_HEADERS
     src/documents/PptxExtractor.h
     src/documents/DocumentExtractorRegistry.h
     src/ocr/WindowsOcrEngine.h
+    src/ocr/RapidOcrEngine.h
     src/ocr/OcrWorkerPool.h
     src/indexer/MetadataIndexer.h
     src/indexer/ContentIndexer.h

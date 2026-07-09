@@ -161,9 +161,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
-    // OCR uses Windows OCR (built into Windows 10/11). No separate
-    // installation or language configuration needed — it uses the
-    // Windows display language automatically.
+    // OCR is powered by RapidOCR (ONNX-based, lightweight).
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
@@ -172,18 +170,23 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     langCombo_->setVisible(false);
 
     auto* ocrInfo = new QLabel(
-        "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
-        "built into Windows 10 version 1903+ and Windows 11.\n\n"
-        "OCR uses your installed Windows OCR languages (English\n"
-        "is always available; other languages can be added via\n"
-        "Windows Settings > Time & Language > Region > Language\n"
-        "> Add a language, then check 'Optical character recognition').\n\n"
-        "Implementation: WinRT is invoked via a PowerShell bridge\n"
-        "to avoid the runtimeobject.lib / Qt entry-point conflict.\n\n"
+        "OCR is powered by RapidOCR (ONNX Runtime), a lightweight\n"
+        "OCR engine based on PaddleOCR models.\n\n"
+        "Advantages:\n"
+        "  - Lightweight (~12MB models, no heavy dependencies)\n"
+        "  - Fast (CPU inference, no GPU required)\n"
+        "  - Works on all Windows 10/11 systems\n"
+        "  - Supports English, Chinese, Korean, Japanese\n\n"
+        "Requirements:\n"
+        "  - Python 3.8+ installed and in PATH\n"
+        "  - rapidocr_onnxruntime package (pip install rapidocr_onnxruntime)\n"
+        "  - ONNX models in the 'models' folder (bundled with the app)\n\n"
         "To OCR a file:\n"
         "  1. Select a scanned PDF or image\n"
-        "  2. Click the OCR button in the viewer panel\n"
-        "  3. Recognized text appears in the extracted panel below",
+        "  2. Click the green OCR button in the viewer panel\n"
+        "  3. Recognized text appears in the extracted panel below\n\n"
+        "Note: If Python or rapidocr is not installed, OCR will show\n"
+        "an error. Install with: pip install rapidocr_onnxruntime",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);
