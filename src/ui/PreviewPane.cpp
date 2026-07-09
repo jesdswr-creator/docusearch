@@ -697,8 +697,8 @@ void PreviewPane::highlightSearchTerms() {
     }
 
     QColor highlightColor(255, 248, 120);  // light yellow
+    // No flags = case-insensitive search (Qt default).
     QTextDocument::FindFlags flags;
-    flags |= QTextDocument::FindCaseInsensitive;
 
     // Highlight in document preview
     QList<QTextEdit::ExtraSelection> extraSelections;
