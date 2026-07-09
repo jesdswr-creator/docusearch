@@ -393,6 +393,81 @@ jobs:
             Write-Host "WARNING: vcpkg bin dir not found at $vcpkgBin - Poppler DLLs may be missing."
           }
 
+      - name: Download OCR models + bundle OpenCV/ONNXRuntime DLLs
+        shell: pwsh
+        run: |
+          # Download PP-OCRv4 mobile ONNX models (~17MB total) for RapidOCR.
+          # These are required for OCR to work without Python.
+          $modelsDir = "build\bin\Release\models"
+          if (-not (Test-Path $modelsDir)) { New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null }
+
+          $modelUrls = @(
+            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx"; Out = "$modelsDir\ch_PP-OCRv4_det_infer.onnx" },
+            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_ppocr_mobile_v2.0_cls_infer.onnx"; Out = "$modelsDir\ch_ppocr_mobile_v2.0_cls_infer.onnx" },
+            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx"; Out = "$modelsDir\ch_PP-OCRv4_rec_infer.onnx" }
+          )
+          foreach ($m in $modelUrls) {
+            if (-not (Test-Path $m.Out)) {
+              Write-Host "Downloading $($m.Out)..."
+              & curl -L --retry 5 --retry-delay 3 -o $m.Out $m.Url 2>&1
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path $m.Out)) {
+                Write-Host "WARNING: Failed to download $($m.Url)"
+              }
+            }
+          }
+
+          # Download the character dictionary (ppocr_keys_v1.txt)
+          $keysUrl = "https://raw.githubusercontent.com/RapidAI/RapidOcrCpp/main/models/OnnxRuntime/ppocr_keys_v1.txt"
+          $keysOut = "$modelsDir\ppocr_keys_v1.txt"
+          if (-not (Test-Path $keysOut)) {
+            & curl -L --retry 5 -o $keysOut $keysUrl 2>&1
+          }
+
+          # Verify models were downloaded
+          $modelCount = (Get-ChildItem $modelsDir -Filter "*.onnx" -ErrorAction SilentlyContinue).Count
+          Write-Host "Downloaded $modelCount ONNX model files"
+          if (Test-Path $keysOut) { Write-Host "Downloaded ppocr_keys_v1.txt" }
+
+          # ---- Bundle OpenCV + ONNXRuntime DLLs from vcpkg ----
+          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
+          if (-not (Test-Path $vcpkgBin)) { $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin" }
+          if (Test-Path $vcpkgBin) {
+            Write-Host "=== Copying OpenCV + ONNXRuntime DLLs from $vcpkgBin ==="
+            $runtimeDlls = @(
+              'onnxruntime.dll',
+              'opencv_world4xx.dll', 'opencv_world481.dll', 'opencv_world410.dll',
+              'opencv_world411.dll', 'opencv_world412.dll', 'opencv_world413.dll',
+              'opencv_world414.dll', 'opencv_world415.dll'
+            )
+            $copied = 0
+            foreach ($dll in $runtimeDlls) {
+              $src = Join-Path $vcpkgBin $dll
+              if (Test-Path $src) {
+                Copy-Item $src "build\bin\Release\$dll" -Force
+                $copied++
+              }
+            }
+            # Fallback: copy any opencv_world*.dll and onnxruntime*.dll
+            Get-ChildItem -Path $vcpkgBin -Filter "opencv_world*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+              $dst = "build\bin\Release\$($_.Name)"
+              if (-not (Test-Path $dst)) { Copy-Item $_.FullName $dst -Force; $copied++ }
+            }
+            Get-ChildItem -Path $vcpkgBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+              $dst = "build\bin\Release\$($_.Name)"
+              if (-not (Test-Path $dst)) { Copy-Item $_.FullName $dst -Force; $copied++ }
+            }
+            Write-Host "Copied $copied OCR runtime DLLs from vcpkg."
+          } else {
+            Write-Host "WARNING: vcpkg bin dir not found - OpenCV/ONNXRuntime DLLs may be missing."
+          }
+
+          # Also copy the RapidOcr.dll from the build output
+          $rapidOcrDll = Get-ChildItem -Path "build" -Filter "RapidOcr.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($rapidOcrDll) {
+            Copy-Item $rapidOcrDll.FullName "build\bin\Release\RapidOcr.dll" -Force
+            Write-Host "Copied RapidOcr.dll"
+          }
+
       - name: Build portable ZIP
         shell: pwsh
         run: |

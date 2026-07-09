@@ -95,6 +95,29 @@ endif()
 find_package(ZLIB REQUIRED)
 
 # ============================================================
+# RapidOcrCpp — pure C++ OCR (no Python, no PowerShell)
+# ============================================================
+# Fetch RapidOcrCpp source via FetchContent (shallow clone, no submodules).
+# Dependencies (OpenCV + ONNX Runtime) are provided by vcpkg.
+include(FetchContent)
+FetchContent_Declare(
+    rapidocr_cpp
+    GIT_REPOSITORY https://github.com/RapidAI/RapidOcrCpp.git
+    GIT_TAG        main
+    GIT_SHALLOW    TRUE
+)
+# Configure RapidOcrCpp build options before MakeAvailable.
+set(BUILD_WITH_ONNXRUNTIME ON  CACHE BOOL "" FORCE)
+set(BUILD_WITH_NCNN         OFF CACHE BOOL "" FORCE)
+set(BUILD_WITH_MNN          OFF CACHE BOOL "" FORCE)
+set(BUILD_WITH_OPENVINO     OFF CACHE BOOL "" FORCE)
+set(BUILD_WITH_PADDLE       OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS       ON  CACHE BOOL "" FORCE)
+set(BUILD_OUTPUT_BIN        OFF CACHE BOOL "" FORCE)
+set(BUILD_OUTPUT_TEST       OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(rapidocr_cpp)
+
+# ============================================================
 # Bundled SQLite3 (fallback)
 # ============================================================
 if(SQLITE3_BUNDLED)
@@ -153,7 +176,6 @@ set(APP_SOURCES
     src/documents/DocumentExtractorRegistry.cpp
     # ocr
     src/ocr/WindowsOcrEngine.cpp
-    src/ocr/RapidOcrEngine.cpp
     src/ocr/OcrWorkerPool.cpp
     # indexer
     src/indexer/MetadataIndexer.cpp
@@ -205,7 +227,6 @@ set(APP_HEADERS
     src/documents/PptxExtractor.h
     src/documents/DocumentExtractorRegistry.h
     src/ocr/WindowsOcrEngine.h
-    src/ocr/RapidOcrEngine.h
     src/ocr/OcrWorkerPool.h
     src/indexer/MetadataIndexer.h
     src/indexer/ContentIndexer.h
@@ -275,6 +296,9 @@ target_link_libraries(DocuSearch PRIVATE
     Qt6::PrintSupport
     SQLite::SQLite3
     ZLIB::ZLIB
+    RapidOcr::Core
+    ${OpenCV_LIBS}
+    onnxruntime
 )
 
 if(POPPLER_FOUND)

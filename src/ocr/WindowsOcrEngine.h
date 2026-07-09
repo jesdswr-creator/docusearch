@@ -1,16 +1,14 @@
 #pragma once
 
 // ============================================================
-// WindowsOcrEngine.h - OCR wrapper (now uses RapidOCR)
+// WindowsOcrEngine.h - OCR wrapper using RapidOcrCpp (pure C++)
 // ============================================================
 //
-// This class was previously a wrapper around Windows.Media.Ocr.
-// It has been refactored to use RapidOCR (ONNX-based) instead,
-// which is:
-//   - More reliable (works on all Windows 10/11 systems)
-//   - Faster (no PowerShell subprocess per invocation)
-//   - Lighter (no Windows SDK dependency)
-//   - More accurate (PaddleOCR-trained models)
+// Uses RapidOcrCpp (https://github.com/RapidAI/RapidOcrCpp) — a
+// pure C++ OCR library based on PaddleOCR ONNX models.
+//
+// NO Python required. NO PowerShell. NO Windows SDK dependency.
+// Just ONNX Runtime + OpenCV (both from vcpkg) + ~17MB of models.
 //
 // The class name is kept as WindowsOcrEngine for backward
 // compatibility with existing code that references it.
@@ -29,7 +27,9 @@ public:
     WindowsOcrEngine(const WindowsOcrEngine&)            = delete;
     WindowsOcrEngine& operator=(const WindowsOcrEngine&) = delete;
 
-    // Initialize the OCR engine. Returns true on success.
+    // Initialize the OCR engine by loading the ONNX models.
+    // Returns true on success, false on failure.
+    // Models are expected at <appDir>/models/
     bool init();
 
     // OCR an image. Returns extracted text (empty on failure).
@@ -40,11 +40,14 @@ public:
 
     bool isInitialized() const { return initialized_; }
 
-    // Returns the list of available OCR language tags.
+    // Returns the list of available OCR languages.
     static QStringList availableLanguages();
 
 private:
     bool initialized_ = false;
+    // OcrLite* — void* to avoid pulling RapidOcr headers here.
+    void* ocrLite_ = nullptr;
+    QString modelsDir_;
 };
 
 } // namespace DocuSearch

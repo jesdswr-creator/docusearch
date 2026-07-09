@@ -618,13 +618,18 @@ void PreviewPane::showImagePreview(const QString& path) {
 
 void PreviewPane::showTextPreview(const QString& text) {
     setPreviewMode(false);
+
+    // Get palette-aware colors for dark/light mode.
+    QColor textColor = qApp->palette().color(QPalette::Text);
+    QColor mutedColor = qApp->palette().color(QPalette::Disabled, QPalette::Text);
+
     if (text.isEmpty()) {
         documentPage_->setHtml(
-            "<div style='color: #9ca3af; text-align: center; padding: 40px;'>"
+            QString("<div style='color: %1; text-align: center; padding: 40px;'>"
             "<p style='font-size: 16px;'>No content extracted yet.</p>"
             "<p style='font-size: 13px;'>Click the <b>Extract</b> button or "
             "wait for auto-extraction to index this file's content.</p>"
-            "</div>");
+            "</div>").arg(mutedColor.name()));
         return;
     }
 
@@ -640,8 +645,8 @@ void PreviewPane::showTextPreview(const QString& text) {
     html.replace("\t", " &nbsp;|&nbsp; ");
     // Preserve line breaks.
     html.replace("\n", "<br>");
-    documentPage_->setHtml("<div style='font-family: Segoe UI, Arial; font-size: 13px; "
-                           "line-height: 1.6; color: #1a1a2e;'>" + html + "</div>");
+    documentPage_->setHtml(QString("<div style='font-family: Segoe UI, Arial; font-size: 13px; "
+                           "line-height: 1.6; color: %1;'>%2</div>").arg(textColor.name(), html));
 }
 
 void PreviewPane::setPreviewMode(bool showImage) {

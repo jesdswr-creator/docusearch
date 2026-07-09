@@ -1647,10 +1647,12 @@ void MainWindow::onOcrThisFile(const QString& path) {
     if (!ocrEngine.init()) {
         QMessageBox::information(this, "OCR",
             "RapidOCR could not be initialized.\n\n"
-            "To use OCR, install Python and the rapidocr package:\n"
-            "  1. Install Python 3.8+ from python.org\n"
-            "  2. Run: pip install rapidocr_onnxruntime\n"
-            "  3. Ensure ONNX models are in the 'models' folder\n\n"
+            "The OCR models may be missing. Ensure the following files\n"
+            "are in the 'models' folder next to DocuSearch.exe:\n"
+            "  - ch_PP-OCRv4_det_infer.onnx\n"
+            "  - ch_ppocr_mobile_v2.0_cls_infer.onnx\n"
+            "  - ch_PP-OCRv4_rec_infer.onnx\n"
+            "  - ppocr_keys_v1.txt\n\n"
             "You can still:\n"
             "  - Search by filename\n"
             "  - Extract text from born-digital PDFs, DOCX, XLSX\n"

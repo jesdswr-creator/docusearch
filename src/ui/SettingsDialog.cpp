@@ -170,23 +170,21 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     langCombo_->setVisible(false);
 
     auto* ocrInfo = new QLabel(
-        "OCR is powered by RapidOCR (ONNX Runtime), a lightweight\n"
-        "OCR engine based on PaddleOCR models.\n\n"
+        "OCR is powered by RapidOCR (RapidOcrCpp), a pure C++\n"
+        "OCR engine based on PaddleOCR ONNX models.\n\n"
+        "NO Python required. NO external downloads needed.\n"
+        "Everything is bundled with the app (~17MB models).\n\n"
         "Advantages:\n"
-        "  - Lightweight (~12MB models, no heavy dependencies)\n"
-        "  - Fast (CPU inference, no GPU required)\n"
-        "  - Works on all Windows 10/11 systems\n"
+        "  - Pure C++ (no Python, no PowerShell)\n"
+        "  - Lightweight (~17MB models + ONNX Runtime)\n"
+        "  - Fast (CPU inference, 2 threads for low-end PCs)\n"
+        "  - Works on ALL Windows 10/11 systems\n"
         "  - Supports English, Chinese, Korean, Japanese\n\n"
-        "Requirements:\n"
-        "  - Python 3.8+ installed and in PATH\n"
-        "  - rapidocr_onnxruntime package (pip install rapidocr_onnxruntime)\n"
-        "  - ONNX models in the 'models' folder (bundled with the app)\n\n"
         "To OCR a file:\n"
         "  1. Select a scanned PDF or image\n"
         "  2. Click the green OCR button in the viewer panel\n"
         "  3. Recognized text appears in the extracted panel below\n\n"
-        "Note: If Python or rapidocr is not installed, OCR will show\n"
-        "an error. Install with: pip install rapidocr_onnxruntime",
+        "Models are in the 'models' folder next to DocuSearch.exe.",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);
