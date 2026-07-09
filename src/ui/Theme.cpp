@@ -62,8 +62,9 @@ QWidget {
 }
 )" R"(/* ===== Title bar ===== */
 QWidget#titleBar {
-    background-color: #ffffff;
-    border-bottom: 1px solid #e0e0e0;
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #ffffff, stop:0.5 #f8fafc, stop:1 #ffffff);
+    border-bottom: 2px solid #2563eb;
 }
 QLabel#titleBarText {
     font-size: 14px;
@@ -120,22 +121,24 @@ QListWidget#sidebar::item {
     margin: 0;
 }
 QListWidget#sidebar::item:hover {
-    background-color: #f9fafb;
-    color: #1a1a2e;
+    background-color: #f0f9ff;
+    color: #0369a1;
 }
 QListWidget#sidebar::item:selected {
-    background-color: #eff6ff;
-    color: #2563eb;
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #dbeafe, stop:1 #eff6ff);
+    color: #1d4ed8;
     border-left-color: #2563eb;
     font-weight: 600;
 }
 QWidget#indexedStatus {
-    background-color: #ffffff;
-    border-top: 1px solid #e5e7eb;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #f0fdf4, stop:1 #ffffff);
+    border-top: 2px solid #059669;
 }
 QLabel#indexedHeader {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
     color: #059669;
     background: transparent;
 }
@@ -353,32 +356,34 @@ QWidget#viewerPanel {
     background-color: #f3f4f6;
 }
 QWidget#viewerHeader {
-    background-color: #ffffff;
-    border-bottom: 1px solid #e5e7eb;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #ffffff, stop:1 #f8fafc);
+    border-bottom: 2px solid #2563eb;
 }
 QLabel#viewerTitle {
     font-size: 14px;
-    font-weight: 600;
-    color: #1a1a2e;
+    font-weight: 700;
+    color: #1e40af;
     background: transparent;
 }
 
-/* Page navigation buttons */
+/* Page navigation buttons — blue accent */
 QPushButton#pageBtn {
-    background-color: #ffffff;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    background-color: #eff6ff;
+    color: #2563eb;
+    border: 1px solid #93c5fd;
     border-radius: 6px;
     padding: 0;
     min-width: 28px;
     min-height: 28px;
     max-width: 28px;
     max-height: 28px;
-    font-size: 12px;
+    font-size: 14px;
+    font-weight: 700;
 }
-QPushButton#pageBtn:hover { background-color: #f3f4f6; }
-QPushButton#pageBtn:pressed { background-color: #e5e7eb; }
-QPushButton#pageBtn:disabled { color: #d1d5db; border-color: #e5e7eb; }
+QPushButton#pageBtn:hover { background-color: #dbeafe; border-color: #2563eb; }
+QPushButton#pageBtn:pressed { background-color: #bfdbfe; }
+QPushButton#pageBtn:disabled { color: #cbd5e1; border-color: #e5e7eb; background-color: #f8fafc; }
 
 QLineEdit#pageInput {
     background-color: #ffffff;
@@ -399,10 +404,11 @@ QLabel#pageTotal {
     padding: 0 4px;
 }
 
+/* Zoom buttons — purple accent */
 QPushButton#zoomBtn {
-    background-color: #ffffff;
-    color: #374151;
-    border: 1px solid #d1d5db;
+    background-color: #f3e8ff;
+    color: #7c3aed;
+    border: 1px solid #c4b5fd;
     border-radius: 6px;
     padding: 0;
     min-width: 28px;
@@ -410,9 +416,10 @@ QPushButton#zoomBtn {
     max-width: 28px;
     max-height: 28px;
     font-size: 14px;
+    font-weight: 700;
 }
-QPushButton#zoomBtn:hover { background-color: #f3f4f6; }
-QPushButton#zoomBtn:pressed { background-color: #e5e7eb; }
+QPushButton#zoomBtn:hover { background-color: #e9d5ff; border-color: #7c3aed; }
+QPushButton#zoomBtn:pressed { background-color: #ddd6fe; }
 
 QLabel#zoomLevel {
     font-size: 13px;

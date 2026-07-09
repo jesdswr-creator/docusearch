@@ -52,6 +52,7 @@ public:
     void setFilePath(const QString& path);
     void setPageInfo(int currentPage, int totalPages);
     void setDocumentText(const QString& text);
+    void setSearchQuery(const QString& query);  // highlight search terms
     void clear();
 
     void refreshIcons();
@@ -113,6 +114,7 @@ private:
     QString currentExt_;
     QString currentExtracted_;
     QString currentDocumentText_;
+    QString searchQuery_;  // current search query for highlighting
     QButtonGroup* tabGroup_ = nullptr;
 
     void updatePageDisplay();
@@ -122,6 +124,7 @@ private:
     void showPdfPreview();
     void showImagePreview(const QString& path);
     void setPreviewMode(bool showImage);  // true=image, false=text
+    void highlightSearchTerms();
 };
 
 } // namespace DocuSearch

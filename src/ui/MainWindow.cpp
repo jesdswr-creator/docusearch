@@ -261,14 +261,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(titleThemeBtn_, &QPushButton::clicked,
             this, &MainWindow::onToggleTheme);
 
-    // Live search debounce
-    liveSearchTimer_ = new QTimer(this);
-    liveSearchTimer_->setSingleShot(true);
-    liveSearchTimer_->setInterval(Constants::kSearchDebounceMs);
-    connect(liveSearchTimer_, &QTimer::timeout, this, &MainWindow::onLiveSearchTick);
-    connect(searchBar_, &SearchBar::searchRequested, [this](const QString&){
-        liveSearchTimer_->start();
-    });
+    // Search is triggered ONLY when the user presses Enter or clicks
+    // the search input. No live/auto search while typing.
+    // (liveSearchTimer_ kept for potential future use but not started.)
 
     // Auto-scan timer: 1 hour interval, runs on MAIN THREAD.
     autoScanTimer_ = new QTimer(this);
@@ -799,6 +794,10 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
             : extracted);
         previewPane_->setDocumentText(extracted);
 
+        // Pass the current search query to the preview pane so it can
+        // highlight matching terms in the document text.
+        previewPane_->setSearchQuery(searchBar_->text());
+
         // Page info: just 1 page for now (we don't render PDF pages).
         previewPane_->setPageInfo(1, 1);
     } catch (...) {
@@ -854,11 +853,21 @@ void MainWindow::scanFolderFast(const QString& folder) {
     sqlite3* raw = db_->raw();
     if (!raw) return;
 
-    int count = 0;
+    // ONLY index supported file types — skip DLLs, EXEs, archives, etc.
+    const QSet<QString> supportedExts = {
+        "pdf", "doc", "docx", "xls", "xlsx", "xlsm",
+        "ppt", "pptx", "txt", "rtf", "csv", "md",
+        "jpg", "jpeg", "png", "tif", "tiff", "bmp",
+        "gif", "webp", "html", "htm", "xml", "json", "log",
+    };
+
+    int count = 0, skipped = 0;
     QStringList emptyExcludes;
     FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
+        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath()).toLower();
+        if (!supportedExts.contains(ext)) { ++skipped; return true; }
+
         const QString path = FileUtils::toNative(fi.absoluteFilePath());
-        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath());
         const QString filename = fi.fileName();
         const qint64 size = fi.size();
         const qint64 created = fi.birthTime().toSecsSinceEpoch();
@@ -887,18 +896,17 @@ void MainWindow::scanFolderFast(const QString& folder) {
             sqlite3_step(s);
             sqlite3_finalize(s);
         }
-
         ++count;
         if (count % 10 == 0) {
             statusBar()->showMessage(
-                QString("Scanning... %1 files found").arg(count));
+                QString("Scanning... %1 indexed (%2 skipped)").arg(count).arg(skipped));
             QApplication::processEvents();
         }
         return true;
     });
     updateIndexStats();
     statusBar()->showMessage(
-        QString("Scan complete: %1 files from %2").arg(count).arg(folder), 5000);
+        QString("Scan complete: %1 files indexed, %2 skipped").arg(count).arg(skipped), 5000);
 }
 
 void MainWindow::onAddFolder() {

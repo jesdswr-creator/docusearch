@@ -178,14 +178,9 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     });
     connect(edit_, &QLineEdit::returnPressed, this, &SearchBar::onReturnPressed);
     connect(edit_, &QLineEdit::textChanged, this, &SearchBar::onTextChanged);
-
-    autoSearchTimer_ = new QTimer(this);
-    autoSearchTimer_->setSingleShot(true);
-    autoSearchTimer_->setInterval(300);
-    connect(autoSearchTimer_, &QTimer::timeout, this, &SearchBar::onReturnPressed);
-    connect(edit_, &QLineEdit::textChanged, this, [this](){
-        autoSearchTimer_->start();
-    });
+    // NOTE: No auto-search timer — search is triggered ONLY when the
+    // user presses Enter. This gives better control and avoids
+    // unnecessary queries on every keystroke.
 
     connect(savedBox_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int idx){

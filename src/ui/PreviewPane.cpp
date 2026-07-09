@@ -26,6 +26,9 @@
 #include <QTimer>
 #include <QRegularExpression>
 #include <QTransform>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextFormat>
 
 #ifdef DOCUSEARCH_HAS_POPPLER
 #  include <poppler-document.h>
@@ -302,6 +305,13 @@ void PreviewPane::setDocumentText(const QString& text) {
             ext != "webp") {
             showTextPreview(text);
         }
+    }
+}
+
+void PreviewPane::setSearchQuery(const QString& query) {
+    searchQuery_ = query.trimmed();
+    if (!currentPath_.isEmpty() && !searchQuery_.isEmpty()) {
+        highlightSearchTerms();
     }
 }
 
@@ -620,11 +630,12 @@ void PreviewPane::showTextPreview(const QString& text) {
 
     // Format the text with basic HTML for better readability.
     // Detect sheet/slide separators (--- Sheet N --- / --- Slide N ---)
-    // and render them as headings.
+    // and render them as colored banner headings.
     QString html = text.toHtmlEscaped();
-    // Bold the sheet/slide separators.
     html.replace(QRegularExpression("^(--- .+? ---)$", QRegularExpression::MultilineOption),
-                 "<h3>\\1</h3>");
+                 "<div style='background-color: #2563eb; color: #ffffff; "
+                 "padding: 6px 12px; margin: 10px 0 5px 0; border-radius: 4px; "
+                 "font-weight: 700; font-size: 14px;'>\\1</div>");
     // Convert tab-separated cells to table-like spacing.
     html.replace("\t", " &nbsp;|&nbsp; ");
     // Preserve line breaks.
@@ -671,6 +682,49 @@ void PreviewPane::refreshIcons() {
     // Download button icon
     downloadBtn_->setIcon(loadLucideIcon("download", whiteText, 12));
     downloadBtn_->setIconSize(QSize(12, 12));
+}
+
+void PreviewPane::highlightSearchTerms() {
+    if (searchQuery_.isEmpty() || currentDocumentText_.isEmpty()) return;
+
+    // Only highlight in text preview mode (not PDF image mode)
+    QFileInfo fi(currentPath_);
+    const QString ext = fi.suffix().toLower();
+    if (ext == "pdf" || ext == "png" || ext == "jpg" ||
+        ext == "jpeg" || ext == "bmp" || ext == "gif" ||
+        ext == "webp") {
+        return;
+    }
+
+    QColor highlightColor(255, 248, 120);  // light yellow
+    QTextDocument::FindFlags flags;
+    flags |= QTextDocument::FindCaseInsensitive;
+
+    // Highlight in document preview
+    QList<QTextEdit::ExtraSelection> extraSelections;
+    QTextCursor cursor(documentPage_->document());
+    while (!cursor.isNull() && !cursor.atEnd()) {
+        cursor = documentPage_->document()->find(searchQuery_, cursor, flags);
+        if (cursor.isNull()) break;
+        QTextEdit::ExtraSelection sel;
+        sel.format.setBackground(highlightColor);
+        sel.cursor = cursor;
+        extraSelections.append(sel);
+    }
+    documentPage_->setExtraSelections(extraSelections);
+
+    // Highlight in extracted content panel
+    QList<QTextEdit::ExtraSelection> extraSelections2;
+    QTextCursor cursor2(extractedContent_->document());
+    while (!cursor2.isNull() && !cursor2.atEnd()) {
+        cursor2 = extractedContent_->document()->find(searchQuery_, cursor2, flags);
+        if (cursor2.isNull()) break;
+        QTextEdit::ExtraSelection sel;
+        sel.format.setBackground(highlightColor);
+        sel.cursor = cursor2;
+        extraSelections2.append(sel);
+    }
+    extractedContent_->setExtraSelections(extraSelections2);
 }
 
 } // namespace DocuSearch
