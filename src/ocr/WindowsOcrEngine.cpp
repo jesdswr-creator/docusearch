@@ -15,8 +15,8 @@
 // RapidOcrCpp headers — wrapped in #ifdef so the app still builds
 // even if RapidOcrCpp is not available (OCR will be disabled).
 #ifdef DOCUSEARCH_HAS_RAPIDOCR
-#include "RapidOcr/OcrLiteAPI.h"
-#include "RapidOcr/OcrStructAPI.h"
+#include "OcrLiteAPI.h"
+#include "OcrStructAPI.h"
 #endif
 
 namespace DocuSearch {

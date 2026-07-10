@@ -137,8 +137,19 @@ set(RAPIDOCR_SOURCES
 
 # Build RapidOcr as a static library
 add_library(RapidOcr STATIC ${RAPIDOCR_SOURCES})
+
+# Generate Config.h from Config.h.in
+configure_file(
+    ${rapidocr_cpp_src_SOURCE_DIR}/cmake/Config.h.in
+    ${CMAKE_BINARY_DIR}/generated/RapidOcr/Config.h
+    @ONLY
+)
+
 target_include_directories(RapidOcr PUBLIC
     ${rapidocr_cpp_src_SOURCE_DIR}/include
+    ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr
+    ${CMAKE_BINARY_DIR}/generated
+    ${CMAKE_BINARY_DIR}/generated/RapidOcr
     ${OpenCV_INCLUDE_DIRS}
 )
 target_link_libraries(RapidOcr PUBLIC
