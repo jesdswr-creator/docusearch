@@ -97,68 +97,57 @@ find_package(ZLIB REQUIRED)
 # ============================================================
 # RapidOcrCpp — pure C++ OCR (no Python, no PowerShell)
 # ============================================================
-# RapidOcrCpp requires OpenCV and ONNX Runtime, both from vcpkg.
-# However, RapidOcrCpp's FindDepsPath.cmake expects deps in a specific
-# directory layout that doesn't match vcpkg. We work around this by
-# creating symlinks/directory copies that match the expected layout.
+# We fetch the RapidOcrCpp source and build its core files directly
+# into our project. This avoids the complex FindDepsPath.cmake logic
+# that doesn't work well with vcpkg's directory layout.
 #
-# The expected layout (from FindDepsPath.cmake):
-#   <DEPS_PATH>/OpenCV/Windows/x64/vc17/release/
-#   <DEPS_PATH>/onnxruntime/Windows/x64/vc17/release/
-#
-# We create these directories and point them at the vcpkg install.
-if(MSVC)
-    set(VCPKG_INSTALLED_DIR ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows)
+# Dependencies (OpenCV + ONNX Runtime) are found via vcpkg's
+# find_package. We set the include dirs and link libs manually.
 
-    # RapidOcrCpp's FindDepsPath.cmake expects a specific directory layout:
-    #   <DEPS_PATH>/OpenCV/Windows/x64/vc17/release/
-    #   <DEPS_PATH>/onnxruntime/Windows/x64/vc17/release/
-    # We create this layout and copy vcpkg's cmake config files into it.
-    set(RAPIDOCR_DEPS_DIR ${CMAKE_BINARY_DIR}/rapidocr_deps)
-    set(OPENCV_DEPS_DIR ${RAPIDOCR_DEPS_DIR}/OpenCV/Windows/x64/vc17/release)
-    set(ONNX_DEPS_DIR ${RAPIDOCR_DEPS_DIR}/onnxruntime/Windows/x64/vc17/release)
+# Find OpenCV and ONNX Runtime from vcpkg
+find_package(OpenCV REQUIRED)
+find_package(onnxruntime CONFIG REQUIRED)
 
-    file(MAKE_DIRECTORY ${OPENCV_DEPS_DIR})
-    file(MAKE_DIRECTORY ${ONNX_DEPS_DIR})
-
-    # Copy vcpkg's OpenCV cmake config into the expected location.
-    if(EXISTS ${VCPKG_INSTALLED_DIR}/share/opencv4)
-        file(COPY ${VCPKG_INSTALLED_DIR}/share/opencv4/
-             DESTINATION ${OPENCV_DEPS_DIR}/cmake)
-    endif()
-
-    # Copy vcpkg's onnxruntime cmake config.
-    if(EXISTS ${VCPKG_INSTALLED_DIR}/share/onnxruntime)
-        file(COPY ${VCPKG_INSTALLED_DIR}/share/onnxruntime/
-             DESTINATION ${ONNX_DEPS_DIR}/cmake)
-    endif()
-
-    set(DEPS_PATH ${RAPIDOCR_DEPS_DIR})
-endif()
-
+# Fetch RapidOcrCpp source (we only need the headers + core source files)
 include(FetchContent)
 FetchContent_Declare(
-    rapidocr_cpp
+    rapidocr_cpp_src
     GIT_REPOSITORY https://github.com/RapidAI/RapidOcrCpp.git
     GIT_TAG        main
     GIT_SHALLOW    TRUE
 )
-set(BUILD_WITH_ONNXRUNTIME ON  CACHE BOOL "" FORCE)
-set(BUILD_WITH_NCNN         OFF CACHE BOOL "" FORCE)
-set(BUILD_WITH_MNN          OFF CACHE BOOL "" FORCE)
-set(BUILD_WITH_OPENVINO     OFF CACHE BOOL "" FORCE)
-set(BUILD_WITH_PADDLE       OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS       ON  CACHE BOOL "" FORCE)
-set(BUILD_OUTPUT_BIN        OFF CACHE BOOL "" FORCE)
-set(BUILD_OUTPUT_TEST       OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(rapidocr_cpp)
+FetchContent_Populate(rapidocr_cpp_src)
 
-# The RapidOcrCpp target may be named "RapidOcr" (not "RapidOcr::Core").
-if(TARGET RapidOcr::Core)
-    # Already has the namespaced target — nothing to do
-elseif(TARGET RapidOcr)
-    add_library(RapidOcr::Core ALIAS RapidOcr)
+# RapidOcrCpp source files (only the OnnxRuntime provider + core)
+set(RAPIDOCR_SOURCES
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLite.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrUtils.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrClipperUtils.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrAngleNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrCrnnNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrDbNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrResize.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/ImageUtils.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Provider/OnnxRuntime/OcrLiteOnnxRuntime.cpp
+)
+
+# Build RapidOcr as a static library
+add_library(RapidOcr STATIC ${RAPIDOCR_SOURCES})
+target_include_directories(RapidOcr PUBLIC
+    ${rapidocr_cpp_src_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(RapidOcr PUBLIC
+    ${OpenCV_LIBS}
+    onnxruntime::onnxruntime
+)
+# Suppress warnings from RapidOcrCpp's third-party code
+if(MSVC)
+    target_compile_options(RapidOcr PRIVATE /W0)
 endif()
+
+# Create the namespaced alias our code expects
+add_library(RapidOcr::Core ALIAS RapidOcr)
 
 # ============================================================
 # Bundled SQLite3 (fallback)
@@ -341,18 +330,10 @@ target_link_libraries(DocuSearch PRIVATE
     ZLIB::ZLIB
 )
 
-# Link RapidOcr — handle both possible target names
-if(TARGET RapidOcr::Core)
-    target_link_libraries(DocuSearch PRIVATE RapidOcr::Core)
-    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
-    message(STATUS "RapidOCR: enabled (target: RapidOcr::Core)")
-elseif(TARGET RapidOcr)
-    target_link_libraries(DocuSearch PRIVATE RapidOcr)
-    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
-    message(STATUS "RapidOCR: enabled (target: RapidOcr)")
-else()
-    message(WARNING "RapidOcr target not found — OCR will be disabled")
-endif()
+# Link RapidOcr (always available since we build it from source)
+target_link_libraries(DocuSearch PRIVATE RapidOcr::Core)
+target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
+message(STATUS "RapidOCR: enabled (built from source)")
 
 if(POPPLER_FOUND)
     target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
