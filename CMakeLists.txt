@@ -97,15 +97,43 @@ find_package(ZLIB REQUIRED)
 # ============================================================
 # RapidOcrCpp — pure C++ OCR (no Python, no PowerShell)
 # ============================================================
-# RapidOcrCpp requires OpenCV and ONNX Runtime. These are provided by
-# vcpkg. We set the ROOT variables BEFORE FetchContent so that
-# RapidOcrCpp's FindDepsPath.cmake finds them.
+# RapidOcrCpp requires OpenCV and ONNX Runtime, both from vcpkg.
+# However, RapidOcrCpp's FindDepsPath.cmake expects deps in a specific
+# directory layout that doesn't match vcpkg. We work around this by
+# creating symlinks/directory copies that match the expected layout.
+#
+# The expected layout (from FindDepsPath.cmake):
+#   <DEPS_PATH>/OpenCV/Windows/x64/vc17/release/
+#   <DEPS_PATH>/onnxruntime/Windows/x64/vc17/release/
+#
+# We create these directories and point them at the vcpkg install.
 if(MSVC)
-    set(VCPKG_INSTALLED_DIR ${CMAKE_BINARY_DIR}/vcpkg_installed)
-    set(OpenCV_ROOT      ${VCPKG_INSTALLED_DIR}/x64-windows/share/opencv4)
-    set(onnxruntime_ROOT ${VCPKG_INSTALLED_DIR}/x64-windows/share/onnxruntime)
-    # Also set DEPS_PATH to vcpkg installed dir for RapidOcrCpp's FindDepsPath.cmake
-    set(DEPS_PATH ${VCPKG_INSTALLED_DIR}/x64-windows)
+    set(VCPKG_INSTALLED_DIR ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows)
+
+    # RapidOcrCpp's FindDepsPath.cmake expects a specific directory layout:
+    #   <DEPS_PATH>/OpenCV/Windows/x64/vc17/release/
+    #   <DEPS_PATH>/onnxruntime/Windows/x64/vc17/release/
+    # We create this layout and copy vcpkg's cmake config files into it.
+    set(RAPIDOCR_DEPS_DIR ${CMAKE_BINARY_DIR}/rapidocr_deps)
+    set(OPENCV_DEPS_DIR ${RAPIDOCR_DEPS_DIR}/OpenCV/Windows/x64/vc17/release)
+    set(ONNX_DEPS_DIR ${RAPIDOCR_DEPS_DIR}/onnxruntime/Windows/x64/vc17/release)
+
+    file(MAKE_DIRECTORY ${OPENCV_DEPS_DIR})
+    file(MAKE_DIRECTORY ${ONNX_DEPS_DIR})
+
+    # Copy vcpkg's OpenCV cmake config into the expected location.
+    if(EXISTS ${VCPKG_INSTALLED_DIR}/share/opencv4)
+        file(COPY ${VCPKG_INSTALLED_DIR}/share/opencv4/
+             DESTINATION ${OPENCV_DEPS_DIR}/cmake)
+    endif()
+
+    # Copy vcpkg's onnxruntime cmake config.
+    if(EXISTS ${VCPKG_INSTALLED_DIR}/share/onnxruntime)
+        file(COPY ${VCPKG_INSTALLED_DIR}/share/onnxruntime/
+             DESTINATION ${ONNX_DEPS_DIR}/cmake)
+    endif()
+
+    set(DEPS_PATH ${RAPIDOCR_DEPS_DIR})
 endif()
 
 include(FetchContent)
@@ -115,7 +143,6 @@ FetchContent_Declare(
     GIT_TAG        main
     GIT_SHALLOW    TRUE
 )
-# Configure RapidOcrCpp build options before MakeAvailable.
 set(BUILD_WITH_ONNXRUNTIME ON  CACHE BOOL "" FORCE)
 set(BUILD_WITH_NCNN         OFF CACHE BOOL "" FORCE)
 set(BUILD_WITH_MNN          OFF CACHE BOOL "" FORCE)
@@ -127,11 +154,9 @@ set(BUILD_OUTPUT_TEST       OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(rapidocr_cpp)
 
 # The RapidOcrCpp target may be named "RapidOcr" (not "RapidOcr::Core").
-# Check which target exists and create an alias if needed.
 if(TARGET RapidOcr::Core)
     # Already has the namespaced target — nothing to do
 elseif(TARGET RapidOcr)
-    # Create the alias our code expects
     add_library(RapidOcr::Core ALIAS RapidOcr)
 endif()
 
