@@ -118,17 +118,21 @@ FetchContent_Declare(
 )
 FetchContent_Populate(rapidocr_cpp_src)
 
-# RapidOcrCpp source files (only the OnnxRuntime provider + core)
+# RapidOcrCpp source files (core + OnnxRuntime provider only)
 set(RAPIDOCR_SOURCES
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/OcrLiteAPI.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLite.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrUtils.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrClipperUtils.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrAngleNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrCrnnNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrDbNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrResize.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/ImageUtils.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Provider/OnnxRuntime/OcrLiteOnnxRuntime.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLiteImpl.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrComm.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrCommApi.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLoger.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrProvider.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrResultUtils.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/clipper.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxAngleNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxCrnnNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxDbNet.cpp
+    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxLayoutNet.cpp
 )
 
 # Build RapidOcr as a static library
