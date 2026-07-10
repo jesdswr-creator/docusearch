@@ -118,6 +118,19 @@ FetchContent_Declare(
 )
 FetchContent_Populate(rapidocr_cpp_src)
 
+# Set RapidOcrCpp build options (as regular variables, not cache, so
+# configure_file picks them up correctly).
+set(BUILD_WITH_ONNXRUNTIME 1)
+set(BUILD_WITH_NCNN         0)
+set(BUILD_WITH_MNN          0)
+set(BUILD_WITH_OPENVINO     0)
+set(BUILD_WITH_PADDLE       0)
+# Project version (needed by Config.h.in)
+set(PROJECT_VERSION_MAJOR 1)
+set(PROJECT_VERSION_MINOR 2)
+set(PROJECT_VERSION_PATCH 3)
+set(PROJECT_NAME "RapidOcr")
+
 # RapidOcrCpp source files (core + OnnxRuntime provider only)
 set(RAPIDOCR_SOURCES
     ${rapidocr_cpp_src_SOURCE_DIR}/src/OcrLiteAPI.cpp
