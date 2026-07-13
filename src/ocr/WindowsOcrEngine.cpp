@@ -12,11 +12,12 @@
 #include <QCoreApplication>
 #include <QFile>
 
-// RapidOcrCpp headers — wrapped in #ifdef so the app still builds
-// even if RapidOcrCpp is not available (OCR will be disabled).
+// RapidOcrCpp headers — use internal Core/ headers (not the API wrappers
+// which cause struct redefinition conflicts with Core/OcrStruct.h).
 #ifdef DOCUSEARCH_HAS_RAPIDOCR
-#include "OcrLiteAPI.h"
-#include "OcrStructAPI.h"
+#include "Core/OcrLite.h"
+#include "Core/OcrStruct.h"
+#include "Core/OcrResult.h"
 #endif
 
 namespace DocuSearch {

@@ -132,15 +132,17 @@ set(PROJECT_VERSION_PATCH 3)
 set(PROJECT_NAME "RapidOcr")
 
 # RapidOcrCpp source files (core + OnnxRuntime provider only)
+# NOTE: OcrLiteAPI.cpp is excluded because it includes both OcrStructAPI.h
+# and Core/OcrStruct.h which define the same structs (OcrPoint, TextBlock,
+# OcrResult) causing C2011 redefinition errors. We use the internal
+# Core/OcrLite.h API directly instead.
 set(RAPIDOCR_SOURCES
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/OcrLiteAPI.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLite.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLiteImpl.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrComm.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrCommApi.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLoger.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrProvider.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrResultUtils.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/clipper.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxAngleNet.cpp
     ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxCrnnNet.cpp
