@@ -118,11 +118,22 @@ FetchContent_Declare(
 )
 FetchContent_Populate(rapidocr_cpp_src)
 
-# Fix: Replace OcrStructAPI.h with a forwarding header that includes
-# Core/OcrStruct.h + Core/OcrResult.h. This is simpler and more reliable
-# than patching every file individually.
-file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/OcrStructAPI.h
-"#ifndef OCR_STRUCT_API_H\n#define OCR_STRUCT_API_H\n#include \"Core/OcrStruct.h\"\n#include \"Core/OcrResult.h\"\n#endif\n")
+# Fix: Make Core/OcrStruct.h and Core/OcrResult.h forward to OcrStructAPI.h
+# which is the single source of truth for all struct definitions.
+# This prevents redefinition errors because OcrStructAPI.h has its own
+# include guard (OCR_STRUCT_API_H) that prevents double inclusion.
+#
+# The problem was:
+#   OcrStructAPI.h defines TextBox with std::vector<OcrPoint> boxPoint
+#   Core/OcrStruct.h defines TextBox with std::vector<cv::Point> boxPoint
+# These are DIFFERENT types, causing type mismatch errors.
+#
+# Fix: empty out Core/OcrStruct.h and Core/OcrResult.h, making them
+# include OcrStructAPI.h instead.
+file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrStruct.h
+"#ifndef OCR_STRUCT_H\n#define OCR_STRUCT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
+file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrResult.h
+"#ifndef OCR_RESULT_H\n#define OCR_RESULT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
 set(BUILD_WITH_ONNXRUNTIME 1)
 set(BUILD_WITH_NCNN         0)
 set(BUILD_WITH_MNN          0)
