@@ -118,22 +118,11 @@ FetchContent_Declare(
 )
 FetchContent_Populate(rapidocr_cpp_src)
 
-# Patch ALL .h and .cpp files in RapidOcrCpp to replace OcrStructAPI.h
-# with Core/OcrStruct.h. This fixes C2011 struct redefinition errors.
-# Then add Core/OcrResult.h to files that need OcrPoint/OcrResult types.
-file(GLOB_RECURSE RAPIDOCR_ALL_FILES
-    "${rapidocr_cpp_src_SOURCE_DIR}/include/*.h"
-    "${rapidocr_cpp_src_SOURCE_DIR}/src/*.cpp"
-)
-foreach(PATCH_FILE ${RAPIDOCR_ALL_FILES})
-    file(READ ${PATCH_FILE} PATCH_CONTENT)
-    string(REPLACE "OcrStructAPI.h" "Core/OcrStruct.h" PATCHED_CONTENT "${PATCH_CONTENT}")
-    # Add Core/OcrResult.h after Core/OcrStruct.h for OcrPoint/OcrResult types
-    string(REPLACE "#include \"Core/OcrStruct.h\""
-                   "#include \"Core/OcrStruct.h\"\n#include \"Core/OcrResult.h\""
-                   PATCHED_CONTENT "${PATCHED_CONTENT}")
-    file(WRITE ${PATCH_FILE} "${PATCHED_CONTENT}")
-endforeach()
+# Fix: Replace OcrStructAPI.h with a forwarding header that includes
+# Core/OcrStruct.h + Core/OcrResult.h. This is simpler and more reliable
+# than patching every file individually.
+file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/OcrStructAPI.h
+"#ifndef OCR_STRUCT_API_H\n#define OCR_STRUCT_API_H\n#include \"Core/OcrStruct.h\"\n#include \"Core/OcrResult.h\"\n#endif\n")
 set(BUILD_WITH_ONNXRUNTIME 1)
 set(BUILD_WITH_NCNN         0)
 set(BUILD_WITH_MNN          0)
