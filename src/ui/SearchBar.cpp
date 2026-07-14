@@ -162,14 +162,12 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     moreBtn_    = makeIconBtn("More", "moreBtn");
 
     // ---- Assemble layout ----
+    // Only working buttons: search input, saved searches, add folder, refresh.
+    // Removed: filtersBtn, listBtn, gridBtn, moreBtn (non-functional).
     layout->addWidget(inputWrap, 1);  // input takes available space
     layout->addWidget(savedBox_);
-    layout->addWidget(filtersBtn_);
     layout->addWidget(addFolderBtn_);
     layout->addWidget(refreshBtn_);
-    layout->addWidget(listBtn_);
-    layout->addWidget(gridBtn_);
-    layout->addWidget(moreBtn_);
 
     // ---- Signals ----
     connect(clearBtn_, &QPushButton::clicked, this, [this]{

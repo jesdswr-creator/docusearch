@@ -11,13 +11,12 @@
 #include <QDir>
 #include <QCoreApplication>
 #include <QFile>
+#include <QDateTime>
 
-// RapidOcrCpp headers — use internal Core/ headers (not the API wrappers
-// which cause struct redefinition conflicts with Core/OcrStruct.h).
 #ifdef DOCUSEARCH_HAS_RAPIDOCR
 #include "Core/OcrLite.h"
-#include "Core/OcrStruct.h"
 #include "Core/OcrResult.h"
+#include "Core/OcrStruct.h"
 #endif
 
 namespace DocuSearch {
@@ -27,7 +26,7 @@ WindowsOcrEngine::WindowsOcrEngine() = default;
 WindowsOcrEngine::~WindowsOcrEngine() {
 #ifdef DOCUSEARCH_HAS_RAPIDOCR
     if (ocrLite_) {
-        delete static_cast<OcrLite*>(ocrLite_);
+        try { delete static_cast<OcrLite*>(ocrLite_); } catch (...) {}
         ocrLite_ = nullptr;
     }
 #endif
@@ -40,13 +39,11 @@ bool WindowsOcrEngine::init() {
     DS_WARN("OCR", "RapidOCR not compiled in. OCR unavailable.");
     return false;
 #else
-
     // Find the models directory.
     const QString appDir = QCoreApplication::applicationDirPath();
     QStringList candidates = {
         appDir + "/models",
         appDir + "/../models",
-        appDir + "/../share/DocuSearch/models",
     };
 
     for (const auto& dir : candidates) {
@@ -60,32 +57,38 @@ bool WindowsOcrEngine::init() {
     }
 
     if (modelsDir_.isEmpty()) {
-        DS_WARN("OCR", "OCR models not found. Expected in <appDir>/models/: "
-                        "ch_PP-OCRv4_det_infer.onnx, ch_ppocr_mobile_v2.0_cls_infer.onnx, "
-                        "ch_PP-OCRv4_rec_infer.onnx, ppocr_keys_v1.txt");
+        DS_WARN("OCR", "OCR models not found in: " + appDir + "/models/");
         return false;
     }
 
-    auto* ocr = new OcrLite();
-    ocr->setProvider("OnnxRuntime");
-    ocr->setNumThread(2);
-    ocr->initLogger(false, false, false);
+    try {
+        auto* ocr = new OcrLite();
+        ocr->setProvider("OnnxRuntime");
+        ocr->setNumThread(2);
+        ocr->initLogger(false, false, false);
 
-    const std::string detPath  = (modelsDir_ + "/ch_PP-OCRv4_det_infer.onnx").toStdString();
-    const std::string clsPath  = (modelsDir_ + "/ch_ppocr_mobile_v2.0_cls_infer.onnx").toStdString();
-    const std::string recPath  = (modelsDir_ + "/ch_PP-OCRv4_rec_infer.onnx").toStdString();
-    const std::string keysPath = (modelsDir_ + "/ppocr_keys_v1.txt").toStdString();
+        const std::string detPath  = (modelsDir_ + "/ch_PP-OCRv4_det_infer.onnx").toStdString();
+        const std::string clsPath  = (modelsDir_ + "/ch_ppocr_mobile_v2.0_cls_infer.onnx").toStdString();
+        const std::string recPath  = (modelsDir_ + "/ch_PP-OCRv4_rec_infer.onnx").toStdString();
+        const std::string keysPath = (modelsDir_ + "/ppocr_keys_v1.txt").toStdString();
 
-    if (!ocr->initModels(detPath, clsPath, recPath, keysPath)) {
-        DS_WARN("OCR", "Failed to load OCR models from: " + modelsDir_);
-        delete ocr;
+        if (!ocr->initModels(detPath, clsPath, recPath, keysPath)) {
+            DS_WARN("OCR", "Failed to load OCR models");
+            delete ocr;
+            return false;
+        }
+
+        ocrLite_ = ocr;
+        initialized_ = true;
+        DS_INFO("OCR", "RapidOCR initialized");
+        return true;
+    } catch (const std::exception& e) {
+        DS_WARN("OCR", QString("OCR init exception: %1").arg(e.what()));
+        return false;
+    } catch (...) {
+        DS_WARN("OCR", "OCR init unknown exception");
         return false;
     }
-
-    ocrLite_ = ocr;
-    initialized_ = true;
-    DS_INFO("OCR", "RapidOCR engine initialized (models: " + modelsDir_ + ")");
-    return true;
 #endif
 }
 
@@ -95,36 +98,57 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
     return {};
 #else
     if (!initialized_ || !ocrLite_) return {};
+    if (img.isNull()) return {};
 
-    auto* ocr = static_cast<OcrLite*>(ocrLite_);
-    QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
-    if (rgbImg.isNull()) return {};
+    try {
+        auto* ocr = static_cast<OcrLite*>(ocrLite_);
 
-    OcrResult result = ocr->detectBitmap(
-        rgbImg.bits(),
-        rgbImg.width(),
-        rgbImg.height(),
-        3,
-        50, 1024,
-        0.5f, 0.3f, 1.6f,
-        true, true
-    );
+        // Convert to RGB888 — RapidOCR expects 3-channel BGR via OpenCV.
+        QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
+        if (rgbImg.isNull()) return {};
 
-    QString text;
-    for (const auto& block : result.textBlocks) {
-        if (!block.text.empty()) {
-            text.append(QString::fromUtf8(block.text.c_str())).append('\n');
+        // Use detect() with a temp file instead of detectBitmap() —
+        // detectBitmap() can crash if the image data alignment doesn't
+        // match what OpenCV expects. Using a file is safer.
+        QString tempPath = QDir::tempPath() + "/docusearch_ocr_" +
+            QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png";
+        if (!rgbImg.save(tempPath, "PNG")) return {};
+
+        QByteArray pathBytes = tempPath.toUtf8();
+        QByteArray nameBytes = QFileInfo(tempPath).fileName().toUtf8();
+
+        OcrResult result = ocr->detect(
+            pathBytes.constData(),
+            nameBytes.constData(),
+            50,     // padding
+            1024,   // maxSideLen
+            0.5f,   // boxScoreThresh
+            0.3f,   // boxThresh
+            1.6f,   // unClipRatio
+            true,   // doAngle
+            true    // mostAngle
+        );
+
+        QFile::remove(tempPath);
+
+        QString text;
+        for (const auto& block : result.textBlocks) {
+            if (!block.text.empty()) {
+                text.append(QString::fromUtf8(block.text.c_str())).append('\n');
+            }
         }
+        return text.trimmed();
+    } catch (const std::exception& e) {
+        DS_WARN("OCR", QString("OCR exception: %1").arg(e.what()));
+        return {};
+    } catch (...) {
+        DS_WARN("OCR", "OCR unknown exception");
+        return {};
     }
-    return text.trimmed();
 #endif
 }
 
 QString WindowsOcrEngine::ocrFile(const QString& path) {
-#ifndef DOCUSEARCH_HAS_RAPIDOCR
-    Q_UNUSED(path);
-    return {};
-#else
     if (!initialized_ || !ocrLite_) return {};
     if (!QFileInfo::exists(path)) return {};
 
@@ -134,7 +158,6 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
         return {};
     }
     return ocrImage(img);
-#endif
 }
 
 QStringList WindowsOcrEngine::availableLanguages() {

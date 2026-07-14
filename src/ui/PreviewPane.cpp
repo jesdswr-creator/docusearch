@@ -107,7 +107,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     hLay->addStretch();
 
-    // Action buttons: Open (blue), OCR (green), More
+    // Action buttons: Open (blue), OCR (green) — only working buttons
     openBtn_ = new QPushButton(header);
     openBtn_->setObjectName("openBtn");
     openBtn_->setCursor(Qt::PointingHandCursor);
@@ -120,13 +120,12 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     ocrBtn_->setToolTip("Run OCR on this file (for scanned PDFs and images)");
     ocrBtn_->setText("OCR");
 
+    // More button — created but hidden (Print/Export not essential)
     moreBtn_ = new QPushButton(header);
     moreBtn_->setObjectName("moreActionBtn");
-    moreBtn_->setCursor(Qt::PointingHandCursor);
-    moreBtn_->setToolTip("More actions");
+    moreBtn_->setVisible(false);
     hLay->addWidget(openBtn_);
     hLay->addWidget(ocrBtn_);
-    hLay->addWidget(moreBtn_);
 
     v->addWidget(header);
 
@@ -163,7 +162,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     epLay->setContentsMargins(0, 0, 0, 0);
     epLay->setSpacing(0);
 
-    // Tabs row
+    // Tabs row — only "Extracted Text" tab (others were non-functional)
     auto* tabsRow = new QWidget(extractedPanel);
     auto* tabsLay = new QHBoxLayout(tabsRow);
     tabsLay->setContentsMargins(16, 0, 16, 0);
@@ -177,19 +176,15 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     tabExtracted_->setCheckable(true);
     tabExtracted_->setChecked(true);
 
+    // Create placeholder tabs but don't add them to layout (non-functional)
     tabSummary_ = new QPushButton("AI Summary", tabsRow);
     tabSummary_->setObjectName("extractedTab");
-    tabSummary_->setCursor(Qt::PointingHandCursor);
     tabSummary_->setCheckable(true);
-
     tabHighlights_ = new QPushButton("Highlights", tabsRow);
     tabHighlights_->setObjectName("extractedTab");
-    tabHighlights_->setCursor(Qt::PointingHandCursor);
     tabHighlights_->setCheckable(true);
-
     tabRelated_ = new QPushButton("Related", tabsRow);
     tabRelated_->setObjectName("extractedTab");
-    tabRelated_->setCursor(Qt::PointingHandCursor);
     tabRelated_->setCheckable(true);
 
     tabGroup_->addButton(tabExtracted_, 0);
@@ -198,9 +193,6 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     tabGroup_->addButton(tabRelated_, 3);
 
     tabsLay->addWidget(tabExtracted_);
-    tabsLay->addWidget(tabSummary_);
-    tabsLay->addWidget(tabHighlights_);
-    tabsLay->addWidget(tabRelated_);
     tabsLay->addStretch();
     epLay->addWidget(tabsRow);
 

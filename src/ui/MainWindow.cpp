@@ -1630,6 +1630,8 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
+    // Wrap entire OCR operation in try-catch to prevent app crash.
+    try {
     const QString ext = FileUtils::extensionOf(path).toLower();
 
     bool isImage = (ext == "png" || ext == "jpg" || ext == "jpeg" ||
@@ -1804,6 +1806,17 @@ void MainWindow::onOcrThisFile(const QString& path) {
     updateIndexStats();
     statusBar()->showMessage(
         QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
+
+    } catch (const std::exception& e) {
+        statusBar()->showMessage(QString("OCR error: %1").arg(e.what()), 5000);
+        QMessageBox::warning(this, "OCR Error",
+            QString("An error occurred during OCR:\n%1").arg(e.what()));
+    } catch (...) {
+        statusBar()->showMessage("OCR crashed — unknown error.", 5000);
+        QMessageBox::warning(this, "OCR Error",
+            "An unknown error occurred during OCR.\n"
+            "The OCR engine may not be properly initialized.");
+    }
 }
 
 void MainWindow::onOpenSettings() {
