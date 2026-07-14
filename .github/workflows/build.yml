@@ -461,11 +461,13 @@ jobs:
             Write-Host "WARNING: vcpkg bin dir not found - OpenCV/ONNXRuntime DLLs may be missing."
           }
 
-          # Also copy the RapidOcr.dll from the build output
-          $rapidOcrDll = Get-ChildItem -Path "build" -Filter "RapidOcr.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($rapidOcrDll) {
-            Copy-Item $rapidOcrDll.FullName "build\bin\Release\RapidOcr.dll" -Force
-            Write-Host "Copied RapidOcr.dll"
+          # Copy the docusearch_ocr_helper.exe to the release folder
+          $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($helperExe) {
+            Copy-Item $helperExe.FullName "build\bin\Release\docusearch_ocr_helper.exe" -Force
+            Write-Host "Copied docusearch_ocr_helper.exe"
+          } else {
+            Write-Host "WARNING: docusearch_ocr_helper.exe not found in build output"
           }
 
       - name: Build portable ZIP
