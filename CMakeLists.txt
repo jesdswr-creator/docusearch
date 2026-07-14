@@ -165,6 +165,14 @@ set(RAPIDOCR_SOURCES
 # Build RapidOcr as a static library
 add_library(RapidOcr STATIC ${RAPIDOCR_SOURCES})
 
+# CRITICAL: Force RapidOcr to use the same CRT as the main app (/MD).
+# vcpkg compiles everything with /MD, but RapidOcr's CMakeLists.txt
+# might default to /MT. This mismatch causes LNK2005 linker errors.
+if(MSVC)
+    set_property(TARGET RapidOcr PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # Generate Config.h from Config.h.in
 configure_file(
     ${rapidocr_cpp_src_SOURCE_DIR}/cmake/Config.h.in
