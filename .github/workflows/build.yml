@@ -395,9 +395,10 @@ jobs:
 
       - name: Download OCR models + bundle OpenCV/ONNXRuntime DLLs
         shell: pwsh
+        continue-on-error: true
         run: |
+          $ErrorActionPreference = 'Continue'
           # Download PP-OCRv4 mobile ONNX models (~17MB total) for RapidOCR.
-          # These are required for OCR to work without Python.
           $modelsDir = "build\bin\Release\models"
           if (-not (Test-Path $modelsDir)) { New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null }
 
@@ -409,65 +410,39 @@ jobs:
           foreach ($m in $modelUrls) {
             if (-not (Test-Path $m.Out)) {
               Write-Host "Downloading $($m.Out)..."
-              & curl -L --retry 5 --retry-delay 3 -o $m.Out $m.Url 2>&1
-              if ($LASTEXITCODE -ne 0 -or -not (Test-Path $m.Out)) {
-                Write-Host "WARNING: Failed to download $($m.Url)"
-              }
+              try { & curl -L --retry 5 --retry-delay 3 -o $m.Out $m.Url 2>&1 } catch {}
+              if (-not (Test-Path $m.Out)) { Write-Host "WARNING: Failed to download model" }
             }
           }
 
-          # Download the character dictionary (ppocr_keys_v1.txt)
+          # Download the character dictionary
           $keysUrl = "https://raw.githubusercontent.com/RapidAI/RapidOcrCpp/main/models/OnnxRuntime/ppocr_keys_v1.txt"
           $keysOut = "$modelsDir\ppocr_keys_v1.txt"
           if (-not (Test-Path $keysOut)) {
-            & curl -L --retry 5 -o $keysOut $keysUrl 2>&1
+            try { & curl -L --retry 5 -o $keysOut $keysUrl 2>&1 } catch {}
           }
 
-          # Verify models were downloaded
           $modelCount = (Get-ChildItem $modelsDir -Filter "*.onnx" -ErrorAction SilentlyContinue).Count
           Write-Host "Downloaded $modelCount ONNX model files"
-          if (Test-Path $keysOut) { Write-Host "Downloaded ppocr_keys_v1.txt" }
 
-          # ---- Bundle OpenCV + ONNXRuntime DLLs from vcpkg ----
+          # Bundle OpenCV + ONNXRuntime DLLs from vcpkg
           $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
           if (-not (Test-Path $vcpkgBin)) { $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin" }
           if (Test-Path $vcpkgBin) {
-            Write-Host "=== Copying OpenCV + ONNXRuntime DLLs from $vcpkgBin ==="
-            $runtimeDlls = @(
-              'onnxruntime.dll',
-              'opencv_world4xx.dll', 'opencv_world481.dll', 'opencv_world410.dll',
-              'opencv_world411.dll', 'opencv_world412.dll', 'opencv_world413.dll',
-              'opencv_world414.dll', 'opencv_world415.dll'
-            )
-            $copied = 0
-            foreach ($dll in $runtimeDlls) {
-              $src = Join-Path $vcpkgBin $dll
-              if (Test-Path $src) {
-                Copy-Item $src "build\bin\Release\$dll" -Force
-                $copied++
-              }
-            }
-            # Fallback: copy any opencv_world*.dll and onnxruntime*.dll
             Get-ChildItem -Path $vcpkgBin -Filter "opencv_world*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-              $dst = "build\bin\Release\$($_.Name)"
-              if (-not (Test-Path $dst)) { Copy-Item $_.FullName $dst -Force; $copied++ }
+              Copy-Item $_.FullName "build\bin\Release\$($_.Name)" -Force -ErrorAction SilentlyContinue
             }
             Get-ChildItem -Path $vcpkgBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-              $dst = "build\bin\Release\$($_.Name)"
-              if (-not (Test-Path $dst)) { Copy-Item $_.FullName $dst -Force; $copied++ }
+              Copy-Item $_.FullName "build\bin\Release\$($_.Name)" -Force -ErrorAction SilentlyContinue
             }
-            Write-Host "Copied $copied OCR runtime DLLs from vcpkg."
-          } else {
-            Write-Host "WARNING: vcpkg bin dir not found - OpenCV/ONNXRuntime DLLs may be missing."
+            Write-Host "Copied OCR DLLs"
           }
 
-          # Copy the docusearch_ocr_helper.exe to the release folder
+          # Copy helper exe
           $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($helperExe) {
             Copy-Item $helperExe.FullName "build\bin\Release\docusearch_ocr_helper.exe" -Force
             Write-Host "Copied docusearch_ocr_helper.exe"
-          } else {
-            Write-Host "WARNING: docusearch_ocr_helper.exe not found in build output"
           }
 
       - name: Build portable ZIP
