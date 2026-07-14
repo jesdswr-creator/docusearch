@@ -1,13 +1,15 @@
 // ============================================================
-// WindowsOcrEngine.cpp - RapidOcrCpp OCR with crash protection
+// WindowsOcrEngine.cpp - OCR via Windows.Media.Ocr (PowerShell)
 // ============================================================
 //
-// OCR is run in a SEPARATE PROCESS (rapidocr_helper.exe) to prevent
-// any crash in the OCR engine from crashing the main app. The helper
-// reads an image file path from argv, runs OCR, and prints the text
-// to stdout.
+// Uses Windows' built-in OCR engine via PowerShell. This approach:
+// - Does NOT crash the main app (runs in a separate process)
+// - Does NOT require Python or external downloads
+// - Works on Windows 10 v1903+ and Windows 11
+// - Uses the OCR languages installed in Windows Settings
 //
-// If the helper crashes, the main app continues running normally.
+// For PDFs, each page is rendered to an image via Poppler, then
+// OCR'd via PowerShell + Windows.Media.Ocr.
 // ============================================================
 
 #include "WindowsOcrEngine.h"
@@ -27,27 +29,33 @@ WindowsOcrEngine::WindowsOcrEngine() = default;
 WindowsOcrEngine::~WindowsOcrEngine() = default;
 
 bool WindowsOcrEngine::init() {
-    // Check if models exist.
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QString modelsDir = appDir + "/models";
-
-    if (QFileInfo::exists(modelsDir + "/ch_PP-OCRv4_det_infer.onnx") &&
-        QFileInfo::exists(modelsDir + "/ch_ppocr_mobile_v2.0_cls_infer.onnx") &&
-        QFileInfo::exists(modelsDir + "/ch_PP-OCRv4_rec_infer.onnx") &&
-        QFileInfo::exists(modelsDir + "/ppocr_keys_v1.txt")) {
+#ifdef Q_OS_WIN
+    // Check if Windows OCR is available by testing PowerShell.
+    QProcess proc;
+    proc.setProgram("powershell.exe");
+    proc.setArguments({"-NoProfile", "-NonInteractive", "-Command",
+        "[Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime] | Out-Null; "
+        "$e = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages(); "
+        "if ($e) { Write-Output 'OK' } else { Write-Output 'NOLANG' }"});
+    proc.start();
+    if (!proc.waitForStarted(5000)) return false;
+    if (!proc.waitForFinished(10000)) { proc.kill(); return false; }
+    const QByteArray out = proc.readAllStandardOutput().trimmed();
+    if (out == "OK") {
         initialized_ = true;
         return true;
     }
-
-    DS_WARN("OCR", "OCR models not found in: " + modelsDir);
+    DS_WARN("OCR", "Windows OCR not available: " + QString::fromUtf8(out));
     return false;
+#else
+    return false;
+#endif
 }
 
 QString WindowsOcrEngine::ocrImage(const QImage& img) {
     if (!initialized_) return {};
     if (img.isNull()) return {};
 
-    // Save to temp file, then call ocrFile.
     const QString tempPath = QDir::tempPath() + "/docusearch_ocr_" +
         QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png";
     if (!img.save(tempPath, "PNG")) return {};
@@ -57,45 +65,59 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
 }
 
 QString WindowsOcrEngine::ocrFile(const QString& path) {
+#ifdef Q_OS_WIN
     if (!initialized_) return {};
     if (!QFileInfo::exists(path)) return {};
 
-    // Run OCR in a separate process to prevent crashes.
-    // The helper exe (docusearch_ocr_helper.exe) loads the RapidOCR
-    // engine, OCRs the file, and prints text to stdout.
-    // If it crashes, the main app is unaffected.
-    //
-    // For now, since we don't have a separate helper exe, we run
-    // OCR directly but wrapped in a try-catch with SEH on Windows.
-    // If this still crashes, we'll need to build a separate helper exe.
+    // PowerShell script that OCRs an image file using Windows.Media.Ocr.
+    // Runs in a SEPARATE PROCESS — if it crashes, the main app is safe.
+    const QString psScript = QString(
+        "$ErrorActionPreference = 'Stop'\n"
+        "[Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime] | Out-Null\n"
+        "[Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime] | Out-Null\n"
+        "[Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime] | Out-Null\n"
+        "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n"
+        "$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' -and $_.GetGenericArguments().Count -eq 1 })[0]\n"
+        "function Await($op) { $t = $asTaskGeneric.MakeGenericMethod($op.GetType().GetGenericArguments()[0]).Invoke($null, @($op)); $t.Wait(30000); $t.Result }\n"
+        "try {\n"
+        "  $f = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('%1'))\n"
+        "  $s = Await ($f.OpenAsync([Windows.Storage.FileAccessMode]::Read))\n"
+        "  $d = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($s))\n"
+        "  $b = Await ($d.GetSoftwareBitmapAsync())\n"
+        "  $e = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()\n"
+        "  if (-not $e) { exit 1 }\n"
+        "  $r = Await ($e.RecognizeAsync($b))\n"
+        "  Write-Output $r.Text\n"
+        "} catch { exit 1 }\n"
+    ).arg(QString(path).replace("'", "''"));
 
-#ifdef DOCUSEARCH_HAS_RAPIDOCR
-    // Try to run OCR directly. If it crashes, the app will crash.
-    // This is a known limitation — a separate helper exe is the
-    // proper fix but requires additional build infrastructure.
-    //
-    // For safety, we add a 30-second timeout and catch exceptions.
     QProcess proc;
-    const QString helper = QCoreApplication::applicationDirPath() + "/docusearch_ocr_helper.exe";
-    if (QFileInfo::exists(helper)) {
-        // Use the helper exe (crash-isolated).
-        proc.setProgram(helper);
-        proc.setArguments({path});
-        proc.start();
-        if (!proc.waitForStarted(5000)) return {};
-        if (!proc.waitForFinished(60000)) { proc.kill(); return {}; }
-        return QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
-    }
-    // No helper exe — OCR unavailable (crash-safe).
-    DS_WARN("OCR", "OCR helper not found: " + helper);
-    return {};
+    proc.setProgram("powershell.exe");
+    proc.setArguments({"-NoProfile", "-NonInteractive", "-Command", psScript});
+    proc.start();
+    if (!proc.waitForStarted(5000)) return {};
+    if (!proc.waitForFinished(60000)) { proc.kill(); return {}; }
+    return QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
 #else
+    Q_UNUSED(path);
     return {};
 #endif
 }
 
 QStringList WindowsOcrEngine::availableLanguages() {
-    return {"en", "zh", "chinese_sim", "chinese_tra", "korean", "japanese"};
+#ifdef Q_OS_WIN
+    QProcess proc;
+    proc.setProgram("powershell.exe");
+    proc.setArguments({"-NoProfile", "-NonInteractive", "-Command",
+        "[Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime] | Out-Null; "
+        "([Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages) | ForEach-Object { $_.LanguageTag }"});
+    proc.start();
+    if (!proc.waitForStarted(5000)) return {};
+    if (!proc.waitForFinished(10000)) { proc.kill(); return {}; }
+    return QString::fromUtf8(proc.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
+#else
+    return {};
+#endif
 }
 
 } // namespace DocuSearch

@@ -8,9 +8,7 @@
       "features": ["fts5"]
     },
     "zlib",
-    "poppler",
-    "opencv4",
-    "onnxruntime"
+    "poppler"
   ],
   "features": {
     "tests": {

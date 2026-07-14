@@ -161,7 +161,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
-    // OCR is powered by RapidOCR (ONNX-based, lightweight).
+    // OCR uses Windows' built-in OCR (Windows.Media.Ocr) via PowerShell.
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
@@ -170,21 +170,18 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     langCombo_->setVisible(false);
 
     auto* ocrInfo = new QLabel(
-        "OCR is powered by RapidOCR (RapidOcrCpp), a pure C++\n"
-        "OCR engine based on PaddleOCR ONNX models.\n\n"
-        "NO Python required. NO external downloads needed.\n"
-        "Everything is bundled with the app (~17MB models).\n\n"
-        "Advantages:\n"
-        "  - Pure C++ (no Python, no PowerShell)\n"
-        "  - Lightweight (~17MB models + ONNX Runtime)\n"
-        "  - Fast (CPU inference, 2 threads for low-end PCs)\n"
-        "  - Works on ALL Windows 10/11 systems\n"
-        "  - Supports English, Chinese, Korean, Japanese\n\n"
+        "OCR is powered by Windows OCR (Windows.Media.Ocr),\n"
+        "built into Windows 10 v1903+ and Windows 11.\n\n"
+        "No additional software, Python, or downloads needed.\n"
+        "OCR runs in a separate PowerShell process — if it fails,\n"
+        "the main app continues running normally (no crash).\n\n"
+        "To add more OCR languages:\n"
+        "  Windows Settings > Time & Language > Language\n"
+        "  > Add a language > check 'Optical character recognition'\n\n"
         "To OCR a file:\n"
         "  1. Select a scanned PDF or image\n"
         "  2. Click the green OCR button in the viewer panel\n"
-        "  3. Recognized text appears in the extracted panel below\n\n"
-        "Models are in the 'models' folder next to DocuSearch.exe.",
+        "  3. Recognized text appears in the extracted panel below",
         this);
     ocrInfo->setWordWrap(true);
     ocrLay->addRow(ocrInfo);

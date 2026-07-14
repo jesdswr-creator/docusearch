@@ -95,109 +95,10 @@ endif()
 find_package(ZLIB REQUIRED)
 
 # ============================================================
-# RapidOcrCpp — pure C++ OCR (no Python, no PowerShell)
+# OCR: Uses Windows OCR via PowerShell (no RapidOCR, no Python)
 # ============================================================
-# We fetch the RapidOcrCpp source and build its core files directly
-# into our project. This avoids the complex FindDepsPath.cmake logic
-# that doesn't work well with vcpkg's directory layout.
-#
-# Dependencies (OpenCV + ONNX Runtime) are found via vcpkg's
-# find_package. We set the include dirs and link libs manually.
-
-# Find OpenCV and ONNX Runtime from vcpkg
-find_package(OpenCV REQUIRED)
-find_package(onnxruntime CONFIG REQUIRED)
-
-# Fetch RapidOcrCpp source (we only need the headers + core source files)
-include(FetchContent)
-FetchContent_Declare(
-    rapidocr_cpp_src
-    GIT_REPOSITORY https://github.com/RapidAI/RapidOcrCpp.git
-    GIT_TAG        main
-    GIT_SHALLOW    TRUE
-)
-FetchContent_Populate(rapidocr_cpp_src)
-
-# Fix: Make Core/OcrStruct.h and Core/OcrResult.h forward to OcrStructAPI.h
-# which is the single source of truth for all struct definitions.
-# This prevents redefinition errors because OcrStructAPI.h has its own
-# include guard (OCR_STRUCT_API_H) that prevents double inclusion.
-#
-# The problem was:
-#   OcrStructAPI.h defines TextBox with std::vector<OcrPoint> boxPoint
-#   Core/OcrStruct.h defines TextBox with std::vector<cv::Point> boxPoint
-# These are DIFFERENT types, causing type mismatch errors.
-#
-# Fix: empty out Core/OcrStruct.h and Core/OcrResult.h, making them
-# include OcrStructAPI.h instead.
-file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrStruct.h
-"#ifndef OCR_STRUCT_H\n#define OCR_STRUCT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
-file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrResult.h
-"#ifndef OCR_RESULT_H\n#define OCR_RESULT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
-set(BUILD_WITH_ONNXRUNTIME 1)
-set(BUILD_WITH_NCNN         0)
-set(BUILD_WITH_MNN          0)
-set(BUILD_WITH_OPENVINO     0)
-set(BUILD_WITH_PADDLE       0)
-# Project version (needed by Config.h.in)
-set(PROJECT_VERSION_MAJOR 1)
-set(PROJECT_VERSION_MINOR 2)
-set(PROJECT_VERSION_PATCH 3)
-set(PROJECT_NAME "RapidOcr")
-
-# RapidOcrCpp source files (core + OnnxRuntime provider only)
-# NOTE: OcrLiteAPI.cpp is excluded because it includes both OcrStructAPI.h
-# and Core/OcrStruct.h which define the same structs (OcrPoint, TextBlock,
-# OcrResult) causing C2011 redefinition errors. We use the internal
-# Core/OcrLite.h API directly instead.
-set(RAPIDOCR_SOURCES
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLite.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLiteImpl.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrComm.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLoger.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrProvider.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/clipper.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxAngleNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxCrnnNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxDbNet.cpp
-)
-
-# Build RapidOcr as a static library
-add_library(RapidOcr STATIC ${RAPIDOCR_SOURCES})
-
-# CRITICAL: Force RapidOcr to use the same CRT as the main app (/MD).
-# vcpkg compiles everything with /MD, but RapidOcr's CMakeLists.txt
-# might default to /MT. This mismatch causes LNK2005 linker errors.
-if(MSVC)
-    set_property(TARGET RapidOcr PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-endif()
-
-# Generate Config.h from Config.h.in
-configure_file(
-    ${rapidocr_cpp_src_SOURCE_DIR}/cmake/Config.h.in
-    ${CMAKE_BINARY_DIR}/generated/RapidOcr/Config.h
-    @ONLY
-)
-
-target_include_directories(RapidOcr PUBLIC
-    ${rapidocr_cpp_src_SOURCE_DIR}/include
-    ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr
-    ${CMAKE_BINARY_DIR}/generated
-    ${CMAKE_BINARY_DIR}/generated/RapidOcr
-    ${OpenCV_INCLUDE_DIRS}
-)
-target_link_libraries(RapidOcr PUBLIC
-    ${OpenCV_LIBS}
-    onnxruntime::onnxruntime
-)
-# Suppress warnings from RapidOcrCpp's third-party code
-if(MSVC)
-    target_compile_options(RapidOcr PRIVATE /W0)
-endif()
-
-# Create the namespaced alias our code expects
-add_library(RapidOcr::Core ALIAS RapidOcr)
+# OCR is handled by WindowsOcrEngine.cpp which calls Windows.Media.Ocr
+# via a separate PowerShell process. No additional C++ libraries needed.
 
 # ============================================================
 # Bundled SQLite3 (fallback)
@@ -380,10 +281,7 @@ target_link_libraries(DocuSearch PRIVATE
     ZLIB::ZLIB
 )
 
-# Link RapidOcr (always available since we build it from source)
-target_link_libraries(DocuSearch PRIVATE RapidOcr::Core)
-target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_RAPIDOCR=1)
-message(STATUS "RapidOCR: enabled (built from source)")
+# OCR: No RapidOcr link needed — uses Windows OCR via PowerShell
 
 if(POPPLER_FOUND)
     target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
