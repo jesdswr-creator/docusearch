@@ -186,6 +186,7 @@ public:
     bool            contentExtractionRunning_ = false;
     bool            autoScanRunning_      = false;
     bool            maximized_            = false;
+    bool            ocrBtnEnabled_        = true;  // false while OCR is running
     qint64          selectedFileId_       = 0;
     QString         selectedPath_;
 };
