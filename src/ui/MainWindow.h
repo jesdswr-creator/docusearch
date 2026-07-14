@@ -142,7 +142,7 @@ public:
     QLabel*         appLogoLbl_           = nullptr;
     QLabel*         titleBarText_         = nullptr;
     QLabel*         titleBarSubtitle_     = nullptr;
-    QPushButton*    titleThemeBtn_        = nullptr;
+    // No theme toggle button — light mode only
     QPushButton*    titleMinBtn_          = nullptr;
     QPushButton*    titleMaxBtn_          = nullptr;
     QPushButton*    titleCloseBtn_        = nullptr;

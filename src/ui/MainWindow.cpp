@@ -258,8 +258,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (isMaximized()) showNormal();
         else showMaximized();
     });
-    connect(titleThemeBtn_, &QPushButton::clicked,
-            this, &MainWindow::onToggleTheme);
+    // No theme toggle — light mode only
 
     // Search is triggered ONLY when the user presses Enter or clicks
     // the search input. No live/auto search while typing.
@@ -363,13 +362,7 @@ void MainWindow::buildTitleBar() {
 
     h->addStretch();
 
-    // Window control buttons (theme toggle, minimize, maximize, close)
-    titleThemeBtn_ = new QPushButton(titleBar_);
-    titleThemeBtn_->setObjectName("titleBtn");
-    titleThemeBtn_->setCursor(Qt::PointingHandCursor);
-    titleThemeBtn_->setToolTip("Toggle dark/light theme");
-    titleThemeBtn_->setFixedSize(32, 32);
-
+    // Window control buttons (minimize, maximize, close) — no theme toggle
     titleMinBtn_ = new QPushButton(titleBar_);
     titleMinBtn_->setObjectName("titleBtn");
     titleMinBtn_->setCursor(Qt::PointingHandCursor);
@@ -388,7 +381,6 @@ void MainWindow::buildTitleBar() {
     titleCloseBtn_->setToolTip("Close");
     titleCloseBtn_->setFixedSize(32, 32);
 
-    h->addWidget(titleThemeBtn_);
     h->addWidget(titleMinBtn_);
     h->addWidget(titleMaxBtn_);
     h->addWidget(titleCloseBtn_);
@@ -614,39 +606,25 @@ void MainWindow::buildStatusBar() {
 }
 
 void MainWindow::applyTheme() {
+    // Light mode only — no dark mode.
     QPalette pal;
-    if (darkMode_) {
-        pal.setColor(QPalette::Window,          QColor(0x0f, 0x17, 0x2a));
-        pal.setColor(QPalette::Base,            QColor(0x1e, 0x29, 0x3b));
-        pal.setColor(QPalette::AlternateBase,   QColor(0x0f, 0x17, 0x2a));
-        pal.setColor(QPalette::WindowText,      QColor(0xf1, 0xf5, 0xf9));
-        pal.setColor(QPalette::Text,            QColor(0xf1, 0xf5, 0xf9));
-        pal.setColor(QPalette::ButtonText,      QColor(0xf1, 0xf5, 0xf9));
-        pal.setColor(QPalette::Button,          QColor(0x1e, 0x29, 0x3b));
-        pal.setColor(QPalette::Highlight,       QColor(0x3b, 0x82, 0xf6));
-        pal.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
-        pal.setColor(QPalette::ToolTipBase,     QColor(0x1e, 0x29, 0x3b));
-        pal.setColor(QPalette::ToolTipText,     QColor(0xf1, 0xf5, 0xf9));
-    } else {
-        pal.setColor(QPalette::Window,          QColor(0xf0, 0xf2, 0xf5));
-        pal.setColor(QPalette::Base,            QColor(0xff, 0xff, 0xff));
-        pal.setColor(QPalette::AlternateBase,   QColor(0xf9, 0xfa, 0xfb));
-        pal.setColor(QPalette::WindowText,      QColor(0x1a, 0x1a, 0x2e));
-        pal.setColor(QPalette::Text,            QColor(0x1a, 0x1a, 0x2e));
-        pal.setColor(QPalette::ButtonText,      QColor(0x1a, 0x1a, 0x2e));
-        pal.setColor(QPalette::Button,          QColor(0xff, 0xff, 0xff));
-        pal.setColor(QPalette::Highlight,       QColor(0x25, 0x63, 0xeb));
-        pal.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
-        pal.setColor(QPalette::ToolTipBase,     QColor(0xff, 0xff, 0xff));
-        pal.setColor(QPalette::ToolTipText,     QColor(0x1a, 0x1a, 0x2e));
-    }
+    pal.setColor(QPalette::Window,          QColor(0xff, 0xff, 0xff));
+    pal.setColor(QPalette::Base,            QColor(0xff, 0xff, 0xff));
+    pal.setColor(QPalette::AlternateBase,   QColor(0xf9, 0xfa, 0xfb));
+    pal.setColor(QPalette::WindowText,      QColor(0x1a, 0x1a, 0x1a));
+    pal.setColor(QPalette::Text,            QColor(0x1a, 0x1a, 0x1a));
+    pal.setColor(QPalette::ButtonText,      QColor(0x1a, 0x1a, 0x1a));
+    pal.setColor(QPalette::Button,          QColor(0xff, 0xff, 0xff));
+    pal.setColor(QPalette::Highlight,       QColor(0x25, 0x63, 0xeb));
+    pal.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
+    pal.setColor(QPalette::ToolTipBase,     QColor(0x1a, 0x1a, 0x1a));
+    pal.setColor(QPalette::ToolTipText,     QColor(0xff, 0xff, 0xff));
     pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
 
     QApplication::setPalette(pal);
-
-    Theme::apply(darkMode_ ? Theme::Mode::Dark : Theme::Mode::Light);
+    Theme::apply(Theme::Mode::Light);
 
     // Force-update all child widgets to pick up the new palette immediately.
     const auto widgets = findChildren<QWidget*>();
@@ -693,8 +671,7 @@ void MainWindow::refreshAllIcons() {
     // re-set here in case the device pixel ratio changed).
     appLogoLbl_->setPixmap(loadLucidePixmap("search", whiteText, 16, devicePixelRatio()));
 
-    titleThemeBtn_->setIcon(loadLucideIcon(darkMode_ ? "sun" : "moon", textColor, 16));
-    titleThemeBtn_->setIconSize(QSize(16, 16));
+    // No theme button — light mode only
 
     titleMinBtn_->setIcon(loadLucideIcon("minus", textColor, 14));
     titleMinBtn_->setIconSize(QSize(14, 14));
