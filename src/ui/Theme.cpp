@@ -97,6 +97,11 @@ QPushButton#addFolderBtn {
     border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600;
 }
 QPushButton#addFolderBtn:hover { background-color: #1d4ed8; }
+QPushButton#searchBtn {
+    background-color: #2563eb; color: #fff; border: none;
+    border-radius: 8px; padding: 7px 16px; font-size: 12px; font-weight: 600;
+}
+QPushButton#searchBtn:hover { background-color: #1d4ed8; }
 QPushButton#extractBtn {
     background-color: #7c3aed; color: #fff; border: none;
     border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600;

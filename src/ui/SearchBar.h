@@ -59,6 +59,7 @@ private slots:
 private:
     SearchBarSearchLineEdit* edit_    = nullptr;
     QPushButton*     clearBtn_         = nullptr;
+    QPushButton*     searchBtn_       = nullptr;
     QComboBox*       savedBox_         = nullptr;
     QPushButton*     filtersBtn_       = nullptr;
     QPushButton*     addFolderBtn_     = nullptr;
@@ -67,7 +68,6 @@ private:
     QPushButton*     listBtn_          = nullptr;
     QPushButton*     gridBtn_          = nullptr;
     QPushButton*     moreBtn_          = nullptr;
-    QTimer*          autoSearchTimer_  = nullptr;
 };
 
 } // namespace DocuSearch

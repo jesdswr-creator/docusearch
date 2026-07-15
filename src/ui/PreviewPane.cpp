@@ -609,34 +609,32 @@ void PreviewPane::showImagePreview(const QString& path) {
 void PreviewPane::showTextPreview(const QString& text) {
     setPreviewMode(false);
 
-    // Get palette-aware colors for dark/light mode.
-    QColor textColor = qApp->palette().color(QPalette::Text);
-    QColor mutedColor = qApp->palette().color(QPalette::Disabled, QPalette::Text);
+    QColor textColor("#1a1a1a");
+    QColor mutedColor("#999");
 
     if (text.isEmpty()) {
         documentPage_->setHtml(
-            QString("<div style='color: %1; text-align: center; padding: 40px;'>"
-            "<p style='font-size: 16px;'>No content extracted yet.</p>"
-            "<p style='font-size: 13px;'>Click the <b>Extract</b> button or "
-            "wait for auto-extraction to index this file's content.</p>"
-            "</div>").arg(mutedColor.name()));
+            "<div style='color: #999; text-align: center; padding: 60px;'>"
+            "<p style='font-size: 15px;'>No content extracted yet.</p>"
+            "<p style='font-size: 12px; color: #bbb;'>Click the purple Extract button to extract text.</p>"
+            "</div>");
         return;
     }
 
-    // Format the text with basic HTML for better readability.
-    // Detect sheet/slide separators (--- Sheet N --- / --- Slide N ---)
-    // and render them as colored banner headings.
+    // Format text with proper HTML for readability.
+    // Sheet/slide separators → blue banner headings.
     QString html = text.toHtmlEscaped();
     html.replace(QRegularExpression("^(--- .+? ---)$", QRegularExpression::MultilineOption),
-                 "<div style='background-color: #2563eb; color: #ffffff; "
-                 "padding: 6px 12px; margin: 10px 0 5px 0; border-radius: 4px; "
-                 "font-weight: 700; font-size: 14px;'>\\1</div>");
-    // Convert tab-separated cells to table-like spacing.
+                 "<h3 style='background-color: #2563eb; color: #fff; "
+                 "padding: 8px 14px; margin: 16px 0 8px 0; border-radius: 6px; "
+                 "font-size: 13px; font-weight: 700;'>\\1</h3>");
+    // Tab → pipe separator for spreadsheet cells
     html.replace("\t", " &nbsp;|&nbsp; ");
-    // Preserve line breaks.
+    // Newlines → <br>
     html.replace("\n", "<br>");
-    documentPage_->setHtml(QString("<div style='font-family: Segoe UI, Arial; font-size: 13px; "
-                           "line-height: 1.6; color: %1;'>%2</div>").arg(textColor.name(), html));
+    documentPage_->setHtml(QString("<div style='font-family: Segoe UI, Arial, sans-serif; "
+                           "font-size: 13px; line-height: 1.7; color: #333; "
+                           "padding: 8px;'>%1</div>").arg(html));
 }
 
 void PreviewPane::setPreviewMode(bool showImage) {
