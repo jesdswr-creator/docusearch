@@ -406,7 +406,7 @@ void MainWindow::buildCentral() {
     // ============================================================
     sidebar_ = new QWidget(centralWidget);
     sidebar_->setObjectName("sidebar");
-    sidebar_->setFixedWidth(170);
+    sidebar_->setFixedWidth(140);
 
     auto* sidebarLay = new QVBoxLayout(sidebar_);
     sidebarLay->setContentsMargins(0, 0, 0, 0);
@@ -416,7 +416,7 @@ void MainWindow::buildCentral() {
     sidebarList_->setObjectName("sidebar");
     const QStringList navLabels = {
         "Search", "Saved", "Tags", "Notes",
-        "Stats", "Recent", "Settings", "Help", "About"
+        "Stats", "Settings", "Help", "About"
     };
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
@@ -646,7 +646,7 @@ void MainWindow::refreshAllIcons() {
     // ---- Sidebar icons (each with a distinct color for premium feel) ----
     const QStringList navIcons = {
         "search", "bookmark", "tag", "sticky-note",
-        "bar-chart-3", "clock", "settings", "help-circle", "info"
+        "bar-chart-3", "settings", "help-circle", "info"
     };
     // Distinct colors for each nav item: blue, purple, green, yellow,
     // indigo, orange, gray, teal, pink
@@ -985,12 +985,6 @@ void MainWindow::onSidebarClicked(int row) {
     } else if (page == "Notes") {
         statusBar()->showMessage("Notes are shown in the right panel for the selected file.", 5000);
         sidebarList_->setCurrentRow(0);
-    } else if (page == "Recent") {
-        // Search for files modified in the last 30 days.
-        const QString q = "date:" + QDateTime::currentDateTime().toString("yyyy");
-        searchBar_->setText(q);
-        onSearch(q);
-        sidebarList_->setCurrentRow(0);
     }
     // "Search" stays as the current page.
 }
@@ -1079,7 +1073,7 @@ void MainWindow::onExtract() {
     state->todo = std::move(todo);
 
     auto* timer = new QTimer(this);
-    timer->setInterval(0);
+    timer->setInterval(50);  // 50ms between files — gives UI time to breathe
 
     connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
         auto& registry = DocumentExtractorRegistry::instance();

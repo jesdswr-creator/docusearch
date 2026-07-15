@@ -26,10 +26,10 @@ QMainWindow, QWidget {
     color: #1a1a1a;
 }
 
-/* ===== Title bar ===== */
+/* ===== Title bar — subtle blue tint for visual interest ===== */
 QWidget#titleBar {
-    background-color: #ffffff;
-    border-bottom: 1px solid #e5e5e5;
+    background-color: #f8fafc;
+    border-bottom: 2px solid #2563eb;
 }
 QLabel#titleBarText {
     font-size: 13px; font-weight: 700; color: #1a1a1a; background: transparent;
@@ -48,10 +48,10 @@ QPushButton#titleBtn {
 QPushButton#titleBtn:hover { background-color: #f5f5f5; }
 QPushButton#titleBtn#closeBtn:hover { background-color: #ef4444; color: #fff; }
 
-/* ===== Sidebar ===== */
+/* ===== Sidebar — light gray with blue accent border ===== */
 QWidget#sidebar {
-    background-color: #fafafa;
-    border-right: 1px solid #e5e5e5;
+    background-color: #f8fafc;
+    border-right: 2px solid #e2e8f0;
 }
 QListWidget#sidebar {
     background-color: #fafafa; border: none; outline: 0;
@@ -133,7 +133,7 @@ QLabel#fileIconBadge { color: #fff; font-size: 9px; font-weight: 700; border-rad
 
 /* ===== Viewer ===== */
 QWidget#viewerPanel { background-color: #f9fafb; }
-QWidget#viewerHeader { background-color: #fff; border-bottom: 1px solid #e5e5e5; }
+QWidget#viewerHeader { background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; }
 QLabel#viewerTitle { font-size: 13px; font-weight: 600; color: #1a1a1a; background: transparent; }
 QPushButton#pageBtn {
     background-color: #fff; color: #555; border: 1px solid #e5e5e5;

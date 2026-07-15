@@ -62,28 +62,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     viewerTitle_->setText("No file selected");
     hLay->addWidget(viewerTitle_);
 
-    // Page navigation: ‹ [1] /2 ›
-    prevPageBtn_ = new QPushButton(header);
-    prevPageBtn_->setObjectName("pageBtn");
-    prevPageBtn_->setCursor(Qt::PointingHandCursor);
-    prevPageBtn_->setToolTip("Previous page");
-    prevPageBtn_->setText("‹");
-    pageInput_ = new QLineEdit(header);
-    pageInput_->setObjectName("pageInput");
-    pageInput_->setText("1");
-    pageInput_->setMaxLength(4);
-    pageTotal_ = new QLabel(header);
-    pageTotal_->setObjectName("pageTotal");
-    pageTotal_->setText("/ 1");
-    nextPageBtn_ = new QPushButton(header);
-    nextPageBtn_->setObjectName("pageBtn");
-    nextPageBtn_->setCursor(Qt::PointingHandCursor);
-    nextPageBtn_->setToolTip("Next page");
-    nextPageBtn_->setText("›");
-    hLay->addWidget(prevPageBtn_);
-    hLay->addWidget(pageInput_);
-    hLay->addWidget(pageTotal_);
-    hLay->addWidget(nextPageBtn_);
+    // No page navigation buttons — PDF pages are shown in a scroll area
 
     // Zoom controls: − 100% +
     zoomOutBtn_ = new QPushButton(header);
@@ -91,6 +70,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     zoomOutBtn_->setCursor(Qt::PointingHandCursor);
     zoomOutBtn_->setToolTip("Zoom out");
     zoomOutBtn_->setText("−");
+    zoomOutBtn_->setFixedSize(32, 32);
     zoomLevel_ = new QLabel(header);
     zoomLevel_->setObjectName("zoomLevel");
     zoomLevel_->setText("100%");
@@ -99,6 +79,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     zoomInBtn_->setCursor(Qt::PointingHandCursor);
     zoomInBtn_->setToolTip("Zoom in");
     zoomInBtn_->setText("+");
+    zoomInBtn_->setFixedSize(32, 32);
     hLay->addSpacing(8);
     hLay->addWidget(zoomOutBtn_);
     hLay->addWidget(zoomLevel_);
@@ -501,63 +482,61 @@ void PreviewPane::showPdfPreview() {
             return;
         }
         totalPages_ = doc->pages();
-        // Cap preview pages for memory on low-end systems.
         if (totalPages_ > Constants::kMaxPdfPreviewPages) {
             totalPages_ = Constants::kMaxPdfPreviewPages;
         }
-        if (currentPage_ > totalPages_) currentPage_ = totalPages_;
+        currentPage_ = 1;
         updatePageDisplay();
 
-        auto* page = doc->create_page(currentPage_ - 1);  // 0-indexed
-        if (!page) {
-            setPreviewMode(false);
-            documentPage_->setPlainText("Failed to render page " + QString::number(currentPage_));
-            return;
-        }
-
+        // Render ALL pages and stack them vertically in the scroll area.
+        // The user scrolls to see all pages instead of clicking next/prev.
         poppler::page_renderer renderer;
         renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
         renderer.set_render_hint(poppler::page_renderer::antialiasing);
 
-        // DPI based on zoom level. Use kPdfPreviewDpi (96) as base
-        // instead of 72 for better text readability without too much memory.
         const int baseDpi = Constants::kPdfPreviewDpi;
         const int dpi = qMax(36, int(baseDpi * zoomPercent_ / 100));
-        auto img_data = renderer.render_page(page, dpi, dpi);
-        if (!img_data.is_valid()) {
-            setPreviewMode(false);
-            documentPage_->setPlainText("Failed to render page image.");
-            return;
-        }
 
-        char* dataPtr = const_cast<char*>(img_data.data());
-        if (!dataPtr) {
-            setPreviewMode(false);
-            return;
-        }
+        // Create a container widget with vertical layout for all pages.
+        auto* pagesContainer = new QWidget();
+        auto* pagesLay = new QVBoxLayout(pagesContainer);
+        pagesLay->setContentsMargins(20, 20, 20, 20);
+        pagesLay->setSpacing(16);
+        pagesLay->setAlignment(Qt::AlignCenter);
 
-        QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
-                    img_data.width(), img_data.height(),
-                    img_data.bytes_per_row(),
-                    QImage::Format_ARGB32);
-        if (qimg.isNull()) {
-            setPreviewMode(false);
-            return;
-        }
+        for (int i = 0; i < totalPages_; ++i) {
+            try {
+                auto* page = doc->create_page(i);
+                if (!page) continue;
+                auto img_data = renderer.render_page(page, dpi, dpi);
+                if (!img_data.is_valid()) continue;
+                char* dataPtr = const_cast<char*>(img_data.data());
+                if (!dataPtr) continue;
+                QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
+                            img_data.width(), img_data.height(),
+                            img_data.bytes_per_row(),
+                            QImage::Format_ARGB32);
+                if (qimg.isNull()) continue;
 
-        // Apply rotation if needed.
-        if (rotation_ == 90) {
-            qimg = qimg.transformed(QTransform().rotate(90));
-        } else if (rotation_ == 180) {
-            qimg = qimg.transformed(QTransform().rotate(180));
-        } else if (rotation_ == 270) {
-            qimg = qimg.transformed(QTransform().rotate(270));
+                if (rotation_ == 90) qimg = qimg.transformed(QTransform().rotate(90));
+                else if (rotation_ == 180) qimg = qimg.transformed(QTransform().rotate(180));
+                else if (rotation_ == 270) qimg = qimg.transformed(QTransform().rotate(270));
+
+                auto* pageLbl = new QLabel(pagesContainer);
+                pageLbl->setPixmap(QPixmap::fromImage(qimg));
+                pagesLay->addWidget(pageLbl);
+            } catch (...) {
+                // Skip this page
+            }
         }
 
         setPreviewMode(true);
-        QPixmap pix = QPixmap::fromImage(qimg);
-        pageImageLbl_->setPixmap(pix);
-        pageImageLbl_->resize(pix.size());
+        // Replace the scroll area's widget with the pages container.
+        previewScroll_->setWidget(pagesContainer);
+        // Delete the old pageImageLbl_ — it's replaced by the container.
+        if (pageImageLbl_) {
+            pageImageLbl_->hide();
+        }
     } catch (const std::exception& e) {
         setPreviewMode(false);
         documentPage_->setPlainText(QString("PDF preview error: %1").arg(e.what()));
