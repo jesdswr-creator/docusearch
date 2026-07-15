@@ -109,7 +109,7 @@ private:
 
 TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     setObjectName("tagsNotesPanel");
-    setStyleSheet("background: transparent;");
+    
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -118,20 +118,20 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     // ---- Tags section ----
     auto* tagsSection = new QWidget(this);
     tagsSection->setObjectName("tagsSection");
-    tagsSection->setStyleSheet("background: transparent;");
+    tagsSection
     auto* tagsLay = new QVBoxLayout(tagsSection);
     tagsLay->setContentsMargins(16, 12, 16, 12);
     tagsLay->setSpacing(10);
 
     auto* tagsHeaderRow = new QWidget(tagsSection);
-    tagsHeaderRow->setStyleSheet("background: transparent;");
+    tagsHeaderRow
     auto* thLay = new QHBoxLayout(tagsHeaderRow);
     thLay->setContentsMargins(0, 0, 0, 0);
     thLay->setSpacing(6);
     tagsHeaderLbl_ = new QLabel("Tags", tagsHeaderRow);
     tagsHeaderLbl_->setObjectName("tagsHeader");
     auto* tagsIconLbl = new QLabel(tagsHeaderRow);
-    tagsIconLbl->setStyleSheet("background: transparent;");
+    tagsIconLbl
     tagsIconLbl->setPixmap(loadLucidePixmap("tag", QColor("#6b7280"), 16, devicePixelRatio()));
     thLay->addWidget(tagsHeaderLbl_);
     thLay->addWidget(tagsIconLbl);
@@ -140,7 +140,7 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
 
     // Tag pills container with flow layout
     tagsContainer_ = new QWidget(tagsSection);
-    tagsContainer_->setStyleSheet("background: transparent;");
+    tagsContainer_
     tagsLayout_ = new FlowLayout(tagsContainer_);
     tagsLay->addWidget(tagsContainer_);
 
@@ -161,20 +161,20 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
     // ---- Notes section ----
     auto* notesSection = new QWidget(this);
     notesSection->setObjectName("notesSection");
-    notesSection->setStyleSheet("background: transparent;");
+    notesSection
     auto* notesLay = new QVBoxLayout(notesSection);
     notesLay->setContentsMargins(16, 12, 16, 12);
     notesLay->setSpacing(10);
 
     auto* notesHeaderRow = new QWidget(notesSection);
-    notesHeaderRow->setStyleSheet("background: transparent;");
+    notesHeaderRow
     auto* nhLay = new QHBoxLayout(notesHeaderRow);
     nhLay->setContentsMargins(0, 0, 0, 0);
     nhLay->setSpacing(6);
     notesHeaderLbl_ = new QLabel("Notes", notesHeaderRow);
     notesHeaderLbl_->setObjectName("notesHeader");
     auto* notesIconLbl = new QLabel(notesHeaderRow);
-    notesIconLbl->setStyleSheet("background: transparent;");
+    notesIconLbl
     notesIconLbl->setPixmap(loadLucidePixmap("sticky-note", QColor("#6b7280"), 16, devicePixelRatio()));
     nhLay->addWidget(notesHeaderLbl_);
     nhLay->addWidget(notesIconLbl);

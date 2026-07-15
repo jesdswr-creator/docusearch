@@ -55,7 +55,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     // File type icon + filename
     fileIconLbl_ = new QLabel(header);
     fileIconLbl_->setFixedSize(20, 20);
-    fileIconLbl_->setStyleSheet("background: transparent;");
+    fileIconLbl_
     hLay->addWidget(fileIconLbl_);
 
     viewerTitle_ = new QLabel(header);
@@ -141,7 +141,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     // Page image label (for PDF/image preview)
     pageImageLbl_ = new QLabel(previewScroll_);
     pageImageLbl_->setAlignment(Qt::AlignCenter);
-    pageImageLbl_->setStyleSheet("background: transparent; padding: 20px;");
+    pageImageLbl_
     pageImageLbl_->setText("Select a file to preview");
     pageImageLbl_->setMinimumSize(400, 500);
 

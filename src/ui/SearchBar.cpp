@@ -58,7 +58,7 @@ public:
     explicit SearchInputWrap(QWidget* parent = nullptr) : QWidget(parent) {
         setMinimumHeight(38);
         setMaximumHeight(38);
-        setStyleSheet("background: transparent;");
+        
     }
 
     void setLineEdit(SearchBarSearchLineEdit* edit) {
@@ -115,9 +115,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     clearBtn_->setCursor(Qt::PointingHandCursor);
     clearBtn_->setToolTip("Clear search");
     clearBtn_->setFixedSize(22, 22);
-    clearBtn_->setStyleSheet(
-        "QPushButton { background-color: #e5e7eb; border: none; border-radius: 11px; }"
-        "QPushButton:hover { background-color: #d1d5db; }");
+    // clearBtn styled by QSS
     clearBtn_->hide();
     inputWrap->setClearButton(clearBtn_);
 

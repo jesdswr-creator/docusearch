@@ -350,7 +350,7 @@ void MainWindow::buildTitleBar() {
 
     // Title text: "DocuSearch 1.0.0" (bold) + "• Offline Document Search" (muted)
     auto* titleWrap = new QWidget(titleBar_);
-    titleWrap->setStyleSheet("background: transparent;");
+    titleWrap
     auto* twLay = new QHBoxLayout(titleWrap);
     twLay->setContentsMargins(0, 0, 0, 0);
     twLay->setSpacing(6);
@@ -408,7 +408,7 @@ void MainWindow::buildCentral() {
     sidebar_ = new QWidget(centralWidget);
     sidebar_->setObjectName("sidebar");
     sidebar_->setFixedWidth(170);
-    sidebar_->setStyleSheet("background: transparent;");
+    sidebar_
 
     auto* sidebarLay = new QVBoxLayout(sidebar_);
     sidebarLay->setContentsMargins(0, 0, 0, 0);
@@ -433,20 +433,19 @@ void MainWindow::buildCentral() {
     // Indexed status section pinned to bottom of sidebar.
     auto* statusSection = new QWidget(sidebar_);
     statusSection->setObjectName("indexedStatus");
-    statusSection->setStyleSheet("background: transparent;");
+    statusSection
     auto* sLay = new QVBoxLayout(statusSection);
     sLay->setContentsMargins(16, 12, 16, 12);
     sLay->setSpacing(4);
 
     auto* headerRow = new QWidget(statusSection);
-    headerRow->setStyleSheet("background: transparent;");
+    headerRow
     auto* hrLay = new QHBoxLayout(headerRow);
     hrLay->setContentsMargins(0, 0, 0, 0);
     hrLay->setSpacing(6);
     auto* dotLbl = new QLabel(headerRow);
     dotLbl->setFixedSize(8, 8);
-    dotLbl->setStyleSheet(
-        "background-color: #059669; border-radius: 4px;");
+    // dotLbl styled by QSS
     indexedHeaderLbl_ = new QLabel("Indexed", headerRow);
     indexedHeaderLbl_->setObjectName("indexedHeader");
     hrLay->addWidget(dotLbl);
@@ -473,7 +472,7 @@ void MainWindow::buildCentral() {
     // 2) CENTER PANEL (search bar + results | viewer splitter)
     // ============================================================
     auto* centerWidget = new QWidget(centralWidget);
-    centerWidget->setStyleSheet("background: transparent;");
+    centerWidget
     auto* centerLay = new QVBoxLayout(centerWidget);
     centerLay->setContentsMargins(0, 0, 0, 0);
     centerLay->setSpacing(0);
@@ -506,7 +505,7 @@ void MainWindow::buildCentral() {
     auto* rightPanelWrap = new QWidget(mainSplitter_);
     rightPanelWrap->setObjectName("metadataPanel");
     rightPanelWrap->setFixedWidth(300);
-    rightPanelWrap->setStyleSheet("background: transparent;");
+    rightPanelWrap
     auto* rpLay = new QVBoxLayout(rightPanelWrap);
     rpLay->setContentsMargins(0, 0, 0, 0);
     rpLay->setSpacing(0);
@@ -571,7 +570,7 @@ void MainWindow::buildStatusBar() {
     lLay->setSpacing(16);
 
     auto* readyRow = new QWidget(left);
-    readyRow->setStyleSheet("background: transparent;");
+    readyRow
     auto* rLay = new QHBoxLayout(readyRow);
     rLay->setContentsMargins(0, 0, 0, 0);
     rLay->setSpacing(6);
@@ -609,10 +608,17 @@ void MainWindow::buildStatusBar() {
 
 void MainWindow::applyTheme() {
     // Light mode only — no dark mode.
+    // CRITICAL: Do NOT call setPalette() on individual widgets.
+    // Setting a palette on a widget makes Qt use the palette INSTEAD
+    // of the QSS stylesheet for that widget, which overrides our
+    // styling and causes the "old UI" appearance.
+    //
+    // The QSS stylesheet (set via Theme::apply) handles ALL styling.
+    // We only set the application-wide palette for fallback colors
+    // (used by widgets that don't have QSS rules).
     QPalette pal;
     pal.setColor(QPalette::Window,          QColor(0xff, 0xff, 0xff));
     pal.setColor(QPalette::Base,            QColor(0xff, 0xff, 0xff));
-    pal.setColor(QPalette::AlternateBase,   QColor(0xf9, 0xfa, 0xfb));
     pal.setColor(QPalette::WindowText,      QColor(0x1a, 0x1a, 0x1a));
     pal.setColor(QPalette::Text,            QColor(0x1a, 0x1a, 0x1a));
     pal.setColor(QPalette::ButtonText,      QColor(0x1a, 0x1a, 0x1a));
@@ -626,21 +632,15 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
 
     QApplication::setPalette(pal);
+
+    // Apply the QSS stylesheet — this is the PRIMARY styling mechanism.
     Theme::apply(Theme::Mode::Light);
 
-    // Force-update all child widgets to pick up the new palette immediately.
-    const auto widgets = findChildren<QWidget*>();
-    for (QWidget* w : widgets) {
-        w->setPalette(pal);
-        w->update();
-    }
-    update();
+    // Do NOT call setPalette() on child widgets — let the QSS handle it.
+    // Just trigger a global style recalculation.
+    qApp->setStyleSheet(qApp->styleSheet());
 
-    // Defer icon refresh to the next event loop iteration so the
-    // palette change is painted immediately (the user sees the
-    // background/text color switch instantly). Icon re-rendering
-    // involves SVG loading + QPixmap rendering which takes ~200ms
-    // for all 49 icons — deferring it makes the toggle feel instant.
+    // Defer icon refresh.
     QTimer::singleShot(0, this, [this]() {
         refreshAllIcons();
     });

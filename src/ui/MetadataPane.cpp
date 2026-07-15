@@ -22,7 +22,7 @@ namespace {
 QWidget* makeMetaRow(QWidget* parent, const QString& labelText, QLabel** valueOut) {
     auto* row = new QWidget(parent);
     row->setObjectName("metadataSection");
-    row->setStyleSheet("background: transparent;");
+    row
     auto* h = new QHBoxLayout(row);
     h->setContentsMargins(16, 5, 16, 5);
     h->setSpacing(10);
@@ -58,7 +58,7 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
 
     // ---- Header ----
     auto* header = new QWidget(this);
-    header->setStyleSheet("background: transparent;");
+    header
     auto* hLay = new QHBoxLayout(header);
     hLay->setContentsMargins(16, 12, 16, 12);
     hLay->setSpacing(6);
@@ -85,10 +85,10 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("background: transparent;");
+    scroll
 
     auto* inner = new QWidget(scroll);
-    inner->setStyleSheet("background: transparent;");
+    inner
     auto* innerLay = new QVBoxLayout(inner);
     innerLay->setContentsMargins(0, 0, 0, 0);
     innerLay->setSpacing(0);
