@@ -78,7 +78,6 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
 
     // ---- Header: title + count + sort dropdown ----
     auto* header = new QWidget(this);
-    header
     auto* hLay = new QHBoxLayout(header);
     hLay->setContentsMargins(16, 12, 16, 12);
     hLay->setSpacing(8);
@@ -147,7 +146,6 @@ void ResultsPane::populateItem(int row, const SearchHit& h) {
 
     // Build the item widget: file icon badge + (title / snippet / meta) + dot
     auto* w = new QWidget(list_);
-    w
     auto* hLay = new QHBoxLayout(w);
     hLay->setContentsMargins(12, 10, 12, 10);
     hLay->setSpacing(10);
@@ -176,7 +174,6 @@ void ResultsPane::populateItem(int row, const SearchHit& h) {
     title->setText(h.filename);
     // Title color changes to dark blue when selected — handled via QSS
     // using the list-item:selected selector on #resultTitle.
-    title
 
     auto* snippet = new QLabel(info);
     snippet->setObjectName("resultSnippet");
@@ -184,13 +181,11 @@ void ResultsPane::populateItem(int row, const SearchHit& h) {
     if (snip.size() > 120) snip = snip.left(120) + "...";
     snippet->setText(snip.isEmpty() ? "..." : snip);
     snippet->setWordWrap(false);
-    snippet
 
     auto* meta = new QLabel(info);
     meta->setObjectName("resultMeta");
     const QString dateStr = h.modifiedDate.toString("dd MMM yyyy");
     meta->setText(QString("%1 • %2").arg(humanizeSize(h.size)).arg(dateStr));
-    meta
 
     vLay->addWidget(title);
     vLay->addWidget(snippet);

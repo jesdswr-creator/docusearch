@@ -22,7 +22,6 @@ namespace {
 QWidget* makeMetaRow(QWidget* parent, const QString& labelText, QLabel** valueOut) {
     auto* row = new QWidget(parent);
     row->setObjectName("metadataSection");
-    row
     auto* h = new QHBoxLayout(row);
     h->setContentsMargins(16, 5, 16, 5);
     h->setSpacing(10);
@@ -58,7 +57,6 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
 
     // ---- Header ----
     auto* header = new QWidget(this);
-    header
     auto* hLay = new QHBoxLayout(header);
     hLay->setContentsMargins(16, 12, 16, 12);
     hLay->setSpacing(6);
@@ -85,10 +83,8 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll
 
     auto* inner = new QWidget(scroll);
-    inner
     auto* innerLay = new QVBoxLayout(inner);
     innerLay->setContentsMargins(0, 0, 0, 0);
     innerLay->setSpacing(0);

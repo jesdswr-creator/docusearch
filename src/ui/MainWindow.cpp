@@ -350,7 +350,6 @@ void MainWindow::buildTitleBar() {
 
     // Title text: "DocuSearch 1.0.0" (bold) + "• Offline Document Search" (muted)
     auto* titleWrap = new QWidget(titleBar_);
-    titleWrap
     auto* twLay = new QHBoxLayout(titleWrap);
     twLay->setContentsMargins(0, 0, 0, 0);
     twLay->setSpacing(6);
@@ -408,7 +407,6 @@ void MainWindow::buildCentral() {
     sidebar_ = new QWidget(centralWidget);
     sidebar_->setObjectName("sidebar");
     sidebar_->setFixedWidth(170);
-    sidebar_
 
     auto* sidebarLay = new QVBoxLayout(sidebar_);
     sidebarLay->setContentsMargins(0, 0, 0, 0);
@@ -433,13 +431,11 @@ void MainWindow::buildCentral() {
     // Indexed status section pinned to bottom of sidebar.
     auto* statusSection = new QWidget(sidebar_);
     statusSection->setObjectName("indexedStatus");
-    statusSection
     auto* sLay = new QVBoxLayout(statusSection);
     sLay->setContentsMargins(16, 12, 16, 12);
     sLay->setSpacing(4);
 
     auto* headerRow = new QWidget(statusSection);
-    headerRow
     auto* hrLay = new QHBoxLayout(headerRow);
     hrLay->setContentsMargins(0, 0, 0, 0);
     hrLay->setSpacing(6);
@@ -472,7 +468,6 @@ void MainWindow::buildCentral() {
     // 2) CENTER PANEL (search bar + results | viewer splitter)
     // ============================================================
     auto* centerWidget = new QWidget(centralWidget);
-    centerWidget
     auto* centerLay = new QVBoxLayout(centerWidget);
     centerLay->setContentsMargins(0, 0, 0, 0);
     centerLay->setSpacing(0);
@@ -505,7 +500,6 @@ void MainWindow::buildCentral() {
     auto* rightPanelWrap = new QWidget(mainSplitter_);
     rightPanelWrap->setObjectName("metadataPanel");
     rightPanelWrap->setFixedWidth(300);
-    rightPanelWrap
     auto* rpLay = new QVBoxLayout(rightPanelWrap);
     rpLay->setContentsMargins(0, 0, 0, 0);
     rpLay->setSpacing(0);
@@ -570,7 +564,6 @@ void MainWindow::buildStatusBar() {
     lLay->setSpacing(16);
 
     auto* readyRow = new QWidget(left);
-    readyRow
     auto* rLay = new QHBoxLayout(readyRow);
     rLay->setContentsMargins(0, 0, 0, 0);
     rLay->setSpacing(6);
