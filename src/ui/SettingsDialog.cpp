@@ -161,7 +161,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab --------
-    // OCR uses Windows' built-in OCR (Windows.Media.Ocr) via PowerShell.
+    // OCR uses RapidOCR (PaddleOCR ONNX models) via separate helper exe.
     auto* ocrTab = new QWidget(this);
     auto* ocrLay = new QFormLayout(ocrTab);
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
