@@ -46,6 +46,7 @@ signals:
     void savedSearchSelected(const QString& name);
     void addFolderRequested();
     void refreshRequested();
+    void extractRequested();
     void filtersRequested();
 
 protected:
@@ -61,6 +62,7 @@ private:
     QComboBox*       savedBox_         = nullptr;
     QPushButton*     filtersBtn_       = nullptr;
     QPushButton*     addFolderBtn_     = nullptr;
+    QPushButton*     extractBtn_       = nullptr;
     QPushButton*     refreshBtn_       = nullptr;
     QPushButton*     listBtn_          = nullptr;
     QPushButton*     gridBtn_          = nullptr;

@@ -223,6 +223,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onAddFolder);
     connect(searchBar_, &SearchBar::refreshRequested,
             this, &MainWindow::onRefresh);
+    connect(searchBar_, &SearchBar::extractRequested,
+            this, &MainWindow::onExtract);
     connect(searchBar_, &SearchBar::filtersRequested,
             this, &MainWindow::onFilters);
 

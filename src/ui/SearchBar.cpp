@@ -148,7 +148,16 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     addFolderBtn_->setMaximumHeight(38);
     addFolderBtn_->setToolTip("Add a folder to the index");
 
-    // ---- Icon buttons: Refresh, List, Grid, More ----
+    // ---- Extract button (extract text from all indexed files) ----
+    extractBtn_ = new QPushButton(this);
+    extractBtn_->setObjectName("extractBtn");
+    extractBtn_->setCursor(Qt::PointingHandCursor);
+    extractBtn_->setText("Extract");
+    extractBtn_->setMinimumHeight(38);
+    extractBtn_->setMaximumHeight(38);
+    extractBtn_->setToolTip("Extract text content from all indexed files");
+
+    // ---- Refresh button ----
     auto makeIconBtn = [this](const QString& tooltip, const QString& objName) -> QPushButton* {
         auto* b = new QPushButton(this);
         b->setObjectName(objName);
@@ -162,11 +171,10 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     moreBtn_    = makeIconBtn("More", "moreBtn");
 
     // ---- Assemble layout ----
-    // Only working buttons: search input, saved searches, add folder, refresh.
-    // Removed: filtersBtn, listBtn, gridBtn, moreBtn (non-functional).
     layout->addWidget(inputWrap, 1);  // input takes available space
     layout->addWidget(savedBox_);
     layout->addWidget(addFolderBtn_);
+    layout->addWidget(extractBtn_);
     layout->addWidget(refreshBtn_);
 
     // ---- Signals ----
@@ -190,6 +198,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
 
     connect(addFolderBtn_, &QPushButton::clicked, this, &SearchBar::addFolderRequested);
     connect(refreshBtn_,   &QPushButton::clicked, this, &SearchBar::refreshRequested);
+    connect(extractBtn_,   &QPushButton::clicked, this, &SearchBar::extractRequested);
     connect(filtersBtn_,   &QPushButton::clicked, this, &SearchBar::filtersRequested);
 
     auto* completer = new QCompleter(this);
@@ -224,6 +233,10 @@ void SearchBar::refreshIcons() {
     // Add Folder button icon (white on blue)
     addFolderBtn_->setIcon(loadLucideIcon("plus", whiteText, 16));
     addFolderBtn_->setIconSize(QSize(16, 16));
+
+    // Extract button icon (white on purple)
+    extractBtn_->setIcon(loadLucideIcon("file-text", whiteText, 16));
+    extractBtn_->setIconSize(QSize(16, 16));
 
     // Icon buttons with colored icons
     refreshBtn_->setIcon(loadLucideIcon("refresh-cw", QColor("#059669"), 16));
