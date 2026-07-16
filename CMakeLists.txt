@@ -97,19 +97,41 @@ find_package(ZLIB REQUIRED)
 # ============================================================
 # OCR Helper — Windows OCR via C++/WinRT (same as PowerToys)
 # ============================================================
-# Standalone console app that links runtimeobject.lib directly.
-# Since it's NOT a Qt WIN32 app, there's NO entry point conflict.
-# Uses Windows.Media.Ocr (built into Windows 10 v1903+ / Windows 11).
-# No OpenCV, no ONNX Runtime, no model files needed.
-# Main app calls it via QProcess — crash-proof.
+# Generates C++/WinRT headers at build time using cppwinrt.exe
+# (pre-installed on Windows SDK / GitHub Actions runners).
+# Then builds a standalone console exe that calls Windows.Media.Ocr.
+
+# Find cppwinrt.exe (part of Windows SDK)
+find_program(CPPWINRT_EXE cppwinrt
+    HINTS "$ENV{WindowsSdkVerBinPath}x64"
+          "C:/Program Files (x86)/Windows Kits/10/bin/$ENV{WindowsSDKVersion}/x64"
+          "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64"
+          "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
+    REQUIRED)
+
+# Generate C++/WinRT headers into build directory
+set(CPPWINRT_OUTPUT_DIR ${CMAKE_BINARY_DIR}/cppwinrt_headers)
+file(MAKE_DIRECTORY ${CPPWINRT_OUTPUT_DIR})
+
+execute_process(
+    COMMAND ${CPPWINRT_EXE} -input winmd -output ${CPPWINRT_OUTPUT_DIR} -overwrite
+    RESULT_VARIABLE CPPWINRT_RESULT
+)
+if(NOT CPPWINRT_RESULT EQUAL 0)
+    message(WARNING "cppwinrt.exe failed (code ${CPPWINRT_RESULT}). OCR helper may not build.")
+endif()
+
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
 if(MSVC)
     set_property(TARGET docusearch_ocr_helper PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    # Link runtimeobject.lib for WinRT
-    target_link_libraries(docusearch_ocr_helper PRIVATE runtimeobject)
-    # C++/WinRT needs /await or C++20 coroutines
-    target_compile_options(docusearch_ocr_helper PRIVATE /await /W0)
+    target_include_directories(docusearch_ocr_helper PRIVATE ${CPPWINRT_OUTPUT_DIR})
+    target_link_libraries(docusearch_ocr_helper PRIVATE runtimeobject windowscodecs)
+    # C++/WinRT needs C++20 and the experimental coroutine warning silenced
+    target_compile_options(docusearch_ocr_helper PRIVATE
+        /std:c++20 /W0 /permissive-
+        /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+    )
 endif()
 
 # ============================================================

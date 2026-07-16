@@ -1,25 +1,128 @@
 // ============================================================
-// ocr_helper_main.cpp - Windows OCR helper (same as PowerToys)
+// ocr_helper_main.cpp - Windows OCR helper (C++/WinRT)
 // ============================================================
 //
-// Standalone CONSOLE app using C++/WinRT to call Windows.Media.Ocr.
-// This exe links runtimeobject.lib directly — since it's NOT a Qt
-// WIN32 app, there's NO entry point conflict.
+// Same approach as PowerToys:
+// - Uses C++/WinRT to call Windows.Media.Ocr
+// - Runs on MTA thread (required for RecognizeAsync().get())
+// - Uses WIC to load the image file (no StorageFile needed)
+// - Uses ISoftwareBitmapNativeFactory for zero-copy HBITMAP→SoftwareBitmap
 //
-// This is the same approach PowerToys Text Extractor uses.
+// The C++/WinRT headers are generated at build time by cppwinrt.exe
+// (pre-installed on Windows SDK / GitHub Actions runners).
 //
 // Usage: docusearch_ocr_helper.exe <image_path>
 // Output: recognized text to stdout (UTF-8)
 // ============================================================
 
 #include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
+#include <winrt/base.h>
+
+#include <windows.h>
+#include <wincodec.h>
+#include <Windows.Graphics.Imaging.Interop.h>
+#include <objbase.h>
+
 #include <iostream>
 #include <string>
+#include <future>
+#include <comdef.h>
 
 #pragma comment(lib, "runtimeobject.lib")
+#pragma comment(lib, "windowscodecs.lib")
+
+namespace winrt {
+    using namespace Windows::Foundation;
+    using namespace Windows::Graphics::Imaging;
+    using namespace Windows::Media::Ocr;
+}
+
+std::wstring StringToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], len);
+    if (len > 0) w.resize(len - 1);
+    return w;
+}
+
+std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(len, 0);
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], len, nullptr, nullptr);
+    if (len > 0) s.resize(len - 1);
+    return s;
+}
+
+std::wstring OcrImageFile(const std::wstring& filePath) {
+    // Run on MTA thread (required for RecognizeAsync().get())
+    auto future = std::async(std::launch::async, [&filePath]() -> std::wstring {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        auto comCleanup = wil_scope_exit([] { CoUninitialize(); });
+
+        // 1. Load image via WIC (Windows Imaging Component)
+        IWICImagingFactory* wicFactory = nullptr;
+        CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
+        if (!wicFactory) return L"";
+
+        IWICBitmapDecoder* wicDecoder = nullptr;
+        wicFactory->CreateDecoderFromFilename(filePath.c_str(), nullptr,
+            GENERIC_READ, WICDecodeMetadataCacheOnLoad, &wicDecoder);
+        if (!wicDecoder) { wicFactory->Release(); return L""; }
+
+        IWICBitmapFrameDecode* wicFrame = nullptr;
+        wicDecoder->GetFrame(0, &wicFrame);
+        if (!wicFrame) { wicDecoder->Release(); wicFactory->Release(); return L""; }
+
+        // 2. Convert to IWICBitmap
+        IWICBitmap* wicBitmap = nullptr;
+        wicFactory->CreateBitmapFromSource(wicFrame, WICBitmapNoCache, &wicBitmap);
+        if (!wicBitmap) { wicFrame->Release(); wicDecoder->Release(); wicFactory->Release(); return L""; }
+
+        // 3. Convert IWICBitmap → SoftwareBitmap (zero-copy via interop)
+        winrt::SoftwareBitmap softwareBitmap = nullptr;
+        try {
+            auto factory = winrt::create_instance<ISoftwareBitmapNativeFactory>(
+                winrt::guid_of<ISoftwareBitmapNativeFactory>());
+            winrt::check_hresult(factory->CreateFromWICBitmap(
+                wicBitmap, false, winrt::guid_of<winrt::SoftwareBitmap>(),
+                winrt::put_abi(softwareBitmap)));
+        } catch (...) {
+            wicBitmap->Release(); wicFrame->Release(); wicDecoder->Release(); wicFactory->Release();
+            return L"";
+        }
+
+        // 4. Ensure correct pixel format (Bgra8 Premultiplied)
+        if (softwareBitmap.BitmapPixelFormat() != winrt::BitmapPixelFormat::Bgra8 ||
+            softwareBitmap.BitmapAlphaMode() != winrt::BitmapAlphaMode::Premultiplied) {
+            softwareBitmap = winrt::SoftwareBitmap::Convert(softwareBitmap,
+                winrt::BitmapPixelFormat::Bgra8,
+                winrt::BitmapAlphaMode::Premultiplied);
+        }
+
+        // Cleanup WIC objects
+        wicBitmap->Release(); wicFrame->Release(); wicDecoder->Release(); wicFactory->Release();
+
+        // 5. Create OCR engine
+        winrt::OcrEngine engine = winrt::OcrEngine::TryCreateFromUserProfileLanguages();
+        if (!engine) return L"";
+
+        // 6. Run OCR
+        winrt::OcrResult result = engine.RecognizeAsync(softwareBitmap).get();
+        return std::wstring(result.Text().c_str());
+    });
+    return future.get();
+}
+
+// Simple RAII for CoUninitialize
+struct CoUninitializeRAII {
+    ~CoUninitializeRAII() { CoUninitialize(); }
+};
+#define wil_scope_exit(f) auto _cleanup_##__LINE__ = CoUninitializeRAII()
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -30,45 +133,17 @@ int main(int argc, char* argv[]) {
     try {
         winrt::init_apartment();
 
-        // Convert argv[1] to wide string
-        std::string pathUtf8 = argv[1];
-        std::wstring pathWide(pathUtf8.begin(), pathUtf8.end());
+        std::wstring filePath = StringToWide(argv[1]);
+        std::wstring text = OcrImageFile(filePath);
 
-        // 1. Open the image file
-        auto file = winrt::Windows::Storage::StorageFile::GetFileFromPathAsync(
-            winrt::hstring(pathWide.c_str())).get();
-
-        // 2. Open a read stream
-        auto stream = file.OpenAsync(
-            winrt::Windows::Storage::FileAccessMode::Read).get();
-
-        // 3. Decode the image
-        auto decoder = winrt::Windows::Graphics::Imaging::BitmapDecoder::CreateAsync(stream).get();
-
-        // 4. Get the SoftwareBitmap
-        auto bitmap = decoder.GetSoftwareBitmapAsync().get();
-        if (!bitmap) {
-            std::cerr << "Failed to get bitmap" << std::endl;
+        if (text.empty()) {
             return 1;
         }
 
-        // 5. Create OCR engine from user's installed languages
-        auto engine = winrt::Windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages();
-        if (!engine) {
-            std::cerr << "No OCR languages installed" << std::endl;
-            return 1;
-        }
-
-        // 6. Run OCR
-        auto result = engine.RecognizeAsync(bitmap).get();
-
-        // 7. Print recognized text to stdout
-        auto text = result.Text();
-        std::wcout << text.c_str() << std::endl;
-
+        std::cout << WideToUtf8(text) << std::endl;
         return 0;
     } catch (const winrt::hresult_error& e) {
-        std::cerr << "WinRT error: " << winrt::to_string(e.message()) << std::endl;
+        std::cerr << "WinRT error: " << WideToUtf8(e.message().c_str()) << std::endl;
         return 1;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
