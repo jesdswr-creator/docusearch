@@ -1060,8 +1060,12 @@ void MainWindow::onExtract() {
 
     contentExtractionRunning_ = true;
     const int total = todo.size();
+    // Limit to 200 files per extraction session to prevent memory buildup
+    // on low-end PCs. User can click Extract again for the rest.
+    const int maxFilesThisSession = qMin(total, 200);
     statusBar()->showMessage(
-        QString("Extracting content from %1 files...").arg(total));
+        QString("Extracting content from %1 files (showing first %2)...")
+            .arg(total).arg(maxFilesThisSession));
 
     struct ExtractState {
         QList<TodoItem> todo;
@@ -1075,26 +1079,32 @@ void MainWindow::onExtract() {
     auto* timer = new QTimer(this);
     timer->setInterval(50);  // 50ms between files — gives UI time to breathe
 
-    connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
+    connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
         auto& registry = DocumentExtractorRegistry::instance();
         sqlite3* raw = db_->raw();
 
-        if (state->idx >= total) {
+        if (state->idx >= total || state->idx >= maxFilesThisSession) {
             timer->stop();
             timer->deleteLater();
             contentExtractionRunning_ = false;
             updateIndexStats();
             refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                    .arg(state->done).arg(state->failed).arg(total), 8000);
+            if (state->idx >= total) {
+                statusBar()->showMessage(
+                    QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+                        .arg(state->done).arg(state->failed).arg(total), 8000);
+            } else {
+                statusBar()->showMessage(
+                    QString("Extracted %1 of %2 files. Click Extract again to continue.")
+                        .arg(state->done + state->failed).arg(total), 8000);
+            }
             return;
         }
 
         const auto& item = state->todo[state->idx];
         statusBar()->showMessage(
             QString("Extracting: %1/%2 (done: %3, failed: %4)...")
-                .arg(state->idx + 1).arg(total).arg(state->done).arg(state->failed));
+                .arg(state->idx + 1).arg(maxFilesThisSession).arg(state->done).arg(state->failed));
 
         if (!QFileInfo::exists(item.path)) {
             if (raw) {
