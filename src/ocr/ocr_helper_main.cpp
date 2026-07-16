@@ -61,7 +61,6 @@ std::wstring OcrImageFile(const std::wstring& filePath) {
     // Run on MTA thread (required for RecognizeAsync().get())
     auto future = std::async(std::launch::async, [&filePath]() -> std::wstring {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        auto comCleanup = wil_scope_exit([] { CoUninitialize(); });
 
         // 1. Load image via WIC (Windows Imaging Component)
         IWICImagingFactory* wicFactory = nullptr;
@@ -117,12 +116,6 @@ std::wstring OcrImageFile(const std::wstring& filePath) {
     });
     return future.get();
 }
-
-// Simple RAII for CoUninitialize
-struct CoUninitializeRAII {
-    ~CoUninitializeRAII() { CoUninitialize(); }
-};
-#define wil_scope_exit(f) auto _cleanup_##__LINE__ = CoUninitializeRAII()
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
