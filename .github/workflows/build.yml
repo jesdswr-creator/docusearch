@@ -395,16 +395,33 @@ jobs:
 
       - name: Copy OCR helper exe
         shell: pwsh
+        continue-on-error: true
         run: |
           # Copy the Windows OCR helper exe to the release folder.
-          # No models, no OpenCV DLLs, no ONNX Runtime needed —
-          # the helper uses Windows' built-in OCR (same as PowerToys).
           $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($helperExe) {
             Copy-Item $helperExe.FullName "build\bin\Release\docusearch_ocr_helper.exe" -Force
-            Write-Host "Copied docusearch_ocr_helper.exe"
+            Write-Host "Copied docusearch_ocr_helper.exe from $($helperExe.FullName)"
           } else {
-            Write-Host "WARNING: docusearch_ocr_helper.exe not found"
+            # Try common build output paths
+            $paths = @(
+              "build\Release\docusearch_ocr_helper.exe",
+              "build\Debug\docusearch_ocr_helper.exe",
+              "build\bin\Release\docusearch_ocr_helper.exe",
+              "build\bin\Debug\docusearch_ocr_helper.exe"
+            )
+            $found = $false
+            foreach ($p in $paths) {
+              if (Test-Path $p) {
+                Copy-Item $p "build\bin\Release\docusearch_ocr_helper.exe" -Force
+                Write-Host "Copied from $p"
+                $found = $true
+                break
+              }
+            }
+            if (-not $found) {
+              Write-Host "WARNING: docusearch_ocr_helper.exe not found — OCR will be unavailable"
+            }
           }
 
       - name: Build portable ZIP
