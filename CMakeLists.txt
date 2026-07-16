@@ -109,16 +109,36 @@ find_program(CPPWINRT_EXE cppwinrt
           "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
     REQUIRED)
 
+# Find the Windows SDK winmd directory (contains Windows.Foundation.winmd etc.)
+get_filename_component(WINSDK_BIN_DIR "${CPPWINRT_EXE}" DIRECTORY)
+get_filename_component(WINSDK_ROOT "${WINSDK_BIN_DIR}/../../.." ABSOLUTE)
+set(WINMD_DIR "${WINSDK_ROOT}/UnionMetadata/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}")
+
+# If not found, try common paths
+if(NOT EXISTS "${WINMD_DIR}")
+    file(GLOB WINMD_DIRS "${WINSDK_ROOT}/UnionMetadata/10.0.*")
+    if(WINMD_DIRS)
+        list(GET WINMD_DIRS 0 WINMD_DIR)
+    endif()
+endif()
+
 # Generate C++/WinRT headers into build directory
 set(CPPWINRT_OUTPUT_DIR ${CMAKE_BINARY_DIR}/cppwinrt_headers)
 file(MAKE_DIRECTORY ${CPPWINRT_OUTPUT_DIR})
 
-execute_process(
-    COMMAND ${CPPWINRT_EXE} -input winmd -output ${CPPWINRT_OUTPUT_DIR} -overwrite
-    RESULT_VARIABLE CPPWINRT_RESULT
-)
-if(NOT CPPWINRT_RESULT EQUAL 0)
-    message(WARNING "cppwinrt.exe failed (code ${CPPWINRT_RESULT}). OCR helper may not build.")
+if(EXISTS "${WINMD_DIR}")
+    message(STATUS "Generating C++/WinRT headers from: ${WINMD_DIR}")
+    execute_process(
+        COMMAND ${CPPWINRT_EXE} -input "${WINMD_DIR}" -output ${CPPWINRT_OUTPUT_DIR} -overwrite
+        RESULT_VARIABLE CPPWINRT_RESULT
+    )
+    if(NOT CPPWINRT_RESULT EQUAL 0)
+        message(WARNING "cppwinrt.exe failed (code ${CPPWINRT_RESULT}). OCR helper may not build.")
+    else()
+        message(STATUS "C++/WinRT headers generated successfully")
+    endif()
+else()
+    message(WARNING "Windows Metadata directory not found. OCR helper may not build.")
 endif()
 
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
