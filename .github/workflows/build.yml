@@ -393,56 +393,18 @@ jobs:
             Write-Host "WARNING: vcpkg bin dir not found at $vcpkgBin - Poppler DLLs may be missing."
           }
 
-      - name: Download OCR models + bundle OpenCV/ONNXRuntime DLLs
+      - name: Copy OCR helper exe
         shell: pwsh
-        continue-on-error: true
         run: |
-          $ErrorActionPreference = 'Continue'
-          # Download PP-OCRv4 mobile ONNX models (~17MB total) for RapidOCR.
-          $modelsDir = "build\bin\Release\models"
-          if (-not (Test-Path $modelsDir)) { New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null }
-
-          $modelUrls = @(
-            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx"; Out = "$modelsDir\ch_PP-OCRv4_det_infer.onnx" },
-            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_ppocr_mobile_v2.0_cls_infer.onnx"; Out = "$modelsDir\ch_ppocr_mobile_v2.0_cls_infer.onnx" },
-            @{ Url = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx"; Out = "$modelsDir\ch_PP-OCRv4_rec_infer.onnx" }
-          )
-          foreach ($m in $modelUrls) {
-            if (-not (Test-Path $m.Out)) {
-              Write-Host "Downloading $($m.Out)..."
-              try { & curl -L --retry 5 --retry-delay 3 -o $m.Out $m.Url 2>&1 } catch {}
-              if (-not (Test-Path $m.Out)) { Write-Host "WARNING: Failed to download model" }
-            }
-          }
-
-          # Download the character dictionary
-          $keysUrl = "https://raw.githubusercontent.com/RapidAI/RapidOcrCpp/main/models/OnnxRuntime/ppocr_keys_v1.txt"
-          $keysOut = "$modelsDir\ppocr_keys_v1.txt"
-          if (-not (Test-Path $keysOut)) {
-            try { & curl -L --retry 5 -o $keysOut $keysUrl 2>&1 } catch {}
-          }
-
-          $modelCount = (Get-ChildItem $modelsDir -Filter "*.onnx" -ErrorAction SilentlyContinue).Count
-          Write-Host "Downloaded $modelCount ONNX model files"
-
-          # Bundle OpenCV + ONNXRuntime DLLs from vcpkg
-          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
-          if (-not (Test-Path $vcpkgBin)) { $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin" }
-          if (Test-Path $vcpkgBin) {
-            Get-ChildItem -Path $vcpkgBin -Filter "opencv_world*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item $_.FullName "build\bin\Release\$($_.Name)" -Force -ErrorAction SilentlyContinue
-            }
-            Get-ChildItem -Path $vcpkgBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item $_.FullName "build\bin\Release\$($_.Name)" -Force -ErrorAction SilentlyContinue
-            }
-            Write-Host "Copied OCR DLLs"
-          }
-
-          # Copy helper exe
+          # Copy the Windows OCR helper exe to the release folder.
+          # No models, no OpenCV DLLs, no ONNX Runtime needed —
+          # the helper uses Windows' built-in OCR (same as PowerToys).
           $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($helperExe) {
             Copy-Item $helperExe.FullName "build\bin\Release\docusearch_ocr_helper.exe" -Force
             Write-Host "Copied docusearch_ocr_helper.exe"
+          } else {
+            Write-Host "WARNING: docusearch_ocr_helper.exe not found"
           }
 
       - name: Build portable ZIP

@@ -1755,7 +1755,9 @@ void MainWindow::onOcrThisFile(const QString& path) {
                 "No text was recognized.\n\n"
                 "This could mean:\n"
                 "  - The OCR helper (docusearch_ocr_helper.exe) is missing\n"
-                "  - The ONNX models are missing in the 'models' folder\n"
+                "  - No OCR languages are installed in Windows\n"
+                "    (Settings > Time & Language > Language >\n"
+                "     Add a language > Optical character recognition)\n"
                 "  - The image quality is too low\n"
                 "  - The file doesn't contain recognizable text");
             return;

@@ -95,80 +95,22 @@ endif()
 find_package(ZLIB REQUIRED)
 
 # ============================================================
-# RapidOCR — built as a SEPARATE helper exe (crash-isolated)
+# OCR Helper — Windows OCR via C++/WinRT (same as PowerToys)
 # ============================================================
-# The main DocuSearch app does NOT link RapidOCR. Instead, a separate
-# docusearch_ocr_helper.exe is built that links RapidOCR. The main app
-# calls it via QProcess — if OCR crashes, only the helper crashes.
-find_package(OpenCV REQUIRED)
-find_package(onnxruntime CONFIG REQUIRED)
-
-include(FetchContent)
-FetchContent_Declare(
-    rapidocr_cpp_src
-    GIT_REPOSITORY https://github.com/RapidAI/RapidOcrCpp.git
-    GIT_TAG        main
-    GIT_SHALLOW    TRUE
-)
-FetchContent_Populate(rapidocr_cpp_src)
-
-# Fix struct redefinition: make Core/OcrStruct.h and Core/OcrResult.h
-# forward to OcrStructAPI.h (single source of truth).
-file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrStruct.h
-"#ifndef OCR_STRUCT_H\n#define OCR_STRUCT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
-file(WRITE ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr/Core/OcrResult.h
-"#ifndef OCR_RESULT_H\n#define OCR_RESULT_H\n#include \"OcrStructAPI.h\"\n#endif\n")
-
-set(BUILD_WITH_ONNXRUNTIME 1)
-set(BUILD_WITH_NCNN 0)
-set(BUILD_WITH_MNN 0)
-set(BUILD_WITH_OPENVINO 0)
-set(BUILD_WITH_PADDLE 0)
-set(PROJECT_VERSION_MAJOR 1)
-set(PROJECT_VERSION_MINOR 2)
-set(PROJECT_VERSION_PATCH 3)
-set(PROJECT_NAME "RapidOcr")
-
-set(RAPIDOCR_SOURCES
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLite.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLiteImpl.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrComm.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrLoger.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/OcrProvider.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Core/clipper.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxAngleNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxCrnnNet.cpp
-    ${rapidocr_cpp_src_SOURCE_DIR}/src/Providers/OnnxRuntime/OnnxDbNet.cpp
-)
-
-# RapidOCR static library (linked into the helper exe only)
-add_library(RapidOcr STATIC ${RAPIDOCR_SOURCES})
-if(MSVC)
-    set_property(TARGET RapidOcr PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-endif()
-configure_file(
-    ${rapidocr_cpp_src_SOURCE_DIR}/cmake/Config.h.in
-    ${CMAKE_BINARY_DIR}/generated/RapidOcr/Config.h @ONLY)
-target_include_directories(RapidOcr PUBLIC
-    ${rapidocr_cpp_src_SOURCE_DIR}/include
-    ${rapidocr_cpp_src_SOURCE_DIR}/include/RapidOcr
-    ${CMAKE_BINARY_DIR}/generated
-    ${CMAKE_BINARY_DIR}/generated/RapidOcr
-    ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(RapidOcr PUBLIC ${OpenCV_LIBS} onnxruntime::onnxruntime)
-if(MSVC)
-    target_compile_options(RapidOcr PRIVATE /W0)
-endif()
-
-# Separate OCR helper executable — crash-isolated from main app
+# Standalone console app that links runtimeobject.lib directly.
+# Since it's NOT a Qt WIN32 app, there's NO entry point conflict.
+# Uses Windows.Media.Ocr (built into Windows 10 v1903+ / Windows 11).
+# No OpenCV, no ONNX Runtime, no model files needed.
+# Main app calls it via QProcess — crash-proof.
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
 if(MSVC)
     set_property(TARGET docusearch_ocr_helper PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    # Link runtimeobject.lib for WinRT
+    target_link_libraries(docusearch_ocr_helper PRIVATE runtimeobject)
+    # C++/WinRT needs /await or C++20 coroutines
+    target_compile_options(docusearch_ocr_helper PRIVATE /await /W0)
 endif()
-target_link_libraries(docusearch_ocr_helper PRIVATE RapidOcr)
-target_compile_options(docusearch_ocr_helper PRIVATE /W0)
 
 # ============================================================
 # Bundled SQLite3 (fallback)

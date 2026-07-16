@@ -1,27 +1,25 @@
 // ============================================================
-// ocr_helper_main.cpp - Standalone OCR helper executable
+// ocr_helper_main.cpp - Windows OCR helper (same as PowerToys)
 // ============================================================
 //
-// This is a SEPARATE executable that links RapidOCR and runs OCR
-// on a single image file. The main DocuSearch app calls it via
-// QProcess — if the OCR engine crashes, only this helper crashes,
-// not the main app.
+// Standalone CONSOLE app using C++/WinRT to call Windows.Media.Ocr.
+// This exe links runtimeobject.lib directly — since it's NOT a Qt
+// WIN32 app, there's NO entry point conflict.
+//
+// This is the same approach PowerToys Text Extractor uses.
 //
 // Usage: docusearch_ocr_helper.exe <image_path>
-// Output: recognized text to stdout (empty if no text or error)
-//
-// The helper loads ONNX models from <exeDir>/models/
+// Output: recognized text to stdout (UTF-8)
 // ============================================================
 
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Media.Ocr.h>
 #include <iostream>
 #include <string>
-#include <filesystem>
 
-// RapidOCR headers
-#include "OcrLiteAPI.h"
-#include "OcrStructAPI.h"
-
-#include <opencv2/opencv.hpp>
+#pragma comment(lib, "runtimeobject.lib")
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -29,66 +27,54 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string imagePath = argv[1];
-
-    // Find models directory (next to this exe)
-    namespace fs = std::filesystem;
-    fs::path exePath = fs::current_path();
-    // Try: ./models/, ../models/
-    std::string modelsDir;
-    for (const auto& candidate : {"models", "../models"}) {
-        if (fs::exists(fs::path(candidate) / "ch_PP-OCRv4_det_infer.onnx")) {
-            modelsDir = candidate;
-            break;
-        }
-    }
-    if (modelsDir.empty()) {
-        std::cerr << "Models not found" << std::endl;
-        return 1;
-    }
-
     try {
-        OcrLite ocr;
-        ocr.setProvider("OnnxRuntime");
-        ocr.setNumThread(2);
-        ocr.initLogger(false, false, false);
+        winrt::init_apartment();
 
-        std::string detPath  = modelsDir + "/ch_PP-OCRv4_det_infer.onnx";
-        std::string clsPath  = modelsDir + "/ch_ppocr_mobile_v2.0_cls_infer.onnx";
-        std::string recPath  = modelsDir + "/ch_PP-OCRv4_rec_infer.onnx";
-        std::string keysPath = modelsDir + "/ppocr_keys_v1.txt";
+        // Convert argv[1] to wide string
+        std::string pathUtf8 = argv[1];
+        std::wstring pathWide(pathUtf8.begin(), pathUtf8.end());
 
-        if (!ocr.initModels(detPath, clsPath, recPath, keysPath)) {
-            std::cerr << "Failed to load models" << std::endl;
+        // 1. Open the image file
+        auto file = winrt::Windows::Storage::StorageFile::GetFileFromPathAsync(
+            winrt::hstring(pathWide.c_str())).get();
+
+        // 2. Open a read stream
+        auto stream = file.OpenAsync(
+            winrt::Windows::Storage::FileAccessMode::Read).get();
+
+        // 3. Decode the image
+        auto decoder = winrt::Windows::Graphics::Imaging::BitmapDecoder::CreateAsync(stream).get();
+
+        // 4. Get the SoftwareBitmap
+        auto bitmap = decoder.GetSoftwareBitmapAsync().get();
+        if (!bitmap) {
+            std::cerr << "Failed to get bitmap" << std::endl;
             return 1;
         }
 
-        // Run OCR on the image file
-        fs::path p(imagePath);
-        std::string imgName = p.filename().string();
-
-        OcrResult result = ocr.detect(imagePath.c_str(), imgName.c_str(),
-            50,    // padding
-            1024,  // maxSideLen
-            0.5f,  // boxScoreThresh
-            0.3f,  // boxThresh
-            1.6f,  // unClipRatio
-            true,  // doAngle
-            true   // mostAngle
-        );
-
-        // Print recognized text to stdout
-        for (const auto& block : result.textBlocks) {
-            if (!block.text.empty()) {
-                std::cout << block.text << std::endl;
-            }
+        // 5. Create OCR engine from user's installed languages
+        auto engine = winrt::Windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages();
+        if (!engine) {
+            std::cerr << "No OCR languages installed" << std::endl;
+            return 1;
         }
+
+        // 6. Run OCR
+        auto result = engine.RecognizeAsync(bitmap).get();
+
+        // 7. Print recognized text to stdout
+        auto text = result.Text();
+        std::wcout << text.c_str() << std::endl;
+
         return 0;
+    } catch (const winrt::hresult_error& e) {
+        std::cerr << "WinRT error: " << winrt::to_string(e.message()) << std::endl;
+        return 1;
     } catch (const std::exception& e) {
-        std::cerr << "OCR error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     } catch (...) {
-        std::cerr << "Unknown OCR error" << std::endl;
+        std::cerr << "Unknown error" << std::endl;
         return 1;
     }
 }
