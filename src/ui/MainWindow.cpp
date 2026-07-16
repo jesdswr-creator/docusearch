@@ -278,6 +278,20 @@ MainWindow::MainWindow(QWidget* parent)
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 
+    // Auto-extract on startup if there are unextracted files.
+    // This handles the case where the app was closed during extraction
+    // and needs to resume on next launch.
+    QTimer::singleShot(2000, this, [this]() {
+        if (!contentExtractionRunning_ && repo_) {
+            const qint64 metaOnly = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
+            if (metaOnly > 0) {
+                statusBar()->showMessage(
+                    QString("Resuming extraction for %1 files...").arg(metaOnly), 3000);
+                onExtract();
+            }
+        }
+    });
+
     // Keyboard shortcuts
     auto* focusSearchAct = new QAction(this);
     focusSearchAct->setShortcut(QKeySequence("Ctrl+K"));
@@ -934,11 +948,18 @@ void MainWindow::onAddFolder() {
         statusBar()->showMessage("Scanning " + folder + " ...");
         QApplication::processEvents();
         scanFolderFast(folder);
-        QMessageBox::information(this, "Scan Complete",
-            QString("Files from %1 have been added to the index.\n\n"
-                    "Click the Extract button (or wait for auto-extraction) "
-                    "to extract text content from documents (PDF, DOCX, XLSX, etc.) "
-                    "so you can search by content.").arg(folder));
+
+        // Auto-start extraction immediately after scanning.
+        // This extracts text from all newly-indexed files in the
+        // background (QTimer, 200 files per session) so the user
+        // doesn't need to manually click Extract.
+        statusBar()->showMessage("Scan complete. Starting auto-extraction...", 3000);
+        QApplication::processEvents();
+        QTimer::singleShot(500, this, [this]() {
+            if (!contentExtractionRunning_) {
+                onExtract();
+            }
+        });
     } catch (...) {
         statusBar()->showMessage("Folder scan failed.", 5000);
     }
@@ -1389,8 +1410,12 @@ void MainWindow::autoScanIndexedFolders() {
     connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
         autoScanRunning_ = false;
         updateIndexStats();
-        statusBar()->showMessage("Auto-scan complete.", 5000);
+        statusBar()->showMessage("Auto-scan complete. Starting extraction...", 3000);
         watcher->deleteLater();
+        // Auto-extract any newly found files after hourly scan
+        QTimer::singleShot(500, this, [this]() {
+            if (!contentExtractionRunning_) onExtract();
+        });
     });
     watcher->setFuture(future);
 }
@@ -1861,6 +1886,10 @@ void MainWindow::onOpenSettings() {
                     statusBar()->showMessage("Scanning " + drive + " ...");
                     QApplication::processEvents();
                     scanFolderFast(drive);
+                    // Auto-extract after scanning new drives
+                    QTimer::singleShot(500, this, [this]() {
+                        if (!contentExtractionRunning_) onExtract();
+                    });
                 }
             }
         }
