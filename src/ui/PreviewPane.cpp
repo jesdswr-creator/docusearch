@@ -138,13 +138,13 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     auto* extractedPanel = new QWidget(this);
     extractedPanel->setObjectName("extractedPanel");
     auto* epLay = new QVBoxLayout(extractedPanel);
-    epLay->setContentsMargins(0, 0, 0, 0);
-    epLay->setSpacing(0);
+    epLay->setContentsMargins(0, 8, 0, 0);
+    epLay->setSpacing(4);
 
-    // Tabs row — only "Extracted Text" tab (others were non-functional)
+    // Tabs row — only "Extracted Text" tab
     auto* tabsRow = new QWidget(extractedPanel);
     auto* tabsLay = new QHBoxLayout(tabsRow);
-    tabsLay->setContentsMargins(16, 0, 16, 0);
+    tabsLay->setContentsMargins(16, 4, 16, 4);
     tabsLay->setSpacing(0);
     tabGroup_ = new QButtonGroup(this);
     tabGroup_->setExclusive(true);
@@ -155,16 +155,9 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     tabExtracted_->setCheckable(true);
     tabExtracted_->setChecked(true);
 
-    // Create placeholder tabs but don't add them to layout (non-functional)
-    tabSummary_ = new QPushButton("AI Summary", tabsRow);
-    tabSummary_->setObjectName("extractedTab");
-    tabSummary_->setCheckable(true);
-    tabHighlights_ = new QPushButton("Highlights", tabsRow);
-    tabHighlights_->setObjectName("extractedTab");
-    tabHighlights_->setCheckable(true);
-    tabRelated_ = new QPushButton("Related", tabsRow);
-    tabRelated_->setObjectName("extractedTab");
-    tabRelated_->setCheckable(true);
+    tabSummary_ = new QPushButton(this); tabSummary_->setVisible(false);
+    tabHighlights_ = new QPushButton(this); tabHighlights_->setVisible(false);
+    tabRelated_ = new QPushButton(this); tabRelated_->setVisible(false);
 
     tabGroup_->addButton(tabExtracted_, 0);
     tabGroup_->addButton(tabSummary_, 1);
@@ -236,26 +229,19 @@ void PreviewPane::setFilePath(const QString& path) {
     if (path.isEmpty()) {
         viewerTitle_->setText("No file selected");
         currentExt_.clear();
-        pageImageLbl_->setText("Select a file to preview");
-        pageImageLbl_->setPixmap(QPixmap());
-        documentPage_->clear();
+        documentPage_->setHtml(
+            "<div style='color: #999; text-align: center; padding: 60px;'>"
+            "<p style='font-size: 15px;'>Select a file to preview</p></div>");
         return;
     }
     QFileInfo fi(path);
     viewerTitle_->setText(fi.fileName());
     currentExt_ = fi.suffix().toLower();
 
-    // Choose preview mode based on file type.
-    if (currentExt_ == "pdf") {
-        showPdfPreview();
-    } else if (currentExt_ == "png" || currentExt_ == "jpg" ||
-               currentExt_ == "jpeg" || currentExt_ == "bmp" ||
-               currentExt_ == "gif" || currentExt_ == "webp") {
-        showImagePreview(path);
-    } else {
-        // DOCX, XLSX, PPTX, TXT, CSV, etc. — show extracted text.
-        showTextPreview(currentDocumentText_);
-    }
+    // For ALL file types, show the extracted text in the text browser.
+    // This is crash-safe — no image rendering, no widget swapping.
+    // PDF page images are intentionally NOT rendered (caused crashes).
+    showTextPreview(currentDocumentText_);
 }
 
 void PreviewPane::setPageInfo(int currentPage, int totalPages) {
@@ -616,16 +602,9 @@ void PreviewPane::showTextPreview(const QString& text) {
                            "padding: 8px;'>%1</div>").arg(html));
 }
 
-void PreviewPane::setPreviewMode(bool showImage) {
-    if (showImage) {
-        if (previewScroll_->widget() != pageImageLbl_) {
-            previewScroll_->setWidget(pageImageLbl_);
-        }
-    } else {
-        if (previewScroll_->widget() != documentPage_) {
-            previewScroll_->setWidget(documentPage_);
-        }
-    }
+void PreviewPane::setPreviewMode(bool) {
+    // No-op — always use text mode (documentPage_).
+    // Image mode was removed to prevent crashes from widget swapping.
 }
 
 void PreviewPane::refreshIcons() {

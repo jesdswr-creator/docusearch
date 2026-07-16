@@ -172,6 +172,7 @@ public:
     QLabel*         statusSizeLbl_        = nullptr;
     QLabel*         statusLastLbl_        = nullptr;
     QPushButton*    openLocationBtn_      = nullptr;
+    QProgressBar*   extractionProgressBar_ = nullptr;
 
     // Hidden (kept for stats plumbing)
     IndexingProgressWidget* indexingWidget_ = nullptr;

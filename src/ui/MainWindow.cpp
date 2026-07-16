@@ -277,6 +277,26 @@ MainWindow::MainWindow(QWidget* parent)
 
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
+
+    // Keyboard shortcuts
+    auto* focusSearchAct = new QAction(this);
+    focusSearchAct->setShortcut(QKeySequence("Ctrl+K"));
+    connect(focusSearchAct, &QAction::triggered, this, [this]{
+        if (searchBar_) searchBar_->setFocus(Qt::ShortcutFocusReason);
+    });
+    addAction(focusSearchAct);
+
+    auto* refreshAct = new QAction(this);
+    refreshAct->setShortcut(QKeySequence::Refresh);
+    connect(refreshAct, &QAction::triggered, this, [this]{ onRefresh(); });
+    addAction(refreshAct);
+
+    auto* openAct = new QAction(this);
+    openAct->setShortcut(QKeySequence("Ctrl+O"));
+    connect(openAct, &QAction::triggered, this, [this]{
+        if (!selectedPath_.isEmpty()) onOpenOriginal(selectedPath_);
+    });
+    addAction(openAct);
 }
 
 MainWindow::~MainWindow() {
@@ -588,13 +608,24 @@ void MainWindow::buildStatusBar() {
     lLay->addWidget(statusLastLbl_);
 
     lLay->addStretch();
+
+    // Progress bar for extraction (hidden by default)
+    extractionProgressBar_ = new QProgressBar(left);
+    extractionProgressBar_->setFixedWidth(120);
+    extractionProgressBar_->setFixedHeight(6);
+    extractionProgressBar_->setTextVisible(false);
+    extractionProgressBar_->setRange(0, 100);
+    extractionProgressBar_->setValue(0);
+    extractionProgressBar_->setVisible(false);
+    lLay->addWidget(extractionProgressBar_);
+
     sb->addWidget(left, 1);
 
     // Right side: Open Original Location button
     openLocationBtn_ = new QPushButton(sb);
     openLocationBtn_->setObjectName("openLocationBtn");
     openLocationBtn_->setCursor(Qt::PointingHandCursor);
-    openLocationBtn_->setText("Open Original Location");
+    openLocationBtn_->setText("Open Location");
     openLocationBtn_->setToolTip("Open the folder containing the selected file");
     sb->addPermanentWidget(openLocationBtn_);
 }
@@ -1060,12 +1091,16 @@ void MainWindow::onExtract() {
 
     contentExtractionRunning_ = true;
     const int total = todo.size();
-    // Limit to 200 files per extraction session to prevent memory buildup
-    // on low-end PCs. User can click Extract again for the rest.
     const int maxFilesThisSession = qMin(total, 200);
     statusBar()->showMessage(
-        QString("Extracting content from %1 files (showing first %2)...")
-            .arg(total).arg(maxFilesThisSession));
+        QString("Extracting %1 of %2 files...").arg(maxFilesThisSession).arg(total));
+
+    // Show progress bar
+    if (extractionProgressBar_) {
+        extractionProgressBar_->setRange(0, maxFilesThisSession);
+        extractionProgressBar_->setValue(0);
+        extractionProgressBar_->setVisible(true);
+    }
 
     struct ExtractState {
         QList<TodoItem> todo;
@@ -1087,6 +1122,7 @@ void MainWindow::onExtract() {
             timer->stop();
             timer->deleteLater();
             contentExtractionRunning_ = false;
+            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
             updateIndexStats();
             refreshPreviewForSelectedFile();
             if (state->idx >= total) {
@@ -1105,6 +1141,7 @@ void MainWindow::onExtract() {
         statusBar()->showMessage(
             QString("Extracting: %1/%2 (done: %3, failed: %4)...")
                 .arg(state->idx + 1).arg(maxFilesThisSession).arg(state->done).arg(state->failed));
+        if (extractionProgressBar_) extractionProgressBar_->setValue(state->idx + 1);
 
         if (!QFileInfo::exists(item.path)) {
             if (raw) {
