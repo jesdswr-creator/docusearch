@@ -1701,157 +1701,172 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // Run OCR in a background thread to prevent UI freeze/crash.
-    // The OCR engine (RapidOCR) does CPU-intensive ONNX inference that
-    // can take 5-30 seconds. Running on the main thread freezes the UI
-    // and can crash if the OS sends paint events during inference.
+    // OCR runs in a SEPARATE PROCESS (docusearch_ocr_helper.exe).
+    // No need for QtConcurrent — the helper exe is crash-isolated.
+    // We use QProcess on the main thread with processEvents() to
+    // keep the UI responsive while waiting.
     const qint64 fileId = selectedFileId_;
     const QString filePath = path;
-    const QString fileExt = ext;
 
-    statusBar()->showMessage("Running OCR in background...", 0);
-    ocrBtnEnabled_ = false;
+    statusBar()->showMessage("Running OCR...", 0);
+    QApplication::processEvents();
 
-    QFuture<QString> future = QtConcurrent::run([filePath, fileExt, isImage]() -> QString {
-        WindowsOcrEngine ocrEngine;
-        if (!ocrEngine.init()) {
-            return QString();  // empty = init failed
-        }
+    WindowsOcrEngine ocrEngine;
+    if (!ocrEngine.init()) {
+        statusBar()->showMessage("OCR helper not found.", 5000);
+        QMessageBox::information(this, "OCR",
+            "OCR helper (docusearch_ocr_helper.exe) not found.\n"
+            "Make sure it's in the same folder as DocuSearch.exe.");
+        return;
+    }
 
-        QString ocrText;
+    QString ocrText;
 
-        if (isImage) {
-            ocrText = ocrEngine.ocrFile(filePath);
-        }
+    if (isImage) {
+        statusBar()->showMessage("OCR: processing image...", 0);
+        QApplication::processEvents();
+        ocrText = ocrEngine.ocrFile(filePath);
+    }
 #ifdef DOCUSEARCH_HAS_POPPLER
-        else if (fileExt == "pdf") {
-            try {
-                auto doc = poppler::document::load_from_file(filePath.toStdString());
-                if (!doc || doc->pages() == 0) return QString();
-
-                poppler::page_renderer renderer;
-                renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-                const int dpi = Constants::kPdfOcrDpi;
-                const int maxPages = std::min(doc->pages(), Constants::kMaxPdfOcrPages);
-
-                for (int i = 0; i < maxPages; ++i) {
-                    try {
-                        auto* pagePtr = doc->create_page(i);
-                        if (!pagePtr) continue;
-                        auto img_data = renderer.render_page(pagePtr, dpi, dpi);
-                        if (!img_data.is_valid()) continue;
-                        char* dataPtr = const_cast<char*>(img_data.data());
-                        if (!dataPtr) continue;
-                        QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
-                                    img_data.width(), img_data.height(),
-                                    img_data.bytes_per_row(),
-                                    QImage::Format_ARGB32);
-                        if (qimg.isNull()) continue;
-                        QString pageText = ocrEngine.ocrImage(qimg);
-                        if (!pageText.isEmpty()) {
-                            ocrText += pageText + "\n";
-                        }
-                    } catch (...) {
-                        // Skip this page
-                    }
-                }
-            } catch (...) {
-                return QString();
-            }
-        }
-#endif
-        return ocrText;
-    });
-
-    auto* watcher = new QFutureWatcher<QString>(this);
-    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, fileId, filePath, fileExt]() {
-        ocrBtnEnabled_ = true;
-        QString ocrText = watcher->result();
-        watcher->deleteLater();
-
-        if (ocrText.isEmpty()) {
-            statusBar()->showMessage("OCR completed but no text was recognized.", 5000);
-            QMessageBox::information(this, "OCR",
-                "No text was recognized.\n\n"
-                "This could mean:\n"
-                "  - The OCR helper (docusearch_ocr_helper.exe) is missing\n"
-                "  - No OCR languages are installed in Windows\n"
-                "    (Settings > Time & Language > Language >\n"
-                "     Add a language > Optical character recognition)\n"
-                "  - The image quality is too low\n"
-                "  - The file doesn't contain recognizable text");
-            return;
-        }
-
-        // Save OCR text to database.
+    else if (isPdf) {
+        // For PDFs: render each page to image, save as temp PNG,
+        // then OCR each page via the helper exe.
         try {
-            sqlite3* raw = db_->raw();
-            if (raw) {
-                QByteArray textBytes = ocrText.toUtf8();
-                qint64 now = QDateTime::currentSecsSinceEpoch();
+            statusBar()->showMessage("OCR: opening PDF...", 0);
+            QApplication::processEvents();
 
-                sqlite3_stmt* upd = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                    "VALUES (?1, ?2, 'ocr', ?3, ?4) "
-                    "ON CONFLICT(file_id) DO UPDATE SET "
-                    "  extracted_text=excluded.extracted_text, "
-                    "  text_source='ocr', "
-                    "  char_count=excluded.char_count, "
-                    "  updated_at=excluded.updated_at;",
-                    -1, &upd, nullptr);
-                if (upd) {
-                    sqlite3_bind_int64(upd, 1, fileId);
-                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(upd, 3, ocrText.size());
-                    sqlite3_bind_int64(upd, 4, now);
-                    sqlite3_step(upd);
-                    sqlite3_finalize(upd);
-                }
+            auto doc = poppler::document::load_from_file(filePath.toStdString());
+            if (!doc || doc->pages() == 0) {
+                statusBar()->showMessage("OCR: failed to open PDF.", 5000);
+                return;
+            }
 
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='content_done', ocr_status='done' WHERE id=%1;")
-                        .arg(fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
+            poppler::page_renderer renderer;
+            renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
+            const int dpi = 96;  // lower DPI for OCR speed
+            const int maxPages = (doc->pages() < 10) ? doc->pages() : 10;  // max 10 pages
 
-                sqlite3_stmt* del = nullptr;
-                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
-                                   -1, &del, nullptr);
-                if (del) {
-                    sqlite3_bind_int64(del, 1, fileId);
-                    sqlite3_step(del);
-                    sqlite3_finalize(del);
-                }
-                QFileInfo fi(filePath);
-                QByteArray fn = fi.fileName().toUtf8();
-                QByteArray pth = filePath.toUtf8();
-                QByteArray ext2 = fileExt.toUtf8();
-                sqlite3_stmt* ins = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                    "VALUES (?1, ?2, ?3, ?4, ?5);",
-                    -1, &ins, nullptr);
-                if (ins) {
-                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 4, ext2.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(ins, 5, fileId);
-                    sqlite3_step(ins);
-                    sqlite3_finalize(ins);
+            for (int i = 0; i < maxPages; ++i) {
+                statusBar()->showMessage(
+                    QString("OCR: page %1/%2...").arg(i + 1).arg(maxPages), 0);
+                QApplication::processEvents();
+
+                try {
+                    auto* pagePtr = doc->create_page(i);
+                    if (!pagePtr) continue;
+                    auto img_data = renderer.render_page(pagePtr, dpi, dpi);
+                    if (!img_data.is_valid()) continue;
+                    char* dataPtr = const_cast<char*>(img_data.data());
+                    if (!dataPtr) continue;
+                    QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
+                                img_data.width(), img_data.height(),
+                                img_data.bytes_per_row(),
+                                QImage::Format_ARGB32);
+                    if (qimg.isNull()) continue;
+
+                    // Save page as temp PNG and OCR it
+                    QString tempPath = QDir::tempPath() + "/docusearch_ocr_page_" +
+                        QString::number(i) + ".png";
+                    qimg.save(tempPath, "PNG");
+
+                    QString pageText = ocrEngine.ocrFile(tempPath);
+                    QFile::remove(tempPath);
+
+                    if (!pageText.isEmpty()) {
+                        ocrText += pageText + "\n";
+                    }
+                } catch (...) {
+                    // Skip this page
                 }
             }
         } catch (...) {
-            // DB save failure is non-fatal
+            statusBar()->showMessage("OCR: PDF rendering failed.", 5000);
+            return;
         }
+    }
+#endif
 
-        previewPane_->setExtractedText(ocrText);
-        previewPane_->setDocumentText(ocrText);
-        updateIndexStats();
-        statusBar()->showMessage(
-            QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
-    });
-    watcher->setFuture(future);
+    if (ocrText.isEmpty()) {
+        statusBar()->showMessage("OCR: no text recognized.", 5000);
+        QMessageBox::information(this, "OCR",
+            "No text was recognized.\n\n"
+            "This could mean:\n"
+            "  - The OCR helper (docusearch_ocr_helper.exe) is missing\n"
+            "  - No OCR languages are installed in Windows\n"
+            "    (Settings > Time & Language > Language >\n"
+            "     Add a language > Optical character recognition)\n"
+            "  - The image quality is too low\n"
+            "  - The file doesn't contain recognizable text");
+        return;
+    }
+
+    // Save OCR text to database.
+    try {
+        sqlite3* raw = db_->raw();
+        if (raw) {
+            QByteArray textBytes = ocrText.toUtf8();
+            qint64 now = QDateTime::currentSecsSinceEpoch();
+
+            sqlite3_stmt* upd = nullptr;
+            sqlite3_prepare_v2(raw,
+                "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
+                "VALUES (?1, ?2, 'ocr', ?3, ?4) "
+                "ON CONFLICT(file_id) DO UPDATE SET "
+                "  extracted_text=excluded.extracted_text, "
+                "  text_source='ocr', "
+                "  char_count=excluded.char_count, "
+                "  updated_at=excluded.updated_at;",
+                -1, &upd, nullptr);
+            if (upd) {
+                sqlite3_bind_int64(upd, 1, fileId);
+                sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(upd, 3, ocrText.size());
+                sqlite3_bind_int64(upd, 4, now);
+                sqlite3_step(upd);
+                sqlite3_finalize(upd);
+            }
+
+            sqlite3_exec(raw,
+                QString("UPDATE Files SET indexing_status='content_done', ocr_status='done' WHERE id=%1;")
+                    .arg(fileId).toUtf8().constData(),
+                nullptr, nullptr, nullptr);
+
+            sqlite3_stmt* del = nullptr;
+            sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
+                               -1, &del, nullptr);
+            if (del) {
+                sqlite3_bind_int64(del, 1, fileId);
+                sqlite3_step(del);
+                sqlite3_finalize(del);
+            }
+            QFileInfo fi(filePath);
+            QByteArray fn = fi.fileName().toUtf8();
+            QByteArray pth = filePath.toUtf8();
+            QByteArray ext2 = ext.toUtf8();
+            sqlite3_stmt* ins = nullptr;
+            sqlite3_prepare_v2(raw,
+                "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
+                "VALUES (?1, ?2, ?3, ?4, ?5);",
+                -1, &ins, nullptr);
+            if (ins) {
+                sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(ins, 4, ext2.constData(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(ins, 5, fileId);
+                sqlite3_step(ins);
+                sqlite3_finalize(ins);
+            }
+        }
+    } catch (...) {
+        // DB save failure is non-fatal
+    }
+
+    previewPane_->setExtractedText(ocrText);
+    previewPane_->setDocumentText(ocrText);
+    updateIndexStats();
+    statusBar()->showMessage(
+        QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
 }
 
 void MainWindow::onOpenSettings() {
