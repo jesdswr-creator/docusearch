@@ -1073,7 +1073,7 @@ void MainWindow::onExtract() {
         sqlite3_stmt* s = nullptr;
         const char* sql =
             "SELECT id, path, extension FROM Files "
-            "WHERE indexing_status != 'content_done' "
+            "WHERE indexing_status = 'metadata_only' "
             "AND extension IN ("
             "'pdf','doc','docx',"
             "'xls','xlsx','xlsm',"
@@ -1185,6 +1185,23 @@ void MainWindow::onExtract() {
                 extractedText = result.text;
                 source = result.source.isEmpty() ? "native" : result.source;
                 ok = true;
+
+                // If the extractor says needsOcr and text is empty,
+                // mark the file as 'needs_ocr' (not 'failed').
+                // The user can run OCR later via the OCR button.
+                if (result.needsOcr && extractedText.isEmpty()) {
+                    if (raw) {
+                        sqlite3_exec(raw,
+                            QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
+                                .arg(item.fileId).toUtf8().constData(),
+                            nullptr, nullptr, nullptr);
+                    }
+                    ++state->done;  // count as done (just needs OCR later)
+                    ok = false;     // skip the DB insert below
+                }
+            } catch (const std::exception& e) {
+                DS_WARN("Extract", QString("Failed: %1 — %2").arg(item.path).arg(e.what()));
+                ok = false;
             } catch (...) {
                 ok = false;
             }
@@ -1194,7 +1211,7 @@ void MainWindow::onExtract() {
                 extractedText = extractedText.left(Constants::kMaxExtractTextChars) + "\n\n[... text truncated for memory ...]";
             }
 
-            if (ok && raw) {
+            if (ok && !extractedText.isEmpty() && raw) {
                 QByteArray textBytes = extractedText.toUtf8();
                 QByteArray srcBytes = source.toUtf8();
                 qint64 charCount = extractedText.size();
