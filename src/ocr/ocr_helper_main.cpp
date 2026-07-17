@@ -93,8 +93,9 @@ static winrt::SoftwareBitmap DownscaleIfNeeded(winrt::SoftwareBitmap bitmap) {
     uint32_t h = bitmap.PixelHeight();
     if (w <= maxDim && h <= maxDim) return bitmap;
 
-    double scale = std::min(static_cast<double>(maxDim) / w,
-                            static_cast<double>(maxDim) / h);
+    double scale = (static_cast<double>(maxDim) / w < static_cast<double>(maxDim) / h)
+                   ? (static_cast<double>(maxDim) / w)
+                   : (static_cast<double>(maxDim) / h);
     uint32_t newW = static_cast<uint32_t>(w * scale);
     uint32_t newH = static_cast<uint32_t>(h * scale);
 
