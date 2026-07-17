@@ -1101,7 +1101,7 @@ void MainWindow::onExtract() {
 
     contentExtractionRunning_ = true;
     const int total = todo.size();
-    const int maxFilesThisSession = qMin(total, 200);
+    const int maxFilesThisSession = qMin(total, 50);
     statusBar()->showMessage(
         QString("Extracting %1 of %2 files...").arg(maxFilesThisSession).arg(total));
 
@@ -1122,9 +1122,10 @@ void MainWindow::onExtract() {
     state->todo = std::move(todo);
 
     auto* timer = new QTimer(this);
-    timer->setInterval(50);  // 50ms between files — gives UI time to breathe
+    timer->setInterval(100);  // 100ms between files — gives UI time to process events
 
     connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
+      try {
         auto& registry = DocumentExtractorRegistry::instance();
         sqlite3* raw = db_->raw();
 
@@ -1265,6 +1266,13 @@ void MainWindow::onExtract() {
         }
 
         ++state->idx;
+      } catch (const std::exception& e) {
+          statusBar()->showMessage(QString("Extraction error: %1").arg(e.what()), 5000);
+          ++state->idx;
+      } catch (...) {
+          statusBar()->showMessage("Extraction error — skipping file.", 3000);
+          ++state->idx;
+      }
     });
 
     timer->start();
