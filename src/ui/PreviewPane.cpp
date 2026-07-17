@@ -639,45 +639,46 @@ void PreviewPane::refreshIcons() {
 
 void PreviewPane::highlightSearchTerms() {
     if (searchQuery_.isEmpty() || currentDocumentText_.isEmpty()) return;
+    if (searchQuery_.length() < 2) return;  // skip very short queries
 
-    // Only highlight in text preview mode (not PDF image mode)
-    QFileInfo fi(currentPath_);
-    const QString ext = fi.suffix().toLower();
-    if (ext == "pdf" || ext == "png" || ext == "jpg" ||
-        ext == "jpeg" || ext == "bmp" || ext == "gif" ||
-        ext == "webp") {
-        return;
-    }
+    QColor highlightColor(255, 248, 120);
 
-    QColor highlightColor(255, 248, 120);  // light yellow
-    // No flags = case-insensitive search (Qt default).
-    QTextDocument::FindFlags flags;
+    // Limit number of highlights to prevent memory issues
+    const int MAX_HIGHLIGHTS = 100;
 
     // Highlight in document preview
     QList<QTextEdit::ExtraSelection> extraSelections;
     QTextCursor cursor(documentPage_->document());
-    while (!cursor.isNull() && !cursor.atEnd()) {
-        cursor = documentPage_->document()->find(searchQuery_, cursor, flags);
+    int count = 0;
+    while (!cursor.isNull() && !cursor.atEnd() && count < MAX_HIGHLIGHTS) {
+        cursor = documentPage_->document()->find(searchQuery_, cursor);
         if (cursor.isNull()) break;
         QTextEdit::ExtraSelection sel;
         sel.format.setBackground(highlightColor);
         sel.cursor = cursor;
         extraSelections.append(sel);
+        ++count;
     }
-    documentPage_->setExtraSelections(extraSelections);
+    if (!extraSelections.isEmpty()) {
+        documentPage_->setExtraSelections(extraSelections);
+    }
 
     // Highlight in extracted content panel
     QList<QTextEdit::ExtraSelection> extraSelections2;
     QTextCursor cursor2(extractedContent_->document());
-    while (!cursor2.isNull() && !cursor2.atEnd()) {
-        cursor2 = extractedContent_->document()->find(searchQuery_, cursor2, flags);
+    count = 0;
+    while (!cursor2.isNull() && !cursor2.atEnd() && count < MAX_HIGHLIGHTS) {
+        cursor2 = extractedContent_->document()->find(searchQuery_, cursor2);
         if (cursor2.isNull()) break;
         QTextEdit::ExtraSelection sel;
         sel.format.setBackground(highlightColor);
         sel.cursor = cursor2;
         extraSelections2.append(sel);
+        ++count;
     }
-    extractedContent_->setExtraSelections(extraSelections2);
+    if (!extraSelections2.isEmpty()) {
+        extractedContent_->setExtraSelections(extraSelections2);
+    }
 }
 
 } // namespace DocuSearch

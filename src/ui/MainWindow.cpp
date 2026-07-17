@@ -773,6 +773,7 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     if (!repo_ || !db_) return;
     selectedFileId_ = fileId;
     selectedPath_   = path;
+
     try {
         FileRecord r;
         if (fileId != 0 && repo_->getById(fileId, r)) {
@@ -781,8 +782,13 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
             tagsNotesPane_->setTags(r.tags);
             tagsNotesPane_->setNote(r.note);
         }
-        previewPane_->setFilePath(path);
+    } catch (...) {}
 
+    try {
+        previewPane_->setFilePath(path);
+    } catch (...) {}
+
+    try {
         // Load extracted text from DocumentText table.
         QString extracted;
         if (fileId != 0) {
@@ -802,20 +808,20 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
                 }
             }
         }
+        // Cap the text length to prevent UI freeze on very large documents
+        if (extracted.size() > 50000) {
+            extracted = extracted.left(50000) + "\n\n[... text truncated ...]";
+        }
         previewPane_->setExtractedText(extracted.isEmpty()
             ? "No content extracted for this file."
             : extracted);
         previewPane_->setDocumentText(extracted);
-
-        // Pass the current search query to the preview pane so it can
-        // highlight matching terms in the document text.
-        previewPane_->setSearchQuery(searchBar_->text());
-
-        // Page info: just 1 page for now (we don't render PDF pages).
-        previewPane_->setPageInfo(1, 1);
     } catch (...) {
-        statusBar()->showMessage("Failed to load file details.", 3000);
+        statusBar()->showMessage("Failed to load file preview.", 3000);
     }
+
+    // NOTE: Search highlighting is DISABLED — it was causing crashes
+    // on large documents. Will re-enable with a safer implementation.
 }
 
 void MainWindow::onFileActivated(qint64 fileId, const QString& path) {
@@ -1101,7 +1107,7 @@ void MainWindow::onExtract() {
 
     contentExtractionRunning_ = true;
     const int total = todo.size();
-    const int maxFilesThisSession = qMin(total, 50);
+    const int maxFilesThisSession = qMin(total, 30);
     statusBar()->showMessage(
         QString("Extracting %1 of %2 files...").arg(maxFilesThisSession).arg(total));
 
@@ -1122,7 +1128,7 @@ void MainWindow::onExtract() {
     state->todo = std::move(todo);
 
     auto* timer = new QTimer(this);
-    timer->setInterval(100);  // 100ms between files — gives UI time to process events
+    timer->setInterval(200);  // 200ms between files — gives UI time to process events
 
     connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
       try {
