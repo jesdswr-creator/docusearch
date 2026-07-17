@@ -1,12 +1,5 @@
 // ============================================================
-// WindowsOcrEngine.cpp - Windows OCR via helper exe (same as PowerToys)
-// ============================================================
-//
-// Uses Windows' built-in OCR (Windows.Media.Ocr) via a separate
-// helper exe. Same approach as PowerToys Text Extractor.
-//
-// No Python, no OpenCV, no ONNX Runtime, no model files.
-// Just Windows 10 v1903+ or Windows 11.
+// WindowsOcrEngine.cpp - Windows OCR via helper exe
 // ============================================================
 
 #include "WindowsOcrEngine.h"
@@ -19,6 +12,7 @@
 #include <QFile>
 #include <QProcess>
 #include <QDateTime>
+#include <QStringList>
 
 namespace DocuSearch {
 
@@ -26,7 +20,6 @@ WindowsOcrEngine::WindowsOcrEngine() = default;
 WindowsOcrEngine::~WindowsOcrEngine() = default;
 
 bool WindowsOcrEngine::init() {
-    // Check if the helper exe exists.
     const QString appDir = QCoreApplication::applicationDirPath();
     const QString helper = appDir + "/docusearch_ocr_helper.exe";
 
@@ -68,7 +61,7 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
         DS_WARN("OCR", "Failed to start OCR helper");
         return {};
     }
-    if (!proc.waitForFinished(60000)) {
+    if (!proc.waitForFinished(120000)) {  // 2 min timeout (allows for large images)
         DS_WARN("OCR", "OCR helper timed out");
         proc.kill();
         return {};
@@ -76,10 +69,29 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
 
     if (proc.exitCode() != 0) {
         DS_WARN("OCR", "OCR helper exited with code " + QString::number(proc.exitCode()));
-        return {};
     }
 
-    return QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+    // Parse output: ===FILE===<path>\n<text>\n===END===
+    QString output = QString::fromUtf8(proc.readAllStandardOutput());
+    QStringList lines = output.split('\n', Qt::KeepEmptyParts);
+
+    QString text;
+    bool inFile = false;
+    for (const QString& line : lines) {
+        if (line.startsWith("===FILE===")) {
+            inFile = true;
+            continue;
+        }
+        if (line.startsWith("===END===")) {
+            inFile = false;
+            continue;
+        }
+        if (inFile) {
+            text += line + "\n";
+        }
+    }
+
+    return text.trimmed();
 }
 
 QStringList WindowsOcrEngine::availableLanguages() {
