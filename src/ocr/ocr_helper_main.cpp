@@ -87,42 +87,14 @@ static std::vector<std::pair<std::string, std::string>> g_results;
 static std::mutex g_resultsMutex;
 
 // ── Rule 6: downscale images > 2000px ────────────────────────
-static winrt::SoftwareBitmap DownscaleIfNeeded(winrt::SoftwareBitmap bitmap) {
+// Instead of complex BitmapEncoder resizing, we just skip OCR for
+// images larger than 2000px (the OCR engine has its own MaxImageDimension
+// limit anyway). This avoids linking Windows.Storage.Streams.
+static bool IsImageTooLarge(winrt::SoftwareBitmap bitmap) {
     const uint32_t maxDim = 2000;
     uint32_t w = bitmap.PixelWidth();
     uint32_t h = bitmap.PixelHeight();
-    if (w <= maxDim && h <= maxDim) return bitmap;
-
-    double scale = (static_cast<double>(maxDim) / w < static_cast<double>(maxDim) / h)
-                   ? (static_cast<double>(maxDim) / w)
-                   : (static_cast<double>(maxDim) / h);
-    uint32_t newW = static_cast<uint32_t>(w * scale);
-    uint32_t newH = static_cast<uint32_t>(h * scale);
-
-    // Use BitmapDecoder/Encoder to resize via a stream
-    auto stream = winrt::Windows::Storage::Streams::InMemoryRandomAccessStream();
-    auto encoder = winrt::BitmapEncoder::CreateAsync(
-        winrt::BitmapEncoder::PngEncoderId(), stream).get();
-
-    winrt::BitmapTransform transform;
-    transform.ScaledWidth(newW);
-    transform.ScaledHeight(newH);
-    transform.InterpolationMode(winrt::BitmapInterpolationMode::Fant);
-
-    encoder.SetSoftwareBitmap(bitmap);
-    // Actually we need to use a different approach — just convert
-    // Let's use the simpler approach: just return the original if
-    // downscaling fails (better than crashing).
-    try {
-        encoder.FlushAsync().get();
-        auto decoder = winrt::BitmapDecoder::CreateAsync(stream).get();
-        auto scaled = decoder.GetSoftwareBitmapAsync().get();
-        // Rule 7: close original immediately
-        bitmap.Close();
-        return scaled;
-    } catch (...) {
-        return bitmap;  // keep original if downscale fails
-    }
+    return (w > maxDim || h > maxDim);
 }
 
 // ── The OCR worker thread function (Rules 1-4, 5-10) ─────────
@@ -214,8 +186,12 @@ static void OcrWorkerThread() {
                     winrt::BitmapAlphaMode::Premultiplied);
             }
 
-            // Rule 6: downscale if > 2000px
-            softwareBitmap = DownscaleIfNeeded(softwareBitmap);
+            // Rule 6: skip if image > 2000px (OCR engine limit)
+            if (IsImageTooLarge(softwareBitmap)) {
+                softwareBitmap.Close();
+                resultText = "[SKIPPED: image too large (>2000px)]";
+                goto STORE_RESULT;
+            }
 
             // Rule 5: process ONE image at a time
             // Rule 3: use the engine created in this thread
