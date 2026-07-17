@@ -152,13 +152,15 @@ QLabel#zoomLevel { font-size: 11px; color: #777; background: transparent; min-wi
 QTextEdit#documentPage { background-color: #fff; color: #1a1a1a; border: none; padding: 24px; font-size: 13px; }
 
 /* ===== Extracted panel ===== */
-QWidget#extractedPanel { background-color: #fff; border-top: 1px solid #e5e5e5; }
+QWidget#extractedPanel { background-color: #fff; border-top: 2px solid #e5e5e5; }
+QWidget#extractedTabHeader { background-color: #f8fafc; border-bottom: 1px solid #e5e5e5; }
 QPushButton#extractedTab {
-    background: transparent; color: #888; border: none;
-    border-bottom: 2px solid transparent; padding: 7px 12px;
-    font-size: 12px; font-weight: 500;
+    background: transparent; color: #666; border: none;
+    border-bottom: 3px solid transparent; padding: 8px 16px;
+    font-size: 12px; font-weight: 600;
 }
-QPushButton#extractedTab:checked { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+QPushButton#extractedTab:hover { color: #333; }
+QPushButton#extractedTab:checked { color: #2563eb; border-bottom-color: #2563eb; }
 QTextEdit#extractedContent { background-color: #f9fafb; color: #555; border: none; padding: 8px 12px; font-size: 12px; }
 QPushButton#openBtn { background-color: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 600; }
 QPushButton#openBtn:hover { background-color: #1d4ed8; }

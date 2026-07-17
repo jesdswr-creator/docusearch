@@ -278,19 +278,8 @@ MainWindow::MainWindow(QWidget* parent)
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 
-    // Auto-extract on startup if there are unextracted files.
-    // This handles the case where the app was closed during extraction
-    // and needs to resume on next launch.
-    QTimer::singleShot(2000, this, [this]() {
-        if (!contentExtractionRunning_ && repo_) {
-            const qint64 metaOnly = repo_->countByStatus(Constants::IndexingStatus::kMetadataOnly);
-            if (metaOnly > 0) {
-                statusBar()->showMessage(
-                    QString("Resuming extraction for %1 files...").arg(metaOnly), 3000);
-                onExtract();
-            }
-        }
-    });
+    // NOTE: Auto-extract on startup is DISABLED to prevent crashes.
+    // Extraction only happens after Add Folder or manual Extract button click.
 
     // Keyboard shortcuts
     auto* focusSearchAct = new QAction(this);

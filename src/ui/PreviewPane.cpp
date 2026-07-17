@@ -138,22 +138,24 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     auto* extractedPanel = new QWidget(this);
     extractedPanel->setObjectName("extractedPanel");
     auto* epLay = new QVBoxLayout(extractedPanel);
-    epLay->setContentsMargins(0, 8, 0, 0);
-    epLay->setSpacing(4);
+    epLay->setContentsMargins(0, 0, 0, 0);
+    epLay->setSpacing(0);
 
-    // Tabs row — only "Extracted Text" tab
+    // Tab header with visible border and proper padding
     auto* tabsRow = new QWidget(extractedPanel);
+    tabsRow->setObjectName("extractedTabHeader");
     auto* tabsLay = new QHBoxLayout(tabsRow);
-    tabsLay->setContentsMargins(16, 4, 16, 4);
-    tabsLay->setSpacing(0);
+    tabsLay->setContentsMargins(16, 8, 16, 8);
+    tabsLay->setSpacing(8);
     tabGroup_ = new QButtonGroup(this);
     tabGroup_->setExclusive(true);
 
-    tabExtracted_ = new QPushButton("Extracted Text", tabsRow);
+    tabExtracted_ = new QPushButton("  Extracted Text  ", tabsRow);
     tabExtracted_->setObjectName("extractedTab");
     tabExtracted_->setCursor(Qt::PointingHandCursor);
     tabExtracted_->setCheckable(true);
     tabExtracted_->setChecked(true);
+    tabExtracted_->setMinimumHeight(28);
 
     tabSummary_ = new QPushButton(this); tabSummary_->setVisible(false);
     tabHighlights_ = new QPushButton(this); tabHighlights_->setVisible(false);
@@ -168,20 +170,20 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     tabsLay->addStretch();
     epLay->addWidget(tabsRow);
 
-    // Content
+    // Content — give it more height and proper padding
     extractedContent_ = new QTextEdit(extractedPanel);
     extractedContent_->setObjectName("extractedContent");
     extractedContent_->setReadOnly(true);
-    extractedContent_->setPlaceholderText("Extracted text will appear here after content extraction.");
-    extractedContent_->setMaximumHeight(140);
-    extractedContent_->setMinimumHeight(80);
+    extractedContent_->setPlaceholderText("Extracted text will appear here after extraction.");
+    extractedContent_->setMaximumHeight(160);
+    extractedContent_->setMinimumHeight(100);
     epLay->addWidget(extractedContent_);
 
-    // Action buttons row: spacer + Copy + Download
+    // Action buttons row
     auto* actionsRow = new QWidget(extractedPanel);
     auto* actLay = new QHBoxLayout(actionsRow);
-    actLay->setContentsMargins(16, 0, 16, 8);
-    actLay->setSpacing(4);
+    actLay->setContentsMargins(16, 6, 16, 8);
+    actLay->setSpacing(6);
     actLay->addStretch();
     copyBtn_ = new QPushButton("Copy", actionsRow);
     copyBtn_->setObjectName("copyBtn");
