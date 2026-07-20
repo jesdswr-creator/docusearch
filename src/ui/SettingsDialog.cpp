@@ -24,6 +24,13 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QListWidget>
+#include <QSlider>
+#include <QSpinBox>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QCheckBox>
+#include <QLineEdit>
+#include <QComboBox>
 #include <sqlite3.h>
 
 namespace DocuSearch {
@@ -274,6 +281,78 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     appLay->addWidget(darkModeCheck_);
     appLay->addStretch();
     tabs->addTab(appTab, "Appearance");
+
+    // -------- Semantic Search tab --------
+    // Shows BGE model status, embedding count, and search parameters.
+    auto* semTab = new QWidget(this);
+    auto* semLay = new QVBoxLayout(semTab);
+
+    // Model status group
+    auto* modelGroup = new QGroupBox("BGE Embedding Model", this);
+    auto* modelLay = new QVBoxLayout(modelGroup);
+
+    const QString modelPath = QCoreApplication::applicationDirPath() +
+                              "/models/bge-small-en-v1.5/model.onnx";
+    const bool modelExists = QFileInfo::exists(modelPath);
+    auto* modelStatusLbl = new QLabel(
+        modelExists
+            ? QString("Status: <b>Ready</b><br>Path: %1").arg(modelPath)
+            : QString("Status: <b>Not installed</b><br>"
+                      "Run <code>scripts/download_bge_model.ps1</code> to install."),
+        this);
+    modelStatusLbl->setTextFormat(Qt::RichText);
+    modelStatusLbl->setWordWrap(true);
+    modelLay->addWidget(modelStatusLbl);
+
+    auto* dlBtn = new QPushButton("Open Model Download Page", this);
+    connect(dlBtn, &QPushButton::clicked, []() {
+        QDesktopServices::openUrl(QUrl(
+            "https://huggingface.co/BAAI/bge-small-en-v1.5"));
+    });
+    modelLay->addWidget(dlBtn);
+    semLay->addWidget(modelGroup);
+
+    // Search parameters group
+    auto* searchGroup = new QGroupBox("Search Settings", this);
+    auto* searchLay = new QVBoxLayout(searchGroup);
+
+    auto* weightLbl = new QLabel(
+        "Semantic Weight (40% = balanced, 0% = keyword only)", this);
+    searchLay->addWidget(weightLbl);
+    auto* weightSlider = new QSlider(Qt::Horizontal, this);
+    weightSlider->setRange(0, 100);
+    weightSlider->setValue(40);
+    searchLay->addWidget(weightSlider);
+
+    auto* threshLbl = new QLabel("Minimum Similarity Threshold (40%)", this);
+    searchLay->addWidget(threshLbl);
+    auto* threshSlider = new QSlider(Qt::Horizontal, this);
+    threshSlider->setRange(0, 100);
+    threshSlider->setValue(40);
+    searchLay->addWidget(threshSlider);
+
+    auto* topkLbl = new QLabel("Maximum Semantic Results", this);
+    searchLay->addWidget(topkLbl);
+    auto* topkSpin = new QSpinBox(this);
+    topkSpin->setRange(5, 100);
+    topkSpin->setValue(20);
+    searchLay->addWidget(topkSpin);
+
+    semLay->addWidget(searchGroup);
+
+    // Embedding status group
+    auto* embGroup = new QGroupBox("Embedding Status", this);
+    auto* embLay = new QVBoxLayout(embGroup);
+    auto* embLbl = new QLabel(
+        "Embeddings are generated in the background after extraction.\n"
+        "Check the status bar for progress messages like "
+        "'Embedding documents: X/Y'.", this);
+    embLbl->setWordWrap(true);
+    embLay->addWidget(embLbl);
+    semLay->addWidget(embGroup);
+
+    semLay->addStretch();
+    tabs->addTab(semTab, "Semantic Search");
 
     // -------- Saved searches tab --------
     auto* savTab = new QWidget(this);

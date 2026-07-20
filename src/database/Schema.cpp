@@ -121,6 +121,37 @@ bool Schema::createSchemaV1(Database& db) {
             file_id UNINDEXED,
             tokenize = 'unicode61 remove_diacritics 2'
         );)SQL",
+
+        // --- BGE embedding storage (semantic search) ----------------------
+        // Each file gets at most one 384-float embedding blob (1536 bytes).
+        R"SQL(CREATE TABLE IF NOT EXISTS BgeEmbeddings (
+            file_id     INTEGER PRIMARY KEY,
+            embedding   BLOB    NOT NULL,
+            created_at  INTEGER NOT NULL DEFAULT 0,
+            updated_at  INTEGER NOT NULL DEFAULT 0,
+            status      TEXT    NOT NULL DEFAULT 'completed',
+            FOREIGN KEY(file_id) REFERENCES Files(id) ON DELETE CASCADE
+        );)SQL",
+        "CREATE INDEX IF NOT EXISTS idx_bge_status ON BgeEmbeddings(status);",
+
+        // --- Semantic search settings (key/value) -------------------------
+        R"SQL(CREATE TABLE IF NOT EXISTS SemanticSettings (
+            key         TEXT PRIMARY KEY,
+            value       TEXT,
+            updated_at  INTEGER NOT NULL DEFAULT 0
+        );)SQL",
+
+        // Default semantic-search settings (inserted once, never overwritten).
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('semantic_enabled',     'false');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('model_path',           './models/bge-small-en-v1.5/model.onnx');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('similarity_threshold', '0.40');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('semantic_weight',      '0.40');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('top_k',                '20');",
     };
 
     bool ok = true;

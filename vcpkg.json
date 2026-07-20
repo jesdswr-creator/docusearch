@@ -13,6 +13,16 @@
   "features": {
     "tests": {
       "description": "Build unit tests (Qt Test framework)"
+    },
+    "semantic-search": {
+      "description": "Enable BGE Small EN v1.5 semantic search via ONNX Runtime",
+      "dependencies": [
+        {
+          "name": "onnxruntime",
+          "default-features": false,
+          "features": ["cpu"]
+        }
+      ]
     }
   }
 }

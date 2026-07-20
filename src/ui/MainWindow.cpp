@@ -29,6 +29,9 @@
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/ThumbnailGenerator.h"
+#include "../preview/FilePreviewPane.h"
+#include "../embeddings/BgeService.h"
+#include "../search/HybridSearchEngine.h"
 #include "../settings/SettingsManager.h"
 
 #ifdef DOCUSEARCH_HAS_POPPLER
@@ -219,6 +222,11 @@ MainWindow::MainWindow(QWidget* parent)
         ocrStatusWidget_->setCursor(Qt::PointingHandCursor);
         ocrStatusWidget_->installEventFilter(this);
     }
+
+    // Initialize semantic search subsystem (BGE + ONNX Runtime).
+    // This is OPTIONAL and gracefully degrades to keyword-only search
+    // if the model file or onnxruntime.dll is missing.
+    initializeSemanticSearch();
 
     applyTheme();
 
@@ -520,10 +528,27 @@ void MainWindow::buildCentral() {
     resultsPane_->setMaximumWidth(420);
     mainSplitter_->addWidget(resultsPane_);
 
-    previewPane_ = new PreviewPane(mainSplitter_);
+    // ── Center column: FilePreviewPane (TOP) + PreviewPane (existing) ──
+    // The FilePreviewPane shows the actual rendered file (PDF/image/text/office).
+    // The existing PreviewPane below shows the extracted text + tabs (unchanged).
+    auto* centerColumn = new QWidget(mainSplitter_);
+    auto* centerColLay = new QVBoxLayout(centerColumn);
+    centerColLay->setContentsMargins(0, 0, 0, 0);
+    centerColLay->setSpacing(1);
+
+    filePreviewPane_ = new FilePreviewPane(centerColumn);
+    filePreviewPane_->setObjectName("filePreviewPane");
+    filePreviewPane_->setMinimumHeight(180);
+    centerColLay->addWidget(filePreviewPane_, 1);  // takes most space
+
+    previewPane_ = new PreviewPane(centerColumn);
     previewPane_->setObjectName("previewPane");
     previewPane_->setMinimumWidth(360);
-    mainSplitter_->addWidget(previewPane_);
+    previewPane_->setMinimumHeight(120);
+    previewPane_->setMaximumHeight(280);  // limit extracted-text pane
+    centerColLay->addWidget(previewPane_, 0);  // fixed-ish height
+
+    mainSplitter_->addWidget(centerColumn);
 
     // Right panel: metadata (top) + tags/notes (bottom), stacked vertically.
     // We wrap the vertical splitter in a fixed-width (300px) container so
@@ -652,6 +677,21 @@ void MainWindow::buildStatusBar() {
         "Yellow: oneocr.dll is missing — click to install.\n"
         "Click to open the OCR Setup instructions.");
     sb->addPermanentWidget(ocrStatusWidget_);
+
+    // Semantic search toggle button (shows current state).
+    // Disabled by default — enabled after BGE service becomes ready.
+    semanticToggleBtn_ = new QPushButton(sb);
+    semanticToggleBtn_->setObjectName("semanticToggleBtn");
+    semanticToggleBtn_->setText("Semantic: OFF");
+    semanticToggleBtn_->setCheckable(true);
+    semanticToggleBtn_->setChecked(false);
+    semanticToggleBtn_->setEnabled(false);
+    semanticToggleBtn_->setToolTip(
+        "Toggle semantic search (BGE Small EN v1.5).\n"
+        "When ON, search results include semantic matches in addition to keyword matches.\n"
+        "Disabled if the BGE model is not installed (run scripts/download_bge_model.ps1).");
+    semanticToggleBtn_->setCursor(Qt::PointingHandCursor);
+    sb->addPermanentWidget(semanticToggleBtn_);
 
     openLocationBtn_ = new QPushButton(sb);
     openLocationBtn_->setObjectName("openLocationBtn");
@@ -814,6 +854,11 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
 
     try {
         previewPane_->setFilePath(path);
+    } catch (...) {}
+
+    // Load the file into the new native FilePreviewPane (top pane).
+    try {
+        if (filePreviewPane_) filePreviewPane_->loadFile(path);
     } catch (...) {}
 
     try {
@@ -1518,6 +1563,101 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
         return true;
     }
     return QMainWindow::eventFilter(obj, e);
+}
+
+// ============================================================
+// Semantic search (BGE + Hybrid)
+// ============================================================
+void MainWindow::initializeSemanticSearch() {
+    try {
+        // Always create the HybridSearchEngine — even without BGE, it
+        // just passes through keyword results unchanged.
+        hybridSearch_ = std::make_unique<HybridSearchEngine>();
+
+        // Wire up the toggle button.
+        if (semanticToggleBtn_) {
+            connect(semanticToggleBtn_, &QPushButton::toggled,
+                    this, &MainWindow::onSemanticToggled);
+        }
+
+        // Try to initialize BGE service. This is OPTIONAL — if the
+        // model file or onnxruntime.dll is missing, semantic search
+        // just stays disabled (toggle button stays disabled too).
+        const QString modelPath =
+            QCoreApplication::applicationDirPath() +
+            "/models/bge-small-en-v1.5/model.onnx";
+        const QString dbPath = Config::instance().dbPath();
+
+        bgeService_ = std::make_unique<BgeService>(this);
+
+        // Connect signals BEFORE initialization so we get the ready()
+        // signal even if init finishes synchronously.
+        connect(bgeService_.get(), &BgeService::ready,
+                this, &MainWindow::onBgeReady);
+        connect(bgeService_.get(), &BgeService::embeddingProgress,
+                this, &MainWindow::onBgeEmbeddingProgress);
+        connect(bgeService_.get(), &BgeService::embeddingFinished,
+                this, &MainWindow::onBgeEmbeddingFinished);
+
+        // Initialize in background so the UI doesn't block.
+        QtConcurrent::run([this, dbPath, modelPath]() {
+            bgeService_->initialize(dbPath, modelPath);
+        });
+
+        DS_INFO("BGE", "Semantic search subsystem initializing in background...");
+    } catch (const std::exception& e) {
+        DS_WARN("BGE", QString("Failed to initialize semantic search: %1").arg(e.what()));
+        semanticEnabled_ = false;
+    } catch (...) {
+        DS_WARN("BGE", "Unknown exception initializing semantic search.");
+        semanticEnabled_ = false;
+    }
+}
+
+void MainWindow::onSemanticToggled(bool checked) {
+    if (checked && (!bgeService_ || !bgeService_->isReady())) {
+        // Block the toggle — show install instructions.
+        if (semanticToggleBtn_) semanticToggleBtn_->setChecked(false);
+        QMessageBox::information(this, "Semantic Search",
+            "Semantic search model not available.\n\n"
+            "Download the BGE Small EN v1.5 model:\n"
+            "  1. Open PowerShell in the DocuSearch folder\n"
+            "  2. Run:  scripts\\download_bge_model.ps1\n\n"
+            "This downloads model.onnx (~50 MB) from HuggingFace.\n\n"
+            "After installing, restart DocuSearch and try again.");
+        return;
+    }
+    semanticEnabled_ = checked;
+    if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
+    if (semanticToggleBtn_) {
+        semanticToggleBtn_->setText(checked ? "Semantic: ON" : "Semantic: OFF");
+    }
+    statusBar()->showMessage(
+        checked ? "Semantic search enabled." : "Semantic search disabled.",
+        3000);
+}
+
+void MainWindow::onBgeReady() {
+    DS_INFO("BGE", "BGE service ready: " + bgeService_->getStatus());
+    if (semanticToggleBtn_) {
+        semanticToggleBtn_->setEnabled(true);
+    }
+    if (hybridSearch_) {
+        hybridSearch_->setBgeService(bgeService_.get());
+    }
+    statusBar()->showMessage(
+        "Semantic search ready: " + bgeService_->getStatus(), 5000);
+}
+
+void MainWindow::onBgeEmbeddingProgress(int current, int total) {
+    statusBar()->showMessage(
+        QString("Embedding documents: %1/%2").arg(current).arg(total));
+}
+
+void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
+    statusBar()->showMessage(
+        QString("Embedding complete: %1 succeeded, %2 failed.").arg(success).arg(fail),
+        8000);
 }
 
 void MainWindow::updateIndexStats() {

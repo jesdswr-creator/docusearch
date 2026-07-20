@@ -53,9 +53,13 @@ class ThumbnailGenerator;
 class SearchBar;
 class ResultsPane;
 class PreviewPane;
+class FilePreviewPane;
 class MetadataPane;
 class TagsNotesPane;
 class IndexingProgressWidget;
+
+class BgeService;
+class HybridSearchEngine;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -76,6 +80,10 @@ private slots:
     void onOpenSettings();
     void onOcrThisFile(const QString& path);
     void onToggleTheme();
+    void onSemanticToggled(bool checked);
+    void onBgeReady();
+    void onBgeEmbeddingProgress(int current, int total);
+    void onBgeEmbeddingFinished(int success, int fail);
     void onStartIndexing();
     void onStopIndexing();
     void onPauseIndexing();
@@ -129,6 +137,8 @@ public:
     Q_INVOKABLE void updateIndexStats();
     // Refresh the OCR availability indicator on the status bar.
     void updateOcrStatusIndicator();
+    // Initialize the BGE semantic search subsystem (optional, async).
+    void initializeSemanticSearch();
 
     // Owned subsystems
     std::unique_ptr<Database>       db_;
@@ -162,6 +172,16 @@ public:
     QSplitter*      mainSplitter_         = nullptr;  // 3-way: results | viewer | metadata
     ResultsPane*    resultsPane_          = nullptr;
     PreviewPane*    previewPane_          = nullptr;
+    // New top-pane native file preview (PDF/image/text/office).
+    // Sits ABOVE previewPane_ in the same column.
+    FilePreviewPane* filePreviewPane_     = nullptr;
+    // Semantic search toggle button (in search bar).
+    QPushButton*    semanticToggleBtn_    = nullptr;
+
+    // Semantic search subsystem (BGE + hybrid).
+    std::unique_ptr<BgeService>        bgeService_;
+    std::unique_ptr<HybridSearchEngine> hybridSearch_;
+    bool            semanticEnabled_     = false;
 
     // Right panel
     QSplitter*      rightSplitter_        = nullptr;  // metadata | tags/notes (vertical)

@@ -73,6 +73,18 @@ endif()
 # This removes ~40 MB from the build and eliminates
 # the crash-prone Tesseract/Leptonica DLLs.
 
+# ============================================================
+# Semantic Search (BGE Small EN v1.5 via ONNX Runtime)
+# ============================================================
+# Optional. When enabled, BGE embeddings power semantic search.
+# Disabled by default — users must opt-in via -DDOCUSEARCH_HAS_ONNXRUNTIME=ON
+# OR by installing onnxruntime via vcpkg manifest mode.
+option(DOCUSEARCH_HAS_ONNXRUNTIME "Enable ONNX Runtime for semantic search" OFF)
+find_package(onnxruntime CONFIG QUIET)
+if(onnxruntime_FOUND)
+    set(DOCUSEARCH_HAS_ONNXRUNTIME ON)
+endif()
+
 # PkgConfig is needed for Poppler detection.
 find_package(PkgConfig QUIET)
 
@@ -214,6 +226,18 @@ set(APP_SOURCES
     src/monitoring/FileWatcher.cpp
     # preview
     src/preview/ThumbnailGenerator.cpp
+    src/preview/TextPreview.cpp
+    src/preview/ImagePreview.cpp
+    src/preview/PdfPreview.cpp
+    src/preview/OfficePreview.cpp
+    src/preview/FilePreviewPane.cpp
+    # embeddings (semantic search)
+    src/embeddings/BgeTokenizer.cpp
+    src/embeddings/BgeEmbeddingEngine.cpp
+    src/embeddings/BgeEmbeddingDb.cpp
+    src/embeddings/BgeService.cpp
+    # search (hybrid)
+    src/search/HybridSearchEngine.cpp
     # settings
     src/settings/SettingsManager.cpp
     # backup
@@ -263,6 +287,17 @@ set(APP_HEADERS
     src/search/SearchEngine.h
     src/monitoring/FileWatcher.h
     src/preview/ThumbnailGenerator.h
+    src/preview/IFilePreview.h
+    src/preview/TextPreview.h
+    src/preview/ImagePreview.h
+    src/preview/PdfPreview.h
+    src/preview/OfficePreview.h
+    src/preview/FilePreviewPane.h
+    src/embeddings/BgeTokenizer.h
+    src/embeddings/BgeEmbeddingEngine.h
+    src/embeddings/BgeEmbeddingDb.h
+    src/embeddings/BgeService.h
+    src/search/HybridSearchEngine.h
     src/settings/SettingsManager.h
     src/backup/BackupManager.h
     src/win/JumpList.h
@@ -334,6 +369,37 @@ if(POPPLER_FOUND)
     message(STATUS "Poppler: enabled")
 else()
     message(WARNING "Poppler not found — PDF text extraction will be stubbed.")
+endif()
+
+# ── ONNX Runtime (optional, for BGE semantic search) ────────
+if(DOCUSEARCH_HAS_ONNXRUNTIME)
+    if(TARGET onnxruntime::onnxruntime)
+        target_link_libraries(DocuSearch PRIVATE onnxruntime::onnxruntime)
+    elseif(TARGET onnxruntime)
+        target_link_libraries(DocuSearch PRIVATE onnxruntime)
+    else()
+        # Fallback: assume manual install at ONNXRUNTIME_ROOT
+        if(DEFINED ONNXRUNTIME_ROOT)
+            target_include_directories(DocuSearch PRIVATE "${ONNXRUNTIME_ROOT}/include")
+            target_link_libraries(DocuSearch PRIVATE
+                "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib")
+            add_custom_command(TARGET DocuSearch POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_ROOT}/bin/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:DocuSearch>")
+        else()
+            message(WARNING "DOCUSEARCH_HAS_ONNXRUNTIME is ON but onnxruntime target not found. "
+                            "Set ONNXRUNTIME_ROOT to point at the ONNX Runtime install dir.")
+            set(DOCUSEARCH_HAS_ONNXRUNTIME OFF)
+        endif()
+    endif()
+    if(DOCUSEARCH_HAS_ONNXRUNTIME)
+        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
+        message(STATUS "ONNX Runtime: enabled (semantic search available)")
+    endif()
+else()
+    message(STATUS "ONNX Runtime: disabled (semantic search unavailable; "
+                    "keyword-only search will work)")
 endif()
 
 target_compile_definitions(DocuSearch PRIVATE
