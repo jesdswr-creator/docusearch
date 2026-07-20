@@ -1,10 +1,10 @@
 # DocuSearch
 
-**Offline Intelligent Document Search & OCR System for Windows 11**
+**Offline Intelligent Document Search & OCR System for Windows 10/11**
 
 A professional, completely offline C++20 / Qt 6 desktop application that indexes
 your drives, extracts text from documents (PDF, DOCX, XLSX, PPTX), OCRs scanned
-PDFs and images (Tesseract), and provides instant full-text search — all without
+PDFs and images (oneocr), and provides instant full-text search — all without
 any cloud dependency. Your data never leaves your machine.
 
 ## Key Features
@@ -13,7 +13,7 @@ any cloud dependency. Your data never leaves your machine.
 - **Advanced query syntax**: phrases, boolean (AND/OR/NOT), field filters
   (`type:pdf`, `folder:Railway`, `date:>2024-01-01`)
 - **PDF text extraction** via Poppler (born-digital PDFs) + **OCR** via
-  Tesseract (scanned PDFs and images)
+  oneocr (the Windows 11 Snipping Tool's OCR engine — scanned PDFs and images)
 - **Auto-scan every 1 hour** — detects new and modified files automatically
 - **Tags, notes, favorites, saved searches** — organize your way
 - **Duplicate detection** by SHA-256 hash
@@ -47,7 +47,7 @@ any cloud dependency. Your data never leaves your machine.
 | Language | C++20 |
 | UI Framework | Qt 6.7 (Widgets) |
 | Database | SQLite 3 + FTS5 (full-text search) |
-| OCR | Tesseract 5.x + Leptonica |
+| OCR | oneocr.dll (from Windows 11 Snipping Tool) |
 | PDF | Poppler (cpp binding) |
 | Build | CMake + vcpkg (manifest mode) |
 | Installer | WiX v4 (MSI) |
@@ -58,6 +58,18 @@ any cloud dependency. Your data never leaves your machine.
 Download the latest build from [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions):
 - **DocuSearch-Setup-msi** — MSI installer (recommended, includes EULA)
 - **DocuSearch-portable** — Portable ZIP (no installation required)
+
+## OCR Setup (oneocr)
+
+DocuSearch uses **oneocr.dll** — the native OCR engine from the Windows 11
+Snipping Tool — for text recognition. The DLL is **not bundled**; you install
+it from your own locally-installed Snipping Tool:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\get_oneocr.ps1
+```
+
+See **[ONEOCR_SETUP.md](ONEOCR_SETUP.md)** for full instructions and troubleshooting.
 
 ## Build from Source
 
@@ -81,7 +93,7 @@ src/
   core/         Config, Logger, FileUtils, Constants, Types
   database/     Database (RAII SQLite), FileRepository, Schema
   documents/    DocumentExtractorRegistry, PdfExtractor, DocxExtractor, ...
-  ocr/          OcrEngine (Tesseract wrapper), OcrWorkerPool
+  ocr/          WindowsOcrEngine (oneocr.dll wrapper), ocr_helper_main.cpp
   indexer/      ContentIndexer, MetadataIndexer, PriorityScheduler
   search/       SearchEngine, QueryParser (AST-based)
   preview/      ThumbnailGenerator

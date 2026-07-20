@@ -64,9 +64,9 @@ if(NOT SQLite3_FOUND)
 endif()
 
 # Tesseract + Leptonica — REMOVED.
-# OCR is now handled by Windows OCR (Windows.Media.Ocr via WinRT),
-# which is built into Windows 10/11 and requires no third-party
-# dependencies. This removes ~40 MB from the build and eliminates
+# OCR is now handled by oneocr.dll (from the Windows 11 Snipping Tool),
+# loaded at runtime via a separate helper exe (docusearch_ocr_helper).
+# This removes ~40 MB from the build and eliminates
 # the crash-prone Tesseract/Leptonica DLLs.
 
 # PkgConfig is needed for Poppler detection.
@@ -95,63 +95,46 @@ endif()
 find_package(ZLIB REQUIRED)
 
 # ============================================================
-# OCR Helper — Windows OCR via C++/WinRT (same as PowerToys)
+# OCR Helper — oneocr.dll (native, from Win11 Snipping Tool)
 # ============================================================
-# Generates C++/WinRT headers at build time using cppwinrt.exe
-# (pre-installed on Windows SDK / GitHub Actions runners).
-# Then builds a standalone console exe that calls Windows.Media.Ocr.
-
-# Find cppwinrt.exe (part of Windows SDK)
-find_program(CPPWINRT_EXE cppwinrt
-    HINTS "$ENV{WindowsSdkVerBinPath}x64"
-          "C:/Program Files (x86)/Windows Kits/10/bin/$ENV{WindowsSDKVersion}/x64"
-          "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64"
-          "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
-    REQUIRED)
-
-# Find the Windows SDK winmd directory (contains Windows.Foundation.winmd etc.)
-get_filename_component(WINSDK_BIN_DIR "${CPPWINRT_EXE}" DIRECTORY)
-get_filename_component(WINSDK_ROOT "${WINSDK_BIN_DIR}/../../.." ABSOLUTE)
-set(WINMD_DIR "${WINSDK_ROOT}/UnionMetadata/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}")
-
-# If not found, try common paths
-if(NOT EXISTS "${WINMD_DIR}")
-    file(GLOB WINMD_DIRS "${WINSDK_ROOT}/UnionMetadata/10.0.*")
-    if(WINMD_DIRS)
-        list(GET WINMD_DIRS 0 WINMD_DIR)
-    endif()
-endif()
-
-# Generate C++/WinRT headers into build directory
-set(CPPWINRT_OUTPUT_DIR ${CMAKE_BINARY_DIR}/cppwinrt_headers)
-file(MAKE_DIRECTORY ${CPPWINRT_OUTPUT_DIR})
-
-if(EXISTS "${WINMD_DIR}")
-    message(STATUS "Generating C++/WinRT headers from: ${WINMD_DIR}")
-    execute_process(
-        COMMAND ${CPPWINRT_EXE} -input "${WINMD_DIR}" -output ${CPPWINRT_OUTPUT_DIR} -overwrite
-        RESULT_VARIABLE CPPWINRT_RESULT
-    )
-    if(NOT CPPWINRT_RESULT EQUAL 0)
-        message(WARNING "cppwinrt.exe failed (code ${CPPWINRT_RESULT}). OCR helper may not build.")
-    else()
-        message(STATUS "C++/WinRT headers generated successfully")
-    endif()
-else()
-    message(WARNING "Windows Metadata directory not found. OCR helper may not build.")
-endif()
+# Standalone console exe that loads oneocr.dll via LoadLibrary and
+# calls its C-ABI exports. No WinRT, no apartment threading, no async
+# IAsyncOperation — so it cannot trigger the WinRT crashes we were
+# seeing on low-RAM Windows systems.
+#
+# The DLL + model files (oneocr.dll, oneocr.onemodel, onnxruntime.dll)
+# are NOT redistributed with this build. Users obtain them from their
+# locally-installed Snipping Tool via scripts/get_oneocr.ps1 and place
+# them next to docusearch.exe at runtime.
+#
+# This target needs only the Windows SDK (WIC for image decoding) — no
+# cppwinrt.exe, no C++/WinRT headers, no coroutine support.
 
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
 if(MSVC)
     set_property(TARGET docusearch_ocr_helper PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    target_include_directories(docusearch_ocr_helper PRIVATE ${CPPWINRT_OUTPUT_DIR})
-    target_link_libraries(docusearch_ocr_helper PRIVATE runtimeobject windowscodecs)
-    # C++/WinRT needs C++20 and the experimental coroutine warning silenced
+    # ole32 (CoCreateInstance) + windowscodecs (WIC) are the only Win32 libs needed.
+    target_link_libraries(docusearch_ocr_helper PRIVATE ole32 windowscodecs)
     target_compile_options(docusearch_ocr_helper PRIVATE
-        /std:c++20 /W0 /permissive-
-        /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        /std:c++20 /W3 /permissive- /utf-8 /EHsc
     )
+endif()
+
+# Optionally copy oneocr files into the build output, if the developer
+# has placed them under third_party/oneocr/. This is a convenience for
+# local builds — end users install them via scripts/get_oneocr.ps1.
+set(ONEOCR_SRC_DIR ${CMAKE_SOURCE_DIR}/third_party/oneocr)
+if(EXISTS "${ONEOCR_SRC_DIR}/oneocr.dll")
+    message(STATUS "oneocr.dll found in third_party/oneocr/ — will copy to build output")
+    foreach(oneocr_file oneocr.dll oneocr.onemodel onnxruntime.dll)
+        if(EXISTS "${ONEOCR_SRC_DIR}/${oneocr_file}")
+            add_custom_command(TARGET docusearch_ocr_helper POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ONEOCR_SRC_DIR}/${oneocr_file}"
+                        "$<TARGET_FILE_DIR:docusearch_ocr_helper>/${oneocr_file}")
+        endif()
+    endforeach()
 endif()
 
 # ============================================================

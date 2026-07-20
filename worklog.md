@@ -42,3 +42,65 @@ Next steps:
 - Wait for the d9b17b0 build to complete (expected to succeed with the margin() fix)
 - If it succeeds, the portable ZIP and MSI installer will be available as artifacts
 - If it fails, examine the new error and fix accordingly
+
+---
+Task ID: 1
+Agent: main
+Task: Replace WinRT-based OCR helper with oneocr.dll-based implementation to fix extraction/OCR crashes
+
+Work Log:
+- Researched AuroraWright/oneocr (https://github.com/AuroraWright/oneocr) — discovered it's a Python ctypes wrapper around the native oneocr.dll from Windows 11 Snipping Tool. The DLL has a clean C ABI (no WinRT, no apartment threading) — perfect replacement for the crash-prone WinRT OCR.
+- Wrote entirely new src/ocr/ocr_helper_main.cpp that:
+  • Loads oneocr.dll via LoadLibraryW at runtime (no static linkage).
+  • Resolves 12 C-ABI exports: CreateOcrInitOptions, OcrInitOptionsSetUseModelDelayLoad, CreateOcrPipeline, CreateOcrProcessOptions, RunOcrPipeline, GetOcrLineCount, GetOcrLine, GetOcrLineContent, ReleaseOcrResult, ReleaseOcrInitOptions, ReleaseOcrPipeline, ReleaseOcrProcessOptions.
+  • Loads images via WIC → 32bppPBGRA (premultiplied BGRA) — exactly what oneocr expects.
+  • Uses the documented ImageStruct layout (type=3, 8-byte aligned, 32 bytes total on x64).
+  • Uses the hardcoded model key: kj)TGtrK>f]b[Piow.gU+nC@s""""""4
+  • Search order for oneocr files: <appDir>/, <appDir>/oneocr/, <appDir>/models/oneocr/, %USERPROFILE%/.config/oneocr/
+  • Enforces oneocr.py's image size limits: 50–10000 px per side, skips files >20 MB.
+  • Per-file try/catch + 100 ms gap between files for low-RAM safety.
+  • Vectored exception handler for best-effort crash logging.
+  • Prints clear setup error if oneocr.dll or oneocr.onemodel is missing.
+- Updated CMakeLists.txt:
+  • Removed find_program(CPPWINRT_EXE) — no longer needed.
+  • Removed C++/WinRT header generation step (was 30+ lines).
+  • Removed runtimeobject.lib linkage (was for WinRT).
+  • Added ole32.lib linkage (for COM/WIC).
+  • Simplified compile flags: removed /W0 (warnings are useful), removed _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS.
+  • Added optional post-build copy of oneocr files from third_party/oneocr/ if present.
+- Updated src/ocr/WindowsOcrEngine.h and .cpp:
+  • Added findOneocrDir() that searches the same 4 locations as the helper.
+  • Added isOneocrAvailable() so the UI can detect missing oneocr before attempting OCR.
+  • init() now logs whether oneocr.dll + oneocr.onemodel are both present.
+  • ocrFile() now captures stderr so setup errors are surfaced in the log.
+  • isOneocrAvailable_ flag is updated when stderr contains "not found".
+- Created scripts/get_oneocr.ps1:
+  • Uses Get-AppxPackage to locate Microsoft.ScreenSketch.
+  • Copies oneocr.dll, oneocr.onemodel, onnxruntime.dll from SnippingTool subfolder.
+  • Auto-detects target dir (build/bin/Release preferred).
+  • Handles WindowsApps ACL issues with clear takeown/icacls instructions.
+  • Verifies all 3 files are present in source before copying.
+- Created ONEOCR_SETUP.md with full installation/troubleshooting instructions.
+- Updated src/ui/SettingsDialog.cpp OCR info text to describe oneocr setup.
+- Updated src/ui/MainWindow.cpp OCR click handler:
+  • Checks ocrEngine.isOneocrAvailable() BEFORE attempting OCR.
+  • Shows a clear QMessageBox with install instructions if missing.
+- Updated .github/workflows/build.yml:
+  • Added "Bundle OCR setup instructions" step that copies get_oneocr.ps1 + ONEOCR_SETUP.md into the release folder.
+  • Updated OCR helper copy comment to mention oneocr.
+- Updated README.md:
+  • "Windows 11" → "Windows 10/11"
+  • "Tesseract" → "oneocr"
+  • Updated tech stack: "Tesseract 5.x + Leptonica" → "oneocr.dll (from Windows 11 Snipping Tool)"
+  • Added "OCR Setup (oneocr)" section pointing to get_oneocr.ps1.
+  • Updated architecture comment for ocr/ directory.
+
+Stage Summary:
+- COMPLETE replacement of WinRT-based OCR with oneocr.dll-based OCR.
+- Eliminates ALL WinRT crash vectors: no init_apartment, no SoftwareBitmap, no IAsyncOperation, no apartment threading.
+- oneocr.dll is loaded via LoadLibrary in a SEPARATE process (docusearch_ocr_helper.exe), so even if the DLL crashes, the main app is unaffected.
+- oneocr files are NOT bundled (Microsoft proprietary). Users install them via scripts/get_oneocr.ps1 from their own locally-installed Snipping Tool — legal and clean.
+- Build no longer requires cppwinrt.exe — should work on any Windows SDK installation.
+- Files modified: src/ocr/ocr_helper_main.cpp (full rewrite), src/ocr/WindowsOcrEngine.h, src/ocr/WindowsOcrEngine.cpp, src/ui/MainWindow.cpp, src/ui/SettingsDialog.cpp, CMakeLists.txt, .github/workflows/build.yml, README.md
+- Files created: scripts/get_oneocr.ps1, ONEOCR_SETUP.md
+- NOT YET DONE: commit the changes (need user push permission for next CI run).

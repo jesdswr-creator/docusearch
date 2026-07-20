@@ -1,14 +1,20 @@
 #pragma once
 
 // ============================================================
-// WindowsOcrEngine.h - OCR wrapper using RapidOcrCpp (pure C++)
+// WindowsOcrEngine.h - OCR wrapper using oneocr.dll
 // ============================================================
 //
-// Uses RapidOcrCpp (https://github.com/RapidAI/RapidOcrCpp) — a
-// pure C++ OCR library based on PaddleOCR ONNX models.
+// Uses oneocr.dll — the native OCR engine shipped with the Windows 11
+// Snipping Tool (Microsoft.ScreenSketch). The DLL is loaded by a
+// separate helper exe (docusearch_ocr_helper.exe) which calls the
+// C-ABI exports. This is a drop-in replacement for the previous
+// WinRT-based implementation that was crashing the app on low-RAM
+// Windows systems.
 //
-// NO Python required. NO PowerShell. NO Windows SDK dependency.
-// Just ONNX Runtime + OpenCV (both from vcpkg) + ~17MB of models.
+// NO Python required. NO WinRT. NO apartment threading.
+// The oneocr.dll + oneocr.onemodel + onnxruntime.dll files must be
+// obtained from the locally-installed Snipping Tool via
+// scripts/get_oneocr.ps1 and placed next to docusearch.exe.
 //
 // The class name is kept as WindowsOcrEngine for backward
 // compatibility with existing code that references it.
@@ -27,9 +33,10 @@ public:
     WindowsOcrEngine(const WindowsOcrEngine&)            = delete;
     WindowsOcrEngine& operator=(const WindowsOcrEngine&) = delete;
 
-    // Initialize the OCR engine by loading the ONNX models.
-    // Returns true on success, false on failure.
-    // Models are expected at <appDir>/models/
+    // Initialize the OCR engine. Checks for the helper exe and the
+    // oneocr.dll + model files. Returns true if the helper is present.
+    // Even if oneocr.dll is missing, returns true so the helper can
+    // surface the install-instructions error message to the user.
     bool init();
 
     // OCR an image. Returns extracted text (empty on failure).
@@ -40,14 +47,21 @@ public:
 
     bool isInitialized() const { return initialized_; }
 
+    // Returns true if oneocr.dll + oneocr.onemodel are available
+    // alongside the app. If false, OCR calls will return empty and
+    // the user should run scripts/get_oneocr.ps1.
+    bool isOneocrAvailable() const;
+
     // Returns the list of available OCR languages.
     static QStringList availableLanguages();
 
 private:
+    // Search for the directory containing oneocr.dll.
+    // Returns empty string if not found.
+    QString findOneocrDir() const;
+
     bool initialized_ = false;
-    // OcrLite* — void* to avoid pulling RapidOcr headers here.
-    void* ocrLite_ = nullptr;
-    QString modelsDir_;
+    bool oneocrAvailable_ = false;
 };
 
 } // namespace DocuSearch

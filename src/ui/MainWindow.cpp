@@ -1719,6 +1719,22 @@ void MainWindow::onOcrThisFile(const QString& path) {
             "Make sure it's in the same folder as DocuSearch.exe.");
         return;
     }
+    if (!ocrEngine.isOneocrAvailable()) {
+        statusBar()->showMessage("oneocr.dll not installed.", 5000);
+        QMessageBox::warning(this, "OCR Setup Required",
+            "OCR is not yet configured.\n\n"
+            "DocuSearch uses oneocr.dll (the native OCR engine from the\n"
+            "Windows 11 Snipping Tool) for text recognition. These files\n"
+            "are NOT bundled with DocuSearch.\n\n"
+            "To install OCR support:\n"
+            "  1. Open PowerShell in the DocuSearch folder\n"
+            "  2. Run:  scripts\\get_oneocr.ps1\n\n"
+            "This copies oneocr.dll, oneocr.onemodel, and onnxruntime.dll\n"
+            "from your locally-installed Snipping Tool into the DocuSearch\n"
+            "folder. See ONEOCR_SETUP.md for details.\n\n"
+            "After installing, restart DocuSearch and try OCR again.");
+        return;
+    }
 
     QString ocrText;
 
