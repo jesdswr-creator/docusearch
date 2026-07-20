@@ -59,7 +59,7 @@ private:
     double m_zoomLevel    = 1.0;
 
     static const int    MAX_PAGES           = 30;
-    static const double RENDER_DPI          = 150.0;
+    static constexpr double RENDER_DPI      = 150.0;
     static const qint64 MAX_FILE_SIZE_BYTES = 100LL * 1024 * 1024;  // 100 MB
 };
 

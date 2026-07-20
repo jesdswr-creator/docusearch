@@ -170,7 +170,7 @@ void PdfPreview::renderPage(int pageNumber) {
 
         poppler::page_renderer renderer;
         renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-        renderer.set_render_hint(poppler::page_renderer::image_antialiasing);
+        // Note: image_antialiasing is not available in all poppler versions.
 
         const double dpi = RENDER_DPI * m_zoomLevel;
         auto img_data = renderer.render_page(page.get(), dpi, dpi);
