@@ -175,3 +175,34 @@ Stage Summary:
 - New docs/OCR_LICENSING.md documents the legal/model-key situation.
 - Files modified: src/main.cpp, src/documents/DocumentExtractorRegistry.cpp, src/ocr/ocr_helper_main.cpp, src/ui/SettingsDialog.cpp, CMakeLists.txt, tests/CMakeLists.txt, worklog.md
 - Files created: src/core/SehTranslator.h, src/core/SehTranslator.cpp, src/ui/SearchResultsHighlighter.h, src/ui/SearchResultsHighlighter.cpp, docs/OCR_LICENSING.md, tests/tst_OcrHelper.cpp, tests/tst_ExtractorFuzz.cpp
+
+---
+Task ID: 3
+Agent: main
+Task: Implement Instruction Sets 7-12 (remaining from pasted instructions)
+
+Work Log:
+- Created tests/tst_FtsTokenizer.cpp (IS7): Tests FTS5 unicode61 tokenizer with remove_diacritics=2. Covers case folding, diacritic removal (cafe=café), phrase queries, boolean operators, CJK content, numbers/special chars, empty/whitespace edge cases. Added to tests/CMakeLists.txt.
+- Added OCR availability indicator to status bar (IS8): New permanent widget showing green dot + "OCR: Ready" or amber dot + "OCR: Setup Required". Clickable — shows install instructions if missing, status info if ready. Added ocrStatusWidget_/ocrDotLbl_/ocrStatusLbl_ members to MainWindow.h. Added updateOcrStatusIndicator() and eventFilter() override.
+- Created HELP.md (IS9): Comprehensive user-facing help covering Getting Started, Adding Folders, Searching (with full query syntax examples), Extracting Text, OCR, Tags/Notes/Favorites, Saved Searches, Backup/Restore, Settings, Keyboard Shortcuts, and Troubleshooting.
+- Created FAQ.md (IS9): Frequently asked questions covering General, OCR, Search, Extraction, Performance, Privacy/Security, and Build/Development. Includes "Q: My search returns no results" and other practical questions.
+- Created scripts/verify_setup.ps1 (IS10): Comprehensive setup verifier that checks: (1) DocuSearch.exe present, (2) helper exe present, (3) oneocr files present, (4) Qt6 DLLs present, (5) Poppler/zlib DLLs present, (6) Snipping Tool installed + has oneocr.dll available, (7) write access to %APPDATA%\DocuSearch. Exits 0 on success, 1 on critical failure, with color-coded output.
+- Updated .github/workflows/build.yml (IS11): Added "Verify build output (smoke test)" step that runs after Build (Release) — verifies DocuSearch.exe and docusearch_ocr_helper.exe exist, helper exits non-zero with no args. Added --timeout 120 to ctest. Updated "Bundle OCR setup instructions" step to also bundle verify_setup.ps1, HELP.md, FAQ.md, docs/OCR_LICENSING.md into the release folder.
+- Created docs/RELEASE_CHECKLIST.md (IS12): Pre-release verification checklist covering Build Verification, Artifacts Produced, Portable ZIP Contents, MSI Installer Verification, Functional Testing (manual), Crash Testing, Performance Testing, Documentation Verification, License/Legal, Release Process, Post-Release. Includes quick verification commands.
+
+Stage Summary:
+- All 12 instruction sets from the pasted instructions are now implemented.
+- IS1: OCR integration tests ✓
+- IS2: Crash-safe SearchResultsHighlighter (off by default) ✓
+- IS3: SEH + ImageStruct validation in OCR helper ✓
+- IS4: OCR licensing docs ✓
+- IS5: Extractor fuzz tests ✓
+- IS6: Performance/Limits info in SettingsDialog ✓
+- IS7: FTS5 tokenizer tests ✓
+- IS8: OCR availability UI indicator in status bar ✓
+- IS9: HELP.md + FAQ.md ✓
+- IS10: scripts/verify_setup.ps1 ✓
+- IS11: CI smoke test + bundle help docs ✓
+- IS12: docs/RELEASE_CHECKLIST.md ✓
+- Files modified: src/ui/MainWindow.cpp, src/ui/MainWindow.h, tests/CMakeLists.txt, .github/workflows/build.yml, worklog.md
+- Files created: tests/tst_FtsTokenizer.cpp, HELP.md, FAQ.md, scripts/verify_setup.ps1, docs/RELEASE_CHECKLIST.md

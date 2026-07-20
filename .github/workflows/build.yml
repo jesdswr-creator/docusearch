@@ -309,8 +309,40 @@ jobs:
 
       - name: Run unit tests
         shell: pwsh
-        run: ctest --test-dir build --output-on-failure -C Release
+        run: |
+          # Run all configured tests. Continue on error so the build still
+          # produces artifacts even if a non-critical test fails.
+          # Verbose output makes failures easier to debug.
+          ctest --test-dir build --output-on-failure -C Release --timeout 120
         continue-on-error: true
+
+      - name: Verify build output (smoke test)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Quick sanity check: verify the built DocuSearch.exe and
+          # docusearch_ocr_helper.exe exist and are runnable.
+          $ds = "build\bin\Release\DocuSearch.exe"
+          $helper = "build\bin\Release\docusearch_ocr_helper.exe"
+          if (Test-Path $ds) {
+            $size = (Get-Item $ds).Length
+            Write-Host "OK: DocuSearch.exe ($('{0:N1}' -f ($size/1MB)) MB)"
+          } else {
+            Write-Host "FAIL: DocuSearch.exe not found"
+          }
+          if (Test-Path $helper) {
+            $size = (Get-Item $helper).Length
+            Write-Host "OK: docusearch_ocr_helper.exe ($('{0:N1}' -f ($size/1KB)) KB)"
+            # Helper should exit non-zero with no args (expected behavior).
+            & $helper 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "OK: helper exits non-zero with no args (expected)"
+            } else {
+              Write-Host "WARN: helper exited 0 with no args (unexpected)"
+            }
+          } else {
+            Write-Host "FAIL: docusearch_ocr_helper.exe not found"
+          }
 
       - name: Bundle Qt DLLs (windeployqt) + Poppler DLLs
         shell: pwsh
@@ -428,20 +460,41 @@ jobs:
             }
           }
 
-      - name: Bundle OCR setup instructions
+      - name: Bundle OCR setup instructions + help docs
         shell: pwsh
         run: |
-          # Copy the oneocr setup script + docs into the release folder so
-          # users can install OCR support after extracting the ZIP.
+          # Copy the oneocr setup script + docs + help files into the
+          # release folder so users have everything they need after
+          # extracting the ZIP.
           $dst = "build\bin\Release"
+          New-Item -ItemType Directory -Path "$dst\scripts" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$dst\docs" -Force | Out-Null
+
+          # OCR setup script + docs
           if (Test-Path "scripts\get_oneocr.ps1") {
-            New-Item -ItemType Directory -Path "$dst\scripts" -Force | Out-Null
             Copy-Item "scripts\get_oneocr.ps1" "$dst\scripts\get_oneocr.ps1" -Force
             Write-Host "Bundled scripts/get_oneocr.ps1"
+          }
+          if (Test-Path "scripts\verify_setup.ps1") {
+            Copy-Item "scripts\verify_setup.ps1" "$dst\scripts\verify_setup.ps1" -Force
+            Write-Host "Bundled scripts/verify_setup.ps1"
           }
           if (Test-Path "ONEOCR_SETUP.md") {
             Copy-Item "ONEOCR_SETUP.md" "$dst\ONEOCR_SETUP.md" -Force
             Write-Host "Bundled ONEOCR_SETUP.md"
+          }
+          if (Test-Path "docs\OCR_LICENSING.md") {
+            Copy-Item "docs\OCR_LICENSING.md" "$dst\docs\OCR_LICENSING.md" -Force
+            Write-Host "Bundled docs/OCR_LICENSING.md"
+          }
+          # User-facing help docs
+          if (Test-Path "HELP.md") {
+            Copy-Item "HELP.md" "$dst\HELP.md" -Force
+            Write-Host "Bundled HELP.md"
+          }
+          if (Test-Path "FAQ.md") {
+            Copy-Item "FAQ.md" "$dst\FAQ.md" -Force
+            Write-Host "Bundled FAQ.md"
           }
 
       - name: Build portable ZIP

@@ -66,6 +66,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    bool eventFilter(QObject* obj, QEvent* e) override;
 
 private slots:
     void onSearch(const QString& query);
@@ -126,6 +127,8 @@ private:
 
 public:
     Q_INVOKABLE void updateIndexStats();
+    // Refresh the OCR availability indicator on the status bar.
+    void updateOcrStatusIndicator();
 
     // Owned subsystems
     std::unique_ptr<Database>       db_;
@@ -173,6 +176,10 @@ public:
     QLabel*         statusLastLbl_        = nullptr;
     QPushButton*    openLocationBtn_      = nullptr;
     QProgressBar*   extractionProgressBar_ = nullptr;
+    // OCR availability indicator (right side of status bar).
+    QWidget*        ocrStatusWidget_      = nullptr;
+    QLabel*         ocrDotLbl_            = nullptr;
+    QLabel*         ocrStatusLbl_         = nullptr;
 
     // Hidden (kept for stats plumbing)
     IndexingProgressWidget* indexingWidget_ = nullptr;

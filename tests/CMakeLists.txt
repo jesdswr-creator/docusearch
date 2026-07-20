@@ -67,6 +67,7 @@ docusearch_add_test(tst_FileUtils)
 docusearch_add_test(tst_QueryParser)
 docusearch_add_test(tst_PriorityScheduler)
 docusearch_add_test(tst_FileRepository)
+docusearch_add_test(tst_FtsTokenizer)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
 # Verifies the oneocr.dll ImageStruct ABI + helper exe crash safety.

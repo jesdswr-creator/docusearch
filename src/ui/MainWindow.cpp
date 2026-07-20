@@ -212,6 +212,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Status bar at bottom (created by QMainWindow::statusBar()).
     buildStatusBar();
 
+    // Update the OCR availability indicator on the status bar.
+    // Clicking the indicator shows the install-instructions dialog.
+    updateOcrStatusIndicator();
+    if (ocrStatusWidget_) {
+        ocrStatusWidget_->setCursor(Qt::PointingHandCursor);
+        ocrStatusWidget_->installEventFilter(this);
+    }
+
     applyTheme();
 
     // --- Signals (only the ones that don't need crash-prone subsystems) ---
@@ -624,7 +632,27 @@ void MainWindow::buildStatusBar() {
 
     sb->addWidget(left, 1);
 
-    // Right side: Open Original Location button
+    // Right side: OCR status indicator + Open Location button.
+    // Shows a colored dot + "OCR: Ready" / "OCR: Setup Required" so users
+    // know at a glance whether oneocr is installed.
+    ocrStatusWidget_ = new QWidget(sb);
+    auto* ocrLay = new QHBoxLayout(ocrStatusWidget_);
+    ocrLay->setContentsMargins(8, 0, 8, 0);
+    ocrLay->setSpacing(6);
+    ocrDotLbl_ = new QLabel(ocrStatusWidget_);
+    ocrDotLbl_->setFixedSize(8, 8);
+    ocrDotLbl_->setStyleSheet("background: #888; border-radius: 4px;");
+    ocrStatusLbl_ = new QLabel("OCR: ?", ocrStatusWidget_);
+    ocrStatusLbl_->setObjectName("ocrStatus");
+    ocrLay->addWidget(ocrDotLbl_);
+    ocrLay->addWidget(ocrStatusLbl_);
+    ocrStatusWidget_->setToolTip(
+        "OCR (Optical Character Recognition) status.\n"
+        "Green: oneocr.dll is installed and ready.\n"
+        "Yellow: oneocr.dll is missing — click to install.\n"
+        "Click to open the OCR Setup instructions.");
+    sb->addPermanentWidget(ocrStatusWidget_);
+
     openLocationBtn_ = new QPushButton(sb);
     openLocationBtn_->setObjectName("openLocationBtn");
     openLocationBtn_->setCursor(Qt::PointingHandCursor);
@@ -1438,6 +1466,58 @@ void MainWindow::autoScanIndexedFolders() {
         });
     });
     watcher->setFuture(future);
+}
+
+// ============================================================
+// OCR status indicator
+// ============================================================
+void MainWindow::updateOcrStatusIndicator() {
+    if (!ocrDotLbl_ || !ocrStatusLbl_) return;
+
+    WindowsOcrEngine engine;
+    engine.init();
+    const bool available = engine.isOneocrAvailable();
+
+    if (available) {
+        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");  // green
+        ocrStatusLbl_->setText("OCR: Ready");
+        ocrStatusLbl_->setStyleSheet("color: #10b981;");
+    } else {
+        ocrDotLbl_->setStyleSheet("background: #f59e0b; border-radius: 4px;");  // amber
+        ocrStatusLbl_->setText("OCR: Setup Required");
+        ocrStatusLbl_->setStyleSheet("color: #f59e0b;");
+    }
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // Click on the OCR status indicator → show install instructions.
+    if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
+        WindowsOcrEngine engine;
+        engine.init();
+        if (!engine.isOneocrAvailable()) {
+            QMessageBox::information(this, "OCR Setup Required",
+                "OCR is not yet configured.\n\n"
+                "DocuSearch uses oneocr.dll (the native OCR engine from the\n"
+                "Windows 11 Snipping Tool) for text recognition. These files\n"
+                "are NOT bundled with DocuSearch.\n\n"
+                "To install OCR support:\n"
+                "  1. Open PowerShell in the DocuSearch folder\n"
+                "  2. Run:  scripts\\get_oneocr.ps1\n\n"
+                "This copies oneocr.dll, oneocr.onemodel, and onnxruntime.dll\n"
+                "from your locally-installed Snipping Tool into the DocuSearch\n"
+                "folder. See ONEOCR_SETUP.md for details.\n\n"
+                "After installing, restart DocuSearch and try OCR again.");
+        } else {
+            QMessageBox::information(this, "OCR Status",
+                "OCR is ready to use.\n\n"
+                "Click the green OCR button on a scanned PDF or image\n"
+                "to extract text using oneocr.dll.\n\n"
+                "Supported languages: English, Chinese (Simplified/Traditional),\n"
+                "Korean, Japanese (auto-detected by the model).");
+        }
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, e);
 }
 
 void MainWindow::updateIndexStats() {
