@@ -102,8 +102,12 @@ bool PdfPreview::loadFile(const QString& filePath) {
 
 #ifdef DOCUSEARCH_HAS_POPPLER
     try {
-        auto doc = poppler::document::load_from_file(filePath.toStdString());
-        if (!doc || doc->pages() == 0) {
+        // poppler::document::load_from_file returns a raw pointer that
+        // we own. Wrap it in shared_ptr<void> with a custom deleter.
+        poppler::document* docRaw = poppler::document::load_from_file(
+            filePath.toStdString());
+        if (!docRaw || docRaw->pages() == 0) {
+            delete docRaw;
             m_pageCanvas->setText("Cannot open PDF\n(locked or corrupted)");
             m_document.reset();
             m_totalPages = 0;
@@ -111,15 +115,11 @@ bool PdfPreview::loadFile(const QString& filePath) {
             return false;
         }
 
-        const int realPages = doc->pages();
+        const int realPages = docRaw->pages();
         m_totalPages = std::min(realPages, MAX_PAGES);
 
-        // Store the document as shared_ptr<void> to keep ABI clean.
-        // Use raw pointer + custom deleter since poppler::document may
-        // not have a public move constructor.
-        poppler::document* docPtr = doc.release();
         m_document = std::shared_ptr<void>(
-            docPtr,
+            docRaw,
             [](void* p) { delete static_cast<poppler::document*>(p); });
 
         m_currentPage = 0;
