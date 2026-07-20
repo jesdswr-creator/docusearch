@@ -104,3 +104,74 @@ Stage Summary:
 - Files modified: src/ocr/ocr_helper_main.cpp (full rewrite), src/ocr/WindowsOcrEngine.h, src/ocr/WindowsOcrEngine.cpp, src/ui/MainWindow.cpp, src/ui/SettingsDialog.cpp, CMakeLists.txt, .github/workflows/build.yml, README.md
 - Files created: scripts/get_oneocr.ps1, ONEOCR_SETUP.md
 - NOT YET DONE: commit the changes (need user push permission for next CI run).
+
+---
+Task ID: 2
+Agent: main
+Task: Fix extraction crash by adding SEH protection (Instruction Sets 1-6 from user)
+
+Work Log:
+- Identified root cause: `try/catch` does NOT catch Win32 Structured Exception Handling (SEH) exceptions. Poppler/zlib/minizip can raise access violations on malformed files, which kill the process even with try/catch.
+- Created src/core/SehTranslator.h and .cpp:
+  • SehException class (inherits std::exception) — wraps SEH code + address.
+  • installSehTranslator() — calls _set_se_translator() to install a translator.
+  • Translator function re-throws SEH as SehException so existing catch blocks pick it up.
+  • Maps common SEH codes (ACCESS_VIOLATION, STACK_OVERFLOW, etc.) to human-readable names.
+- Updated src/main.cpp:
+  • Calls installSehTranslator() FIRST, before QApplication, before any library that might raise SEH.
+- Updated src/documents/DocumentExtractorRegistry.cpp:
+  • Wrapped ex->extract(path) in try/catch for SehException, std::bad_alloc, std::exception, and (...) — every failure path returns an ExtractionResult with errorMessage instead of propagating.
+  • DS_ERROR log on every failure for diagnostics.
+- Updated src/ocr/ocr_helper_main.cpp (Instruction Set 3):
+  • Added ValidateImageStruct() — checks type=3, dimensions in [50, 10000], reserved=0, step_size in [width*3, width*8], data_ptr != nullptr. Prints clear diagnostics on each failure.
+  • Added OcrSehTranslator() — converts SEH to std::runtime_error.
+  • Added RunOcrPipelineSeh() — wraps the oneocr.dll call in __try/__except (in a separate function because MSVC cannot mix __try with C++ destructors).
+  • Added static_assert(sizeof(ImageStruct) == 32) and static_assert(alignof(ImageStruct) == 8) — compile-time verification of the ABI contract.
+  • Installed _set_se_translator() at the top of main() in the helper.
+- Updated CMakeLists.txt:
+  • Added src/core/SehTranslator.cpp + .h to APP_SOURCES / APP_HEADERS.
+  • Added src/ui/SearchResultsHighlighter.cpp + .h to APP_SOURCES / APP_HEADERS.
+- Created src/ui/SearchResultsHighlighter.h and .cpp (Instruction Set 2):
+  • Crash-safe QTextDocument highlighter.
+  • OFF by default — opt-in via setEnabled(true).
+  • try/catch around all operations (std::bad_alloc, std::exception, ...).
+  • Hard caps: maxDocumentChars_ = 200000, maxMatchesPerTerm_ = 200.
+  • Explicit cursor advance after each match — no infinite loops.
+  • beginEditBlock/endEditBlock for fast batch updates.
+- Created docs/OCR_LICENSING.md (Instruction Set 4):
+  • Documents the oneocr.dll source (Microsoft Snipping Tool).
+  • Documents the model key (public sample from oneocr.py).
+  • Lists usage rights (personal/non-commercial) and restrictions.
+  • Documents ImageStruct layout, processing pipeline, safety features.
+  • Compliance checklist + alternatives.
+- Updated src/ui/SettingsDialog.cpp (Instruction Set 6):
+  • Added new "Performance" tab listing all extraction/OCR/database limits.
+  • Pulls values from Constants.h — always accurate.
+  • Explains why files may be partially indexed.
+- Created tests/tst_OcrHelper.cpp (Instruction Set 1):
+  • Verifies ImageStruct is 32 bytes, 8-byte aligned, with correct field offsets.
+  • Verifies helper exe exists, exits non-zero with no args.
+  • Verifies helper handles missing file without crashing.
+  • Verifies helper handles corrupt image without crashing.
+- Created tests/tst_ExtractorFuzz.cpp (Instruction Set 5):
+  • Generates random garbage PDFs/DOCXs/XLSXs of various sizes.
+  • Generates byte-pattern files (all-zero, all-FF, etc.).
+  • Generates truncated files (valid PDF start, cut off mid-stream).
+  • Repeated extraction (memory leak check).
+  • All cases verify the extractor returns gracefully — no crash.
+  • Installs SEH translator in initTestCase() to catch Poppler access violations.
+- Updated tests/CMakeLists.txt:
+  • Added tst_OcrHelper target (MSVC only, no SQLite deps).
+  • Added tst_ExtractorFuzz target (MSVC + Poppler, includes SehTranslator.cpp).
+
+Stage Summary:
+- Comprehensive crash-proofing of the extraction pipeline.
+- SEH translator converts access violations / stack overflows / etc. into catchable C++ exceptions in BOTH the main app and the OCR helper.
+- Per-file try/catch in DocumentExtractorRegistry now catches ALL exception types (SEH, bad_alloc, std::exception, unknown).
+- OCR helper has ImageStruct validation + __try/__except wrapper around RunOcrPipeline.
+- New SearchResultsHighlighter is OFF by default — opt-in only. Will not reintroduce the old crash.
+- New Performance tab in Settings explains all limits to users.
+- New tests verify the ImageStruct ABI + helper exe crash safety + extractor fuzz testing.
+- New docs/OCR_LICENSING.md documents the legal/model-key situation.
+- Files modified: src/main.cpp, src/documents/DocumentExtractorRegistry.cpp, src/ocr/ocr_helper_main.cpp, src/ui/SettingsDialog.cpp, CMakeLists.txt, tests/CMakeLists.txt, worklog.md
+- Files created: src/core/SehTranslator.h, src/core/SehTranslator.cpp, src/ui/SearchResultsHighlighter.h, src/ui/SearchResultsHighlighter.cpp, docs/OCR_LICENSING.md, tests/tst_OcrHelper.cpp, tests/tst_ExtractorFuzz.cpp

@@ -67,3 +67,72 @@ docusearch_add_test(tst_FileUtils)
 docusearch_add_test(tst_QueryParser)
 docusearch_add_test(tst_PriorityScheduler)
 docusearch_add_test(tst_FileRepository)
+
+# ---- OCR helper test (separate function — no SQLite deps) -------------
+# Verifies the oneocr.dll ImageStruct ABI + helper exe crash safety.
+if(MSVC)
+    add_executable(tst_OcrHelper tst_OcrHelper.cpp)
+    target_include_directories(tst_OcrHelper PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/core
+    )
+    target_link_libraries(tst_OcrHelper PRIVATE
+        Qt6::Test
+        Qt6::Core
+    )
+    target_compile_definitions(tst_OcrHelper PRIVATE
+        QT_DISABLE_DEPRECATED_BEFORE=0x060000
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        UNICODE
+        _UNICODE
+        _CRT_SECURE_NO_WARNINGS
+    )
+    set_target_properties(tst_OcrHelper PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(tst_OcrHelper PRIVATE /permissive- /W3 /utf-8 /EHsc /Zc:__cplusplus)
+    add_test(NAME tst_OcrHelper COMMAND tst_OcrHelper)
+endif()
+
+# ---- Extractor fuzz test (verifies SEH protection) --------------------
+# Generates random/malformed PDFs/DOCXs and verifies the extractor
+# catches every failure rather than crashing.
+if(MSVC AND DOCUSEARCH_ENABLE_POPPLER)
+    add_executable(tst_ExtractorFuzz tst_ExtractorFuzz.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/SehTranslator.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/Config.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/StringUtils.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/FileUtils.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/TextExtractor.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/PdfExtractor.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/DocxExtractor.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/XlsxExtractor.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/PptxExtractor.cpp
+        ${CMAKE_SOURCE_DIR}/src/documents/DocumentExtractorRegistry.cpp
+    )
+    target_include_directories(tst_ExtractorFuzz PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/core
+        ${CMAKE_SOURCE_DIR}/src/documents
+    )
+    target_link_libraries(tst_ExtractorFuzz PRIVATE
+        Qt6::Test
+        Qt6::Core
+        Poppler::Lib
+        ZLIB::ZLIB
+    )
+    target_compile_definitions(tst_ExtractorFuzz PRIVATE
+        QT_DISABLE_DEPRECATED_BEFORE=0x060000
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        UNICODE
+        _UNICODE
+        _CRT_SECURE_NO_WARNINGS
+        DOCUSEARCH_HAS_POPPLER=1
+    )
+    set_target_properties(tst_ExtractorFuzz PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(tst_ExtractorFuzz PRIVATE /permissive- /W3 /utf-8 /EHsc /Zc:__cplusplus)
+    add_test(NAME tst_ExtractorFuzz COMMAND tst_ExtractorFuzz)
+endif()

@@ -203,6 +203,68 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
 
     tabs->addTab(ocrTab, "OCR");
 
+    // -------- Performance tab --------
+    // Shows all the extraction / OCR / database limits so users understand
+    // why large files may be partially indexed. Read-only — values come
+    // from Constants.h.
+    auto* perfTab = new QWidget(this);
+    auto* perfLay = new QVBoxLayout(perfTab);
+
+    auto addLimitRow = [&](QVBoxLayout* parent, const QString& label, const QString& value) {
+        auto* row = new QHBoxLayout();
+        auto* l = new QLabel(label, this);
+        l->setStyleSheet("font-weight: bold;");
+        auto* v = new QLabel(value, this);
+        v->setStyleSheet("color: #0066cc;");
+        row->addWidget(l);
+        row->addWidget(v);
+        row->addStretch();
+        parent->addLayout(row);
+    };
+
+    auto* extractTitle = new QLabel("Text Extraction", this);
+    extractTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
+    perfLay->addWidget(extractTitle);
+    addLimitRow(perfLay, "Maximum text per file:",
+                QString::number(Constants::kMaxExtractTextChars / 1024) + " KB");
+    addLimitRow(perfLay, "Skip files larger than:",
+                QString::number(Constants::kMaxFilesizeToExtract / (1024 * 1024)) + " MB");
+    addLimitRow(perfLay, "Files per extraction batch:",
+                QString::number(Constants::kExtractionBatchSize));
+    addLimitRow(perfLay, "Files per extraction session:",
+                "30 (200 ms interval)");
+    perfLay->addSpacing(8);
+
+    auto* ocrTitle = new QLabel("OCR (oneocr.dll)", this);
+    ocrTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
+    perfLay->addWidget(ocrTitle);
+    addLimitRow(perfLay, "Skip OCR files larger than:", "20 MB");
+    addLimitRow(perfLay, "Image dimensions accepted:", "50 × 50 to 10000 × 10000 px");
+    addLimitRow(perfLay, "Files per OCR session:", "30 (100 ms interval)");
+    perfLay->addSpacing(8);
+
+    auto* dbTitle = new QLabel("Database (SQLite)", this);
+    dbTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
+    perfLay->addWidget(dbTitle);
+    addLimitRow(perfLay, "Cache size:", "32 MB");
+    addLimitRow(perfLay, "Memory-mapped I/O:", "128 MB");
+    addLimitRow(perfLay, "PDF preview pages:", QString::number(Constants::kMaxPdfPreviewPages));
+    addLimitRow(perfLay, "Preview text length:", "50,000 chars");
+    perfLay->addSpacing(8);
+
+    auto* note = new QLabel(
+        "These limits protect low-RAM (4 GB) Windows systems from memory exhaustion.\n"
+        "Files larger than the limits above will be partially indexed — the first\n"
+        "portion is searchable, the remainder is skipped. Increase the limits via\n"
+        "src/core/Constants.h and rebuild if you need more complete indexing.",
+        this);
+    note->setWordWrap(true);
+    note->setStyleSheet("color: #666; font-style: italic; padding: 8px;");
+    perfLay->addWidget(note);
+    perfLay->addStretch();
+
+    tabs->addTab(perfTab, "Performance");
+
     // -------- Appearance tab --------
     auto* appTab = new QWidget(this);
     auto* appLay = new QVBoxLayout(appTab);

@@ -17,6 +17,8 @@
 // Crash-safety design:
 //   • Runs as a SEPARATE process (killed by main app if it hangs).
 //   • Loads oneocr.dll via LoadLibraryW (no static linkage).
+//   • SEH translator installed — access violations become catchable.
+//   • ImageStruct validated BEFORE being passed to oneocr.dll.
 //   • All Win32 errors are caught and reported as text — no exceptions escape.
 //   • Per-file try/catch keeps one bad image from aborting the batch.
 //   • 100 ms gap between files keeps memory pressure low on 4 GB systems.
@@ -32,12 +34,15 @@
 #include <windows.h>
 #include <wincodec.h>
 #include <objbase.h>
+#include <eh.h>
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
+#include <iomanip>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "windowscodecs.lib")
@@ -258,6 +263,53 @@ static bool LoadImageBgra(const std::wstring& path, BgraImage& out) {
 }
 
 // ── Run OCR on a single file ────────────────────────────────
+// ── Validate ImageStruct BEFORE calling oneocr.dll ──────────
+// Returns true if the struct is safe to pass to oneocr.dll.
+// Catches the "I forgot to set type=3" / "step_size wrong" / "null
+// data_ptr" mistakes that would otherwise cause an access violation
+// inside the DLL.
+static bool ValidateImageStruct(const ImageStruct* img) {
+    if (!img)                                   { std::cerr << "[oneocr] Validate: null ptr\n";          return false; }
+    if (img->type != 3)                         { std::cerr << "[oneocr] Validate: type != 3 (got " << img->type << ")\n"; return false; }
+    if (img->width  < 50 || img->width  > 10000){ std::cerr << "[oneocr] Validate: width out of range\n"; return false; }
+    if (img->height < 50 || img->height > 10000){ std::cerr << "[oneocr] Validate: height out of range\n";return false; }
+    if (img->reserved != 0)                     { std::cerr << "[oneocr] Validate: reserved != 0\n";     return false; }
+    if (img->step_size <= 0 ||
+        img->step_size < (int64_t)img->width * 3 ||
+        img->step_size > (int64_t)img->width * 8) {
+        std::cerr << "[oneocr] Validate: step_size " << img->step_size
+                  << " out of range for width " << img->width << "\n";
+        return false;
+    }
+    if (!img->data_ptr)                         { std::cerr << "[oneocr] Validate: data_ptr null\n";     return false; }
+    return true;
+}
+
+// ── SEH translator: convert Win32 SEH → C++ exception ───────
+// Lets our try/catch blocks catch access violations and similar.
+static void OcrSehTranslator(unsigned int code, EXCEPTION_POINTERS* ep) {
+    void* addr = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+    std::ostringstream oss;
+    oss << "SEH 0x" << std::hex << std::setw(8) << std::setfill('0') << code
+        << " at 0x" << reinterpret_cast<uintptr_t>(addr);
+    throw std::runtime_error(oss.str());
+}
+
+// ── SEH-isolated oneocr.dll call ────────────────────────────
+// MSVC cannot mix __try/__except with C++ object destructors in
+// the same function, so the actual oneocr call lives here in a
+// helper that has no C++ objects with destructors.
+// Returns 0 on success, non-zero on SEH exception.
+static int RunOcrPipelineSeh(int64_t pipeline, ImageStruct* is,
+                             int64_t procOpts, int64_t* result) {
+    __try {
+        int64_t status = pRunOcrPipeline(pipeline, is, procOpts, result);
+        return (int)status;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -0x10000;  // sentinel: SEH exception
+    }
+}
+
 // Returns recognized text. Errors are returned as "[ERROR: ...]" strings
 // (the main app treats any line starting with '[' as a failure marker).
 static std::string OcrFile(int64_t pipeline, int64_t procOpts, const std::string& path) {
@@ -286,8 +338,20 @@ static std::string OcrFile(int64_t pipeline, int64_t procOpts, const std::string
     is.step_size = (int64_t)img.width * 4;
     is.data_ptr  = img.data.data();
 
+    // Validate BEFORE calling oneocr.dll — catches pointer/size bugs
+    // that would otherwise cause an access violation inside the DLL.
+    if (!ValidateImageStruct(&is)) {
+        return "[ERROR: ImageStruct validation failed]";
+    }
+
     int64_t result = 0;
-    int64_t status = pRunOcrPipeline(pipeline, &is, procOpts, &result);
+    // SEH-isolated call: a crash inside oneocr.dll is reported as
+    // status = -0x10000 instead of killing the helper process.
+    int64_t status = RunOcrPipelineSeh(pipeline, &is, procOpts, &result);
+
+    if (status == -0x10000) {
+        return "[ERROR: SEH exception in RunOcrPipeline]";
+    }
     if (status != 0 || result == 0) {
         return "[ERROR: RunOcrPipeline failed (status " + std::to_string(status) + ")]";
     }
@@ -330,7 +394,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Install vectored exception handler (best-effort logging only).
+    // Compile-time verification of ImageStruct layout (oneocr.dll ABI).
+    static_assert(sizeof(ImageStruct) == 32,
+        "ImageStruct must be exactly 32 bytes on x64 (matches oneocr.dll ABI)");
+    static_assert(alignof(ImageStruct) == 8,
+        "ImageStruct must be 8-byte aligned (matches oneocr.dll ABI)");
+
+    // Install the SEH translator — converts Win32 structured exceptions
+    // (access violations, stack overflows) into catchable C++ exceptions.
+    // Without this, a single bad image inside oneocr.dll would kill the
+    // entire helper process and abort the whole batch.
+    _set_se_translator(OcrSehTranslator);
+
+    // Install vectored exception handler (best-effort logging only —
+    // catches exceptions that escape the translator, e.g. stack overflow).
     AddVectoredExceptionHandler(0, VectoredHandler);
 
     // COM (MTA) is needed for WIC image loading. NOT for oneocr.dll itself

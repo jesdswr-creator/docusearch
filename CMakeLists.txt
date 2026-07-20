@@ -225,6 +225,7 @@ set(APP_SOURCES
     src/ui/TagsNotesPane.cpp
     src/ui/IndexingProgress.cpp
     src/ui/SettingsDialog.cpp
+    src/ui/SearchResultsHighlighter.cpp
     src/ui/MainWindow.cpp
     # entry
     src/main.cpp
@@ -270,6 +271,7 @@ set(APP_HEADERS
     src/ui/TagsNotesPane.h
     src/ui/IndexingProgress.h
     src/ui/SettingsDialog.h
+    src/ui/SearchResultsHighlighter.h
     src/ui/MainWindow.h
 )
 
