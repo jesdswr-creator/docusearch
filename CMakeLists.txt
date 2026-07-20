@@ -29,7 +29,11 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Windows: statically link runtime so the app runs without VC++ redistributable
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    add_compile_options(/permissive- /W3 /utf-8 /EHsc /Zc:__cplusplus)
+    # /EHa (instead of /EHsc) is REQUIRED for _set_se_translator() to
+    # actually catch SEH exceptions in C++ try/catch blocks. Without it,
+    # access violations inside Poppler/zlib/oneocr.dll still bypass our
+    # catch handlers and terminate the process. See src/core/SehTranslator.h.
+    add_compile_options(/permissive- /W3 /utf-8 /EHa /Zc:__cplusplus)
     add_link_options(/LARGEADDRESSAWARE)
 endif()
 
@@ -117,7 +121,7 @@ if(MSVC)
     # ole32 (CoCreateInstance) + windowscodecs (WIC) are the only Win32 libs needed.
     target_link_libraries(docusearch_ocr_helper PRIVATE ole32 windowscodecs)
     target_compile_options(docusearch_ocr_helper PRIVATE
-        /std:c++20 /W3 /permissive- /utf-8 /EHsc
+        /std:c++20 /W3 /permissive- /utf-8 /EHa
     )
 endif()
 

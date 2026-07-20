@@ -5,6 +5,9 @@
 #include "SehTranslator.h"
 #include "Logger.h"
 
+#include <QString>
+#include <QChar>
+
 #include <windows.h>
 #include <eh.h>
 #include <sstream>
@@ -59,9 +62,9 @@ static void sehTranslator(unsigned int code, EXCEPTION_POINTERS* ep) {
         : nullptr;
 
     // Log immediately in case the re-throw itself is somehow swallowed.
-    DS_ERROR("SEH", std::string("Structured exception: ") +
-             SehException::name(code) +
-             " (code 0x" + std::to_string(code) + ")");
+    DS_ERROR("SEH", QString("Structured exception: %1 (code 0x%2)")
+             .arg(SehException::name(code))
+             .arg(code, 8, 16, QChar('0')));
 
     throw SehException(code, address);
 }
