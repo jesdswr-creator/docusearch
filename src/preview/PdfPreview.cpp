@@ -162,7 +162,8 @@ void PdfPreview::renderPage(int pageNumber) {
 #ifdef DOCUSEARCH_HAS_POPPLER
     try {
         auto* doc = static_cast<poppler::document*>(m_document.get());
-        auto page = doc->create_page(pageNumber);
+        // create_page returns a raw poppler::page* that we must delete.
+        poppler::page* page = doc->create_page(pageNumber);
         if (!page) {
             m_pageCanvas->setText("Failed to render page");
             return;
@@ -173,7 +174,11 @@ void PdfPreview::renderPage(int pageNumber) {
         // Note: image_antialiasing is not available in all poppler versions.
 
         const double dpi = RENDER_DPI * m_zoomLevel;
-        auto img_data = renderer.render_page(page.get(), dpi, dpi);
+        auto img_data = renderer.render_page(page, dpi, dpi);
+
+        // page is a raw pointer — delete it immediately after rendering.
+        delete page;
+        page = nullptr;
 
         if (!img_data.is_valid()) {
             m_pageCanvas->setText("Failed to render page");
