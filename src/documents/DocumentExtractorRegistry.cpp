@@ -3,6 +3,8 @@
 // ============================================================
 
 #include "DocumentExtractorRegistry.h"
+#include "../core/Logger.h"
+#include "../core/SehTranslator.h"
 #include "TextExtractor.h"
 #include "PdfExtractor.h"
 #include "DocxExtractor.h"
@@ -47,10 +49,49 @@ ExtractionResult DocumentExtractorRegistry::extractByExtension(const QString& pa
         r.source = "ocr";
         return r;
     }
-    if (auto* ex = extractorFor(ext)) return ex->extract(path);
-    ExtractionResult r;
-    r.errorMessage = "No extractor for extension: " + ext;
-    return r;
+
+    auto* ex = extractorFor(ext);
+    if (!ex) {
+        ExtractionResult r;
+        r.errorMessage = "No extractor for extension: " + ext;
+        return r;
+    }
+
+    // ── SEH-safe extraction wrapper ──────────────────────────
+    // Poppler, zlib and minizip can raise Win32 SEH exceptions
+    // (access violations, stack overflows) on malformed files.
+    // The SEH translator installed in main.cpp converts these into
+    // catchable SehException (inherits std::exception). Combined
+    // with the per-file try/catch in MainWindow::onExtract, this
+    // makes extraction crash-proof: one bad file no longer takes
+    // down the whole app.
+    try {
+        return ex->extract(path);
+    } catch (const SehException& e) {
+        DS_ERROR("Extract",
+                 QString("SEH crash on %1: %2").arg(path).arg(e.what()));
+        ExtractionResult r;
+        r.errorMessage = QString("Structured exception: %1").arg(e.what());
+        r.needsOcr = false;  // don't retry via OCR — file is malformed
+        return r;
+    } catch (const std::bad_alloc& e) {
+        DS_ERROR("Extract",
+                 QString("Out of memory on %1: %2").arg(path).arg(e.what()));
+        ExtractionResult r;
+        r.errorMessage = QString("Out of memory: %1").arg(e.what());
+        return r;
+    } catch (const std::exception& e) {
+        DS_ERROR("Extract",
+                 QString("Exception on %1: %2").arg(path).arg(e.what()));
+        ExtractionResult r;
+        r.errorMessage = QString("Exception: %1").arg(e.what());
+        return r;
+    } catch (...) {
+        DS_ERROR("Extract", QString("Unknown exception on %1").arg(path));
+        ExtractionResult r;
+        r.errorMessage = "Unknown extraction failure";
+        return r;
+    }
 }
 
 } // namespace DocuSearch

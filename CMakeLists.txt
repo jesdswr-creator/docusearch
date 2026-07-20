@@ -183,6 +183,7 @@ set(APP_SOURCES
     src/core/Config.cpp
     src/core/StringUtils.cpp
     src/core/FileUtils.cpp
+    src/core/SehTranslator.cpp
     # database
     src/database/Database.cpp
     src/database/Schema.cpp
@@ -236,6 +237,7 @@ set(APP_HEADERS
     src/core/Types.h
     src/core/StringUtils.h
     src/core/FileUtils.h
+    src/core/SehTranslator.h
     src/database/Database.h
     src/database/Schema.h
     src/database/FileRepository.h

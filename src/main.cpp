@@ -9,6 +9,7 @@
 #include "../core/Config.h"
 #include "../core/Constants.h"
 #include "../core/Logger.h"
+#include "../core/SehTranslator.h"
 #include "ui/MainWindow.h"
 
 #include <QApplication>
@@ -20,6 +21,13 @@
 using namespace DocuSearch;
 
 int main(int argc, char* argv[]) {
+    // Install the SEH translator FIRST, before any library that might
+    // raise a structured exception (Poppler, zlib, minizip, oneocr).
+    // This converts access-violation-style crashes into catchable
+    // C++ exceptions — the difference between "Extraction failed for
+    // one file" and "the whole app crashed".
+    DocuSearch::installSehTranslator();
+
     // Round the scale factor to the nearest integer (1x, 2x, 3x) instead
     // of passing fractional scales (1.25x, 1.5x) through. On Windows,
     // fractional scaling causes Qt to rasterize at one DPI and Windows
