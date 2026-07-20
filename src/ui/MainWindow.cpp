@@ -1474,7 +1474,7 @@ void MainWindow::autoScanIndexedFolders() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    WindowsOcrEngine engine;
+    WindowsOcrEngine& engine = WindowsOcrEngine::instance();
     engine.init();
     const bool available = engine.isOneocrAvailable();
 
@@ -1492,7 +1492,7 @@ void MainWindow::updateOcrStatusIndicator() {
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // Click on the OCR status indicator → show install instructions.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        WindowsOcrEngine engine;
+        WindowsOcrEngine& engine = WindowsOcrEngine::instance();
         engine.init();
         if (!engine.isOneocrAvailable()) {
             QMessageBox::information(this, "OCR Setup Required",
@@ -1791,7 +1791,10 @@ void MainWindow::onOcrThisFile(const QString& path) {
     statusBar()->showMessage("Running OCR...", 0);
     QApplication::processEvents();
 
-    WindowsOcrEngine ocrEngine;
+    // Use the singleton — this way the oneocrAvailable_ flag persists
+    // across calls (the status bar indicator and the OCR button share
+    // the same engine state).
+    WindowsOcrEngine& ocrEngine = WindowsOcrEngine::instance();
     if (!ocrEngine.init()) {
         statusBar()->showMessage("OCR helper not found.", 5000);
         QMessageBox::information(this, "OCR",
@@ -1800,20 +1803,21 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
     if (!ocrEngine.isOneocrAvailable()) {
-        statusBar()->showMessage("oneocr.dll not installed.", 5000);
-        QMessageBox::warning(this, "OCR Setup Required",
-            "OCR is not yet configured.\n\n"
+        // Don't hard-block — the helper exe might still find oneocr files
+        // in a path we didn't check (e.g. user installed them after we
+        // initialized). Show a warning and let the user try anyway.
+        statusBar()->showMessage("OCR: setup may be incomplete — trying anyway...", 5000);
+        const auto choice = QMessageBox::warning(this, "OCR Setup May Be Incomplete",
+            "DocuSearch could not find oneocr.dll in the expected locations,\n"
+            "but the OCR helper may still be able to locate it.\n\n"
             "DocuSearch uses oneocr.dll (the native OCR engine from the\n"
-            "Windows 11 Snipping Tool) for text recognition. These files\n"
-            "are NOT bundled with DocuSearch.\n\n"
-            "To install OCR support:\n"
+            "Windows 11 Snipping Tool) for text recognition.\n\n"
+            "If OCR fails, install oneocr files:\n"
             "  1. Open PowerShell in the DocuSearch folder\n"
             "  2. Run:  scripts\\get_oneocr.ps1\n\n"
-            "This copies oneocr.dll, oneocr.onemodel, and onnxruntime.dll\n"
-            "from your locally-installed Snipping Tool into the DocuSearch\n"
-            "folder. See ONEOCR_SETUP.md for details.\n\n"
-            "After installing, restart DocuSearch and try OCR again.");
-        return;
+            "Try OCR anyway?",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (choice != QMessageBox::Yes) return;
     }
 
     QString ocrText;
@@ -1963,6 +1967,12 @@ void MainWindow::onOcrThisFile(const QString& path) {
     updateIndexStats();
     statusBar()->showMessage(
         QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
+
+    // Refresh the OCR status indicator — if OCR just succeeded, oneocr
+    // is definitely installed. This fixes the case where the indicator
+    // showed "Setup Required" because the user installed files after
+    // DocuSearch launched (and our startup detection missed them).
+    updateOcrStatusIndicator();
 }
 
 void MainWindow::onOpenSettings() {
@@ -2006,6 +2016,9 @@ void MainWindow::onOpenSettings() {
 
         const int rc = dlg.exec();
         refreshSavedSearches();
+        // The user may have just closed the dialog after running an
+        // external install script. Refresh the OCR status indicator.
+        updateOcrStatusIndicator();
         if (rc == QDialog::Accepted) {
             AppSettings oldSettings = settings_;
             settings_ = dlg.result();

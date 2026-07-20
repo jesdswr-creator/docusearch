@@ -33,6 +33,11 @@ public:
     WindowsOcrEngine(const WindowsOcrEngine&)            = delete;
     WindowsOcrEngine& operator=(const WindowsOcrEngine&) = delete;
 
+    // Singleton accessor — used by status bar / UI to query OCR status
+    // without creating a new instance each time (which would lose the
+    // cached oneocrAvailable_ flag set by previous OCR runs).
+    static WindowsOcrEngine& instance();
+
     // Initialize the OCR engine. Checks for the helper exe and the
     // oneocr.dll + model files. Returns true if the helper is present.
     // Even if oneocr.dll is missing, returns true so the helper can

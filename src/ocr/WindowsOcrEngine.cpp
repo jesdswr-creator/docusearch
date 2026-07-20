@@ -29,12 +29,26 @@ namespace DocuSearch {
 WindowsOcrEngine::WindowsOcrEngine() = default;
 WindowsOcrEngine::~WindowsOcrEngine() = default;
 
+WindowsOcrEngine& WindowsOcrEngine::instance() {
+    static WindowsOcrEngine inst;
+    static bool initialized = false;
+    if (!initialized) {
+        inst.init();
+        initialized = true;
+    }
+    return inst;
+}
+
 // ── Check if oneocr.dll is available next to the app ────────
 // Searches the same directories the helper exe searches:
 //   <appDir>/oneocr.dll
 //   <appDir>/oneocr/oneocr.dll
 //   <appDir>/models/oneocr/oneocr.dll
 //   %USERPROFILE%/.config/oneocr/oneocr.dll
+//
+// NOTE: These paths MUST match FindOneocrDir() in ocr_helper_main.cpp
+// exactly. If they diverge, the status bar will show "Setup Required"
+// even though the helper can still find the DLL.
 QString WindowsOcrEngine::findOneocrDir() const {
     const QString appDir = QCoreApplication::applicationDirPath();
     const QStringList candidates = {
@@ -42,18 +56,32 @@ QString WindowsOcrEngine::findOneocrDir() const {
         appDir + "/oneocr",
         appDir + "/models/oneocr",
     };
+
+    DS_INFO("OCR", "Searching for oneocr.dll...");
+    DS_INFO("OCR", "  appDir = " + appDir);
+
     for (const QString& dir : candidates) {
-        if (QFileInfo::exists(dir + "/oneocr.dll")) {
+        const QString dllPath = dir + "/oneocr.dll";
+        const bool exists = QFileInfo::exists(dllPath);
+        DS_INFO("OCR", "  checking " + dllPath + " -> " + (exists ? "FOUND" : "missing"));
+        if (exists) {
             return dir;
         }
     }
+
+    // Fallback: %USERPROFILE%/.config/oneocr/ (matches oneocr.py default).
     const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     if (!home.isEmpty()) {
         const QString cfgDir = home + "/.config/oneocr";
-        if (QFileInfo::exists(cfgDir + "/oneocr.dll")) {
+        const QString dllPath = cfgDir + "/oneocr.dll";
+        const bool exists = QFileInfo::exists(dllPath);
+        DS_INFO("OCR", "  checking " + dllPath + " -> " + (exists ? "FOUND" : "missing"));
+        if (exists) {
             return cfgDir;
         }
     }
+
+    DS_WARN("OCR", "  oneocr.dll NOT FOUND in any search path.");
     return {};
 }
 
@@ -72,16 +100,18 @@ bool WindowsOcrEngine::init() {
     // the helpful error message printed by the helper itself.
     const QString oneocrDir = findOneocrDir();
     if (oneocrDir.isEmpty()) {
-        DS_WARN("OCR", "oneocr.dll not found. OCR will be disabled.");
+        DS_WARN("OCR", "oneocr.dll not found. OCR will be unavailable.");
         DS_WARN("OCR", "Run scripts/get_oneocr.ps1 to install oneocr files.");
         oneocrAvailable_ = false;
     } else {
         DS_INFO("OCR", "oneocr.dll found at: " + oneocrDir);
         // Verify model file is also present.
-        if (QFileInfo::exists(oneocrDir + "/oneocr.onemodel")) {
+        const QString modelPath = oneocrDir + "/oneocr.onemodel";
+        if (QFileInfo::exists(modelPath)) {
             oneocrAvailable_ = true;
+            DS_INFO("OCR", "oneocr.onemodel also present. OCR is fully ready.");
         } else {
-            DS_WARN("OCR", "oneocr.dll found but oneocr.onemodel is missing.");
+            DS_WARN("OCR", "oneocr.dll found but oneocr.onemodel is missing at: " + modelPath);
             oneocrAvailable_ = false;
         }
     }
@@ -129,11 +159,21 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
     const QByteArray stderrBytes = proc.readAllStandardError();
     if (!stderrBytes.isEmpty()) {
         const QString err = QString::fromUtf8(stderrBytes).trimmed();
+        // If the helper complains that oneocr files are missing, mark
+        // oneocr as unavailable. This handles the case where the user
+        // installed DocuSearch but hasn't run get_oneocr.ps1 yet.
         if (err.contains("oneocr.dll not found", Qt::CaseInsensitive) ||
-            err.contains("not found", Qt::CaseInsensitive)) {
+            err.contains("oneocr.onemodel not found", Qt::CaseInsensitive)) {
             oneocrAvailable_ = false;
         }
-        DS_WARN("OCR", "Helper stderr: " + err);
+        // The helper prints "[oneocr] ..." info messages to stderr too.
+        // Only log as warning if it actually looks like an error.
+        if (err.contains("ERROR", Qt::CaseInsensitive) ||
+            err.contains("not found", Qt::CaseInsensitive)) {
+            DS_WARN("OCR", "Helper stderr: " + err);
+        } else {
+            DS_INFO("OCR", "Helper stderr: " + err);
+        }
     }
 
     if (proc.exitCode() != 0) {
@@ -160,7 +200,20 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
         }
     }
 
-    return text.trimmed();
+    // If we got back any non-error text, oneocr is definitely working.
+    // This is the most reliable signal — it means the helper actually
+    // loaded oneocr.dll, loaded the model, and ran OCR successfully.
+    // We update the flag so the next call to isOneocrAvailable()
+    // (e.g. from the status bar refresh) returns true.
+    const QString trimmed = text.trimmed();
+    if (!trimmed.isEmpty() && !trimmed.startsWith('[')) {
+        if (!oneocrAvailable_) {
+            DS_INFO("OCR", "OCR succeeded — marking oneocr as available.");
+        }
+        oneocrAvailable_ = true;
+    }
+
+    return trimmed;
 }
 
 QStringList WindowsOcrEngine::availableLanguages() {
