@@ -25,6 +25,7 @@
 #include <QPrinter>
 #include <QTimer>
 #include <QRegularExpression>
+#include <algorithm>
 #include <QTransform>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -79,7 +80,13 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     ocrBtn_ = new QPushButton(header);
     ocrBtn_->setObjectName("ocrBtn");
     ocrBtn_->setCursor(Qt::PointingHandCursor);
-    ocrBtn_->setToolTip("Run OCR on this file (for scanned PDFs and images)");
+    ocrBtn_->setToolTip(
+        "OCR (Optical Character Recognition)\n"
+        "Extracts text from scanned PDFs and images using AI.\n"
+        "Click this if the extracted text is empty or garbled —\n"
+        "it means the document is a scanned image, not born-digital.\n"
+        "The OCR engine (oneocr.dll) runs in a separate process\n"
+        "and cannot crash the main app.");
     ocrBtn_->setText("OCR");
 
     // Zoom buttons hidden — top FilePreviewPane handles zoom now.
@@ -220,6 +227,13 @@ void PreviewPane::setExtractedText(const QString& text) {
     currentExtracted_ = text;
     if (tabExtracted_->isChecked()) {
         extractedContent_->setPlainText(text);
+    }
+    // Re-highlight search terms if a search query is active.
+    // This ensures highlighting appears when the user clicks a different
+    // search result — the extracted text changes but the search query
+    // is still active.
+    if (!searchQuery_.isEmpty()) {
+        highlightSearchTerms();
     }
 }
 
@@ -635,46 +649,70 @@ void PreviewPane::refreshIcons() {
 }
 
 void PreviewPane::highlightSearchTerms() {
-    if (searchQuery_.isEmpty() || currentDocumentText_.isEmpty()) return;
-    if (searchQuery_.length() < 2) return;  // skip very short queries
+    if (searchQuery_.isEmpty()) return;
 
-    QColor highlightColor(255, 248, 120);
+    // Split the query into individual words, stripping FTS5 operators
+    // and field filters so we only highlight actual search terms.
+    QStringList words;
+    QString cleaned = searchQuery_;
+    // Remove field:value filters (e.g., type:pdf, folder:Railway)
+    cleaned.remove(QRegularExpression("\\w+:(\"[^\"]+\"|\\S+)"));
+    // Remove FTS5 operators
+    cleaned.remove(QRegularExpression("\\b(AND|OR|NOT)\\b", QRegularExpression::CaseInsensitiveOption));
+    // Remove quotes and special chars
+    cleaned.remove(QRegularExpression("[\"*\\-+()\\[\\]{}]"));
+    // Split on whitespace
+    words = cleaned.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    if (words.isEmpty()) return;
 
-    // Limit number of highlights to prevent memory issues
-    const int MAX_HIGHLIGHTS = 100;
+    // Filter out very short terms (< 2 chars)
+    words.erase(std::remove_if(words.begin(), words.end(),
+        [](const QString& w) { return w.length() < 2; }), words.end());
+    if (words.isEmpty()) return;
 
-    // Highlight in document preview
-    QList<QTextEdit::ExtraSelection> extraSelections;
-    QTextCursor cursor(documentPage_->document());
-    int count = 0;
-    while (!cursor.isNull() && !cursor.atEnd() && count < MAX_HIGHLIGHTS) {
-        cursor = documentPage_->document()->find(searchQuery_, cursor);
-        if (cursor.isNull()) break;
-        QTextEdit::ExtraSelection sel;
-        sel.format.setBackground(highlightColor);
-        sel.cursor = cursor;
-        extraSelections.append(sel);
-        ++count;
+    QColor highlightColor(255, 235, 59);  // bright yellow
+    const int MAX_HIGHLIGHTS_PER_WORD = 50;
+
+    // Highlight in extracted content panel (this is the main visible one)
+    QList<QTextEdit::ExtraSelection> allSelections;
+    for (const QString& word : words) {
+        QTextCursor cursor(extractedContent_->document());
+        int count = 0;
+        while (!cursor.isNull() && !cursor.atEnd() && count < MAX_HIGHLIGHTS_PER_WORD) {
+            cursor = extractedContent_->document()->find(word, cursor, QTextDocument::FindCaseSensitively);
+            if (cursor.isNull()) {
+                // Try case-insensitive if case-sensitive didn't match
+                cursor = extractedContent_->document()->find(word, cursor);
+                if (cursor.isNull()) break;
+            }
+            QTextEdit::ExtraSelection sel;
+            sel.format.setBackground(highlightColor);
+            sel.cursor = cursor;
+            allSelections.append(sel);
+            ++count;
+        }
     }
-    if (!extraSelections.isEmpty()) {
-        documentPage_->setExtraSelections(extraSelections);
+    if (!allSelections.isEmpty()) {
+        extractedContent_->setExtraSelections(allSelections);
     }
 
-    // Highlight in extracted content panel
-    QList<QTextEdit::ExtraSelection> extraSelections2;
-    QTextCursor cursor2(extractedContent_->document());
-    count = 0;
-    while (!cursor2.isNull() && !cursor2.atEnd() && count < MAX_HIGHLIGHTS) {
-        cursor2 = extractedContent_->document()->find(searchQuery_, cursor2);
-        if (cursor2.isNull()) break;
-        QTextEdit::ExtraSelection sel;
-        sel.format.setBackground(highlightColor);
-        sel.cursor = cursor2;
-        extraSelections2.append(sel);
-        ++count;
+    // Also highlight in documentPage_ (hidden but kept for compatibility)
+    QList<QTextEdit::ExtraSelection> docSelections;
+    for (const QString& word : words) {
+        QTextCursor cursor(documentPage_->document());
+        int count = 0;
+        while (!cursor.isNull() && !cursor.atEnd() && count < MAX_HIGHLIGHTS_PER_WORD) {
+            cursor = documentPage_->document()->find(word, cursor);
+            if (cursor.isNull()) break;
+            QTextEdit::ExtraSelection sel;
+            sel.format.setBackground(highlightColor);
+            sel.cursor = cursor;
+            docSelections.append(sel);
+            ++count;
+        }
     }
-    if (!extraSelections2.isEmpty()) {
-        extractedContent_->setExtraSelections(extraSelections2);
+    if (!docSelections.isEmpty()) {
+        documentPage_->setExtraSelections(docSelections);
     }
 }
 

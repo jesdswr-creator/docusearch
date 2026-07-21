@@ -490,7 +490,7 @@ void MainWindow::buildCentral() {
         "  background: #e0e0e0; "
         "}");
     const QStringList navLabels = {
-        "Search", "Saved", "Tags", "Notes",
+        "Search",
         "Stats", "Settings", "Help", "About"
     };
     for (int i = 0; i < navLabels.size(); ++i) {
@@ -909,6 +909,13 @@ void MainWindow::onSearch(const QString& query) {
                                      .arg(hits.size() == 1 ? "" : "s")
                                      .arg(t.elapsed()));
         }
+
+        // Highlight search terms in the extracted text pane (yellow).
+        // This makes it easy for users to find the relevant parts of
+        // the document after clicking a search result.
+        if (previewPane_) {
+            previewPane_->setSearchQuery(query);
+        }
     } catch (...) {
         statusBar()->showMessage("Search error - try a different query");
     }
@@ -1180,18 +1187,11 @@ void MainWindow::onSidebarClicked(int row) {
                     return Utils::formatFileSize(f.exists() ? f.size() : 0);
                 }()));
         sidebarList_->setCurrentRow(0);
-    } else if (page == "Saved") {
-        // Show the saved searches dropdown.
-        statusBar()->showMessage("Use the 'Saved Searches' dropdown in the search bar.", 5000);
-        sidebarList_->setCurrentRow(0);
-    } else if (page == "Tags") {
-        statusBar()->showMessage("Tags are shown in the right panel for the selected file.", 5000);
-        sidebarList_->setCurrentRow(0);
-    } else if (page == "Notes") {
-        statusBar()->showMessage("Notes are shown in the right panel for the selected file.", 5000);
-        sidebarList_->setCurrentRow(0);
     }
     // "Search" stays as the current page.
+    // Saved/Tags/Notes were removed from the menu — they're accessible
+    // directly: Saved Searches via the search bar dropdown, Tags/Notes
+    // in the right panel when a file is selected.
 }
 
 void MainWindow::refreshPreviewForSelectedFile() {

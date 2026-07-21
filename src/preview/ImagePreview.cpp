@@ -20,6 +20,21 @@ ImagePreview::ImagePreview(QWidget* parent)
 
     // Toolbar with zoom buttons
     auto* toolbar = new QWidget(this);
+    toolbar->setStyleSheet(
+        "QWidget { background: #e0e0e0; border-bottom: 1px solid #ccc; }"
+        "QPushButton { "
+        "  background: #ffffff; "
+        "  border: 1px solid #bbb; "
+        "  border-radius: 3px; "
+        "  padding: 4px 10px; "
+        "  font-size: 10pt; "
+        "  font-weight: bold; "
+        "  color: #333; "
+        "  min-height: 24px; "
+        "} "
+        "QPushButton:hover { background: #f0f7ff; border-color: #0066cc; } "
+        "QPushButton:pressed { background: #cce0ff; } "
+        "QLabel { background: transparent; border: none; }");
     auto* tbLay = new QHBoxLayout(toolbar);
     tbLay->setContentsMargins(4, 4, 4, 4);
     tbLay->setSpacing(4);

@@ -50,7 +50,7 @@ private:
 
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticEnabled = false;
-    float       m_semanticWeight  = 0.40f;
+    float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword
     int         m_topK            = 20;
 };
 
