@@ -473,6 +473,22 @@ void MainWindow::buildCentral() {
     sidebarList_->setFixedHeight(36);
     sidebarList_->setSelectionMode(QAbstractItemView::SingleSelection);
     sidebarList_->setFocusPolicy(Qt::NoFocus);
+    sidebarList_->setStyleSheet(
+        "QListWidget#topMenuList { background: #f5f5f5; border: none; outline: none; }"
+        "QListWidget#topMenuList::item { "
+        "  padding: 4px 12px; "
+        "  border-radius: 4px; "
+        "  margin: 2px; "
+        "  font-size: 10pt; "
+        "  color: #444; "
+        "}"
+        "QListWidget#topMenuList::item:selected { "
+        "  background: #0066cc; "
+        "  color: white; "
+        "}"
+        "QListWidget#topMenuList::item:hover { "
+        "  background: #e0e0e0; "
+        "}");
     const QStringList navLabels = {
         "Search", "Saved", "Tags", "Notes",
         "Stats", "Settings", "Help", "About"
@@ -480,7 +496,8 @@ void MainWindow::buildCentral() {
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
-        item->setSizeHint(QSize(80, 30));
+        // Wider items so "Settings" (8 chars) fits at 10pt font.
+        item->setSizeHint(QSize(95, 28));
         item->setTextAlignment(Qt::AlignCenter);
     }
     if (sidebarList_->count() > 0) {
@@ -690,14 +707,14 @@ void MainWindow::buildStatusBar() {
     // Disabled by default — enabled after BGE service becomes ready.
     semanticToggleBtn_ = new QPushButton(sb);
     semanticToggleBtn_->setObjectName("semanticToggleBtn");
-    semanticToggleBtn_->setText("Semantic: OFF");
+    semanticToggleBtn_->setText("AI: OFF");
     semanticToggleBtn_->setCheckable(true);
     semanticToggleBtn_->setChecked(false);
     semanticToggleBtn_->setEnabled(false);
     semanticToggleBtn_->setToolTip(
-        "Toggle semantic search (BGE Small EN v1.5).\n"
-        "When ON, search results include semantic matches in addition to keyword matches.\n"
-        "Disabled if the BGE model is not installed (run scripts/download_bge_model.ps1).");
+        "Toggle AI semantic search (BGE Small EN v1.5).\n"
+        "When ON, search results include AI semantic matches in addition to keyword matches.\n"
+        "Disabled if the AI model is not installed.");
     semanticToggleBtn_->setCursor(Qt::PointingHandCursor);
     sb->addPermanentWidget(semanticToggleBtn_);
 
@@ -1689,7 +1706,7 @@ void MainWindow::initializeSemanticSearch() {
             bgeService_->initialize(dbPath, modelPath);
         });
 
-        DS_INFO("BGE", "Semantic search subsystem initializing in background...");
+        DS_INFO("BGE", "AI semantic search subsystem initializing in background...");
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Failed to initialize semantic search: %1").arg(e.what()));
         semanticEnabled_ = false;
@@ -1703,22 +1720,23 @@ void MainWindow::onSemanticToggled(bool checked) {
     if (checked && (!bgeService_ || !bgeService_->isReady())) {
         // Block the toggle — show install instructions.
         if (semanticToggleBtn_) semanticToggleBtn_->setChecked(false);
-        QMessageBox::information(this, "Semantic Search",
-            "Semantic search model not available.\n\n"
-            "Download the BGE Small EN v1.5 model:\n"
-            "  1. Open PowerShell in the DocuSearch folder\n"
-            "  2. Run:  scripts\\download_bge_model.ps1\n\n"
-            "This downloads model.onnx (~50 MB) from HuggingFace.\n\n"
-            "After installing, restart DocuSearch and try again.");
+        QMessageBox::information(this, "AI Search",
+            "AI search model not available.\n\n"
+            "The AI model files should be bundled with DocuSearch.\n"
+            "If they're missing, the app may have been installed incorrectly.\n\n"
+            "Model files expected at:\n"
+            "  models/bge-small-en-v1.5/model.onnx\n"
+            "  models/bge-small-en-v1.5/vocab.txt\n"
+            "  onnxruntime.dll");
         return;
     }
     semanticEnabled_ = checked;
     if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
     if (semanticToggleBtn_) {
-        semanticToggleBtn_->setText(checked ? "Semantic: ON" : "Semantic: OFF");
+        semanticToggleBtn_->setText(checked ? "AI: ON" : "AI: OFF");
     }
     statusBar()->showMessage(
-        checked ? "Semantic search enabled." : "Semantic search disabled.",
+        checked ? "AI search enabled." : "AI search disabled.",
         3000);
 }
 
@@ -1731,7 +1749,7 @@ void MainWindow::onBgeReady() {
         hybridSearch_->setBgeService(bgeService_.get());
     }
     statusBar()->showMessage(
-        "Semantic search ready: " + bgeService_->getStatus(), 5000);
+        "AI search ready: " + bgeService_->getStatus(), 5000);
 }
 
 void MainWindow::onBgeEmbeddingProgress(int current, int total) {
@@ -2243,9 +2261,9 @@ void MainWindow::onOpenSettings() {
         QObject::connect(&dlg, &SettingsDialog::embedAllRequested,
             this, [this]() {
                 if (!bgeService_ || !bgeService_->isReady()) {
-                    QMessageBox::information(this, "Semantic Search",
-                        "Semantic search is not ready.\n\n"
-                        "Make sure the BGE model is installed at:\n"
+                    QMessageBox::information(this, "AI Search",
+                        "AI search is not ready.\n\n"
+                        "Make sure the AI model is installed at:\n"
                         "  models/bge-small-en-v1.5/model.onnx\n"
                         "  models/bge-small-en-v1.5/vocab.txt\n\n"
                         "And that onnxruntime.dll is present.");

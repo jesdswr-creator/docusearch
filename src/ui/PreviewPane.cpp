@@ -100,21 +100,25 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     v->addWidget(header);
 
     // ---- Viewer body ----
-    // We use a QScrollArea containing a stacked widget that can show
-    // either a page image (for PDF/image preview) or a text browser
-    // (for DOCX/XLSX/PPTX/TXT preview).
+    // The visual file preview is now handled by the top FilePreviewPane.
+    // The previewScroll_ below is kept for compatibility (existing code
+    // references pageImageLbl_ and documentPage_) but is HIDDEN so it
+    // doesn't create a gap between the top preview pane and the extracted
+    // text panel. This fixes the "one space in between preview pane and
+    // extracted text pane" issue.
     previewScroll_ = new QScrollArea(this);
     previewScroll_->setWidgetResizable(true);
     previewScroll_->setFrameShape(QFrame::NoFrame);
     previewScroll_->setAlignment(Qt::AlignCenter);
+    previewScroll_->setVisible(false);  // HIDDEN — FilePreviewPane handles preview
 
-    // Page image label (for PDF/image preview)
+    // Page image label (for PDF/image preview) — kept for compatibility
     pageImageLbl_ = new QLabel(previewScroll_);
     pageImageLbl_->setAlignment(Qt::AlignCenter);
     pageImageLbl_->setText("Select a file to preview");
     pageImageLbl_->setMinimumSize(400, 500);
 
-    // Text browser (for text-based preview)
+    // Text browser (for text-based preview) — kept for compatibility
     documentPage_ = new QTextBrowser(previewScroll_);
     documentPage_->setObjectName("documentPage");
     documentPage_->setOpenExternalLinks(true);
@@ -122,7 +126,8 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     // Default to text mode
     previewScroll_->setWidget(documentPage_);
-    v->addWidget(previewScroll_, 1);
+    // Do NOT add previewScroll_ to the layout — it's hidden and would
+    // create an empty gap. FilePreviewPane (top) handles the visual.
 
     // ---- Extracted panel (bottom) ----
     auto* extractedPanel = new QWidget(this);
@@ -187,7 +192,9 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     actLay->addWidget(downloadBtn_);
     epLay->addWidget(actionsRow);
 
-    v->addWidget(extractedPanel);
+    // extractedPanel takes ALL remaining space (previewScroll_ is hidden
+    // and not added to layout, so this panel fills the entire bottom pane).
+    v->addWidget(extractedPanel, 1);
 
     // ---- Connections ----
     connect(prevPageBtn_, &QPushButton::clicked, this, &PreviewPane::onPrevPage);

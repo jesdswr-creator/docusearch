@@ -196,7 +196,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* semLay = new QVBoxLayout(semTab);
 
     // Model status group
-    auto* modelGroup = new QGroupBox("BGE Embedding Model", this);
+    auto* modelGroup = new QGroupBox("AI Model", this);
     auto* modelLay = new QVBoxLayout(modelGroup);
 
     const QString modelPath = QCoreApplication::applicationDirPath() +
@@ -225,7 +225,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* searchLay = new QVBoxLayout(searchGroup);
 
     auto* weightLbl = new QLabel(
-        "Semantic Weight (40% = balanced, 0% = keyword only)", this);
+        "AI Weight (40% = balanced, 0% = keyword only)", this);
     searchLay->addWidget(weightLbl);
     auto* weightSlider = new QSlider(Qt::Horizontal, this);
     weightSlider->setRange(0, 100);
@@ -239,7 +239,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     threshSlider->setValue(40);
     searchLay->addWidget(threshSlider);
 
-    auto* topkLbl = new QLabel("Maximum Semantic Results", this);
+    auto* topkLbl = new QLabel("Maximum AI Results", this);
     searchLay->addWidget(topkLbl);
     auto* topkSpin = new QSpinBox(this);
     topkSpin->setRange(5, 100);
@@ -249,7 +249,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     semLay->addWidget(searchGroup);
 
     // Embedding status group
-    auto* embGroup = new QGroupBox("Embedding Status", this);
+    auto* embGroup = new QGroupBox("AI Status", this);
     auto* embLay = new QVBoxLayout(embGroup);
     auto* embLbl = new QLabel(
         "Embeddings are generated automatically when documents are extracted.\n"
@@ -259,7 +259,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     embLbl->setWordWrap(true);
     embLay->addWidget(embLbl);
 
-    auto* embedAllBtn = new QPushButton("Embed All Documents Now", this);
+    auto* embedAllBtn = new QPushButton("Generate AI Embeddings for All Documents", this);
     embedAllBtn->setToolTip(
         "Generate BGE embeddings for all indexed documents that don't have one yet.\n"
         "Runs in the background — check the status bar for progress.\n"
@@ -277,7 +277,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     semLay->addWidget(embGroup);
 
     semLay->addStretch();
-    tabs->addTab(semTab, "Semantic Search");
+    tabs->addTab(semTab, "AI Search");
 
     // -------- Saved searches tab --------
     auto* savTab = new QWidget(this);
