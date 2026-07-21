@@ -32,7 +32,11 @@ public:
     static constexpr int MAX_SEQ_LENGTH  = 128;
 
 private:
-    int hashWord(const QString& word) const;
+    // WordPiece segmentation: greedy longest-match from the start.
+    // Returns a vector of token IDs for the given word. If no decomposition
+    // is found, returns a single UNK_TOKEN_ID. If vocab not loaded,
+    // returns an empty vector.
+    std::vector<int> wordpieceTokenize(const QString& word);
 
     QHash<QString, int> m_vocab;
     bool m_hasVocab = false;
