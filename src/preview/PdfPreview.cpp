@@ -18,7 +18,7 @@
 #include <QHBoxLayout>
 #include <QPixmap>
 #include <QImage>
-#include <chrono>
+#include <QTimer>
 
 namespace DocuSearch {
 
@@ -35,12 +35,17 @@ PdfPreview::PdfPreview(QWidget* parent)
     tbLay->setSpacing(4);
 
     m_prevButton    = new QPushButton("‹ Prev", toolbar);
+    m_prevButton->setToolTip("Previous page");
     m_nextButton    = new QPushButton("Next ›", toolbar);
+    m_nextButton->setToolTip("Next page");
     m_zoomOutButton = new QPushButton("-", toolbar);
     m_zoomOutButton->setFixedWidth(32);
+    m_zoomOutButton->setToolTip("Zoom out");
     m_zoomInButton  = new QPushButton("+", toolbar);
     m_zoomInButton->setFixedWidth(32);
+    m_zoomInButton->setToolTip("Zoom in");
     m_fitButton     = new QPushButton("Fit", toolbar);
+    m_fitButton->setToolTip("Fit page to window");
 
     m_pageLabel = new QLabel("No document loaded", toolbar);
     m_pageLabel->setStyleSheet("color: #666; padding: 0 8px;");
@@ -132,8 +137,17 @@ bool PdfPreview::loadFile(const QString& filePath) {
             m_pageLabel->setText(QString("Page 1 of %1").arg(m_totalPages));
         }
 
+        // Render page 0 first at 100% so we have something to show,
+        // then immediately call onFitWindow() to scale it down to fit
+        // the viewport. This makes PDFs open at a comfortable reading
+        // size instead of overflowing.
         renderPage(0);
         updateButtonStates();
+
+        // Defer the fit-to-window call so the scroll area has its final
+        // viewport size before we compute the zoom level.
+        QTimer::singleShot(0, this, [this]() { onFitWindow(); });
+
         return true;
     } catch (const std::exception& e) {
         m_pageCanvas->setText(QString("Error opening PDF:\n%1").arg(e.what()));
@@ -239,8 +253,41 @@ void PdfPreview::onZoomOut() {
 }
 
 void PdfPreview::onFitWindow() {
-    m_zoomLevel = 1.0;
-    renderPage(m_currentPage);
+    if (!m_document || m_totalPages == 0) return;
+    // Calculate zoom so the rendered page fits the scroll area viewport.
+    // We render the page once at 100% to measure its pixel size, then
+    // compute the zoom ratio from that.
+    try {
+        auto* doc = static_cast<poppler::document*>(m_document.get());
+        poppler::page* page = doc->create_page(m_currentPage);
+        if (!page) return;
+
+        poppler::page_renderer renderer;
+        renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
+        auto img_data = renderer.render_page(page, RENDER_DPI, RENDER_DPI);
+        delete page;
+
+        if (!img_data.is_valid()) {
+            m_zoomLevel = 1.0;
+            renderPage(m_currentPage);
+            return;
+        }
+
+        const int naturalWidthPx = img_data.width();
+        const int viewportWidth = m_scrollArea->viewport()->width() - 20;
+        if (viewportWidth <= 0 || naturalWidthPx <= 0) {
+            m_zoomLevel = 1.0;
+        } else {
+            // Fit page to viewport width, capped to [0.1, 2.0].
+            m_zoomLevel = std::max(0.1, std::min(2.0,
+                static_cast<double>(viewportWidth) / naturalWidthPx));
+        }
+        renderPage(m_currentPage);
+    } catch (...) {
+        // Fall back to 100% if anything goes wrong.
+        m_zoomLevel = 1.0;
+        renderPage(m_currentPage);
+    }
 }
 
 void PdfPreview::clear() {

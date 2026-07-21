@@ -184,6 +184,43 @@ jobs:
       # a separate `vcpkg install` step. Tesseract/Leptonica are REMOVED —
       # OCR is handled by Windows OCR (built into Windows 10/11).
 
+      - name: Download ONNX Runtime (for build + bundle)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Download pre-built ONNX Runtime (CPU, x64) from Microsoft's GitHub
+          # release. We use it BOTH for building (headers + .lib) AND for
+          # bundling (onnxruntime.dll) in the release folder. This avoids the
+          # 30+ minute vcpkg compile of onnxruntime from source.
+          # License: MIT (free to redistribute).
+          $ortVersion = "1.18.1"
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-$ortVersion.zip"
+          $zipPath = "$env:TEMP\onnxruntime.zip"
+          $ortRoot = "C:\onnxruntime"  # short path to avoid MSVC path-length issues
+
+          Write-Host "Downloading ONNX Runtime v$ortVersion ..."
+          $ProgressPreference = 'SilentlyContinue'
+          try {
+            Invoke-WebRequest -Uri $ortUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+            Write-Host "Extracting to $ortRoot ..."
+            if (Test-Path $ortRoot) { Remove-Item -Recurse -Force $ortRoot }
+            Expand-Archive -Path $zipPath -DestinationPath $ortRoot -Force
+            # The zip extracts to onnxruntime-win-x64-<version>/; move contents up one level.
+            $inner = Get-ChildItem -Path $ortRoot -Directory | Select-Object -First 1
+            if ($inner) {
+              Get-ChildItem -Path $inner.FullName -Force | Move-Item -Destination $ortRoot -Force
+              Remove-Item -Recurse -Force $inner.FullName
+            }
+            # Verify layout
+            Write-Host "ONNX Runtime layout:"
+            Get-ChildItem $ortRoot -Recurse -File | ForEach-Object { Write-Host "  $($_.FullName.Substring($ortRoot.Length))" }
+            # Export the path for the next CMake configure step.
+            echo "ONNXRUNTIME_ROOT=$ortRoot" >> $env:GITHUB_ENV
+          } catch {
+            Write-Host "WARNING: Failed to download ONNX Runtime: $($_.Exception.Message)"
+            Write-Host "  Semantic search will be unavailable in this build."
+          }
+
       - name: Configure CMake (this also installs vcpkg deps from vcpkg.json)
         shell: pwsh
         run: |
@@ -191,6 +228,9 @@ jobs:
           # OCR is handled by oneocr.dll (from the Win11 Snipping Tool),
           # loaded at runtime by docusearch_ocr_helper.exe — no third-party
           # build dependency. Users install oneocr files via get_oneocr.ps1.
+          #
+          # ONNX Runtime is ENABLED if ONNXRUNTIME_ROOT is set (downloaded
+          # in the previous step). This enables BGE semantic search.
           #
           # CRITICAL: Capture output and check exit code. Previously the
           # configure step could fail silently (e.g. due to a CMakeLists.txt
@@ -219,7 +259,9 @@ jobs:
               -DVCPKG_MANIFEST_MODE=ON `
               -DDOCUSEARCH_BUILD_TESTS=ON `
               -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
-              -DDOCUSEARCH_ENABLE_POPPLER=ON 2>&1
+              -DDOCUSEARCH_ENABLE_POPPLER=ON `
+              -DDOCUSEARCH_HAS_ONNXRUNTIME=ON `
+              -DONNXRUNTIME_ROOT="$env:ONNXRUNTIME_ROOT" 2>&1
             $exitCode = $LASTEXITCODE
             $output | Out-File -FilePath configure-output.log -Encoding utf8
             if ($exitCode -eq 0 -and (Test-Path "build\ALL_BUILD.vcxproj")) {
@@ -505,12 +547,73 @@ jobs:
             Copy-Item "docs\RELEASE_CHECKLIST.md" "$dst\docs\RELEASE_CHECKLIST.md" -Force
             Write-Host "Bundled docs/RELEASE_CHECKLIST.md"
           }
-          # Create empty models/ dir so users know where to install BGE model
-          New-Item -ItemType Directory -Path "$dst\models\bge-small-en-v1.5" -Force | Out-Null
-          $readmePath = "$dst\models\bge-small-en-v1.5\README.txt"
-          "Place model.onnx, tokenizer.json, and config.json in this folder." | Out-File -FilePath $readmePath -Encoding utf8
-          "Run ..\..\scripts\download_bge_model.ps1 to download them automatically." | Out-File -FilePath $readmePath -Encoding utf8 -Append
-          Write-Host "Created models/bge-small-en-v1.5/ placeholder"
+
+      - name: Download BGE Small EN v1.5 model (bundled with app)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Download the BGE Small EN v1.5 model from HuggingFace and
+          # bundle it into the release folder. This way users don't need
+          # to download it themselves — semantic search works out of the box.
+          # The model is Apache 2.0 licensed (free to redistribute).
+          $dst = "build\bin\Release\models\bge-small-en-v1.5"
+          New-Item -ItemType Directory -Path $dst -Force | Out-Null
+
+          $ProgressPreference = 'SilentlyContinue'  # speed up Invoke-WebRequest
+
+          $files = @(
+            @{ Name = "model.onnx";      Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx"; MinSize = 40MB },
+            @{ Name = "tokenizer.json";  Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer.json"; MinSize = 100KB },
+            @{ Name = "config.json";     Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json";    MinSize = 100  }
+          )
+
+          foreach ($f in $files) {
+            $destPath = Join-Path $dst $f.Name
+            Write-Host "Downloading $($f.Name) ..."
+            try {
+              Invoke-WebRequest -Uri $f.Url -OutFile $destPath -UseBasicParsing -ErrorAction Stop
+              $size = (Get-Item $destPath).Length
+              if ($size -lt $f.MinSize) {
+                Write-Host "WARNING: $($f.Name) is only $size bytes (expected >= $($f.MinSize))"
+              } else {
+                $sizeStr = if ($size -gt 1MB) { '{0:N1} MB' -f ($size/1MB) } else { '{0:N1} KB' -f ($size/1KB) }
+                Write-Host "  OK: $($f.Name) ($sizeStr)"
+              }
+            } catch {
+              Write-Host "WARNING: Failed to download $($f.Name): $($_.Exception.Message)"
+              Write-Host "  Semantic search will be unavailable in this build."
+            }
+          }
+
+          # Verify model.onnx is present (semantic search won't work without it)
+          $modelPath = Join-Path $dst "model.onnx"
+          if (Test-Path $modelPath) {
+            $modelSize = (Get-Item $modelPath).Length
+            if ($modelSize -ge 40MB) {
+              Write-Host "BGE model bundled successfully ($('{0:N1}' -f ($modelSize/1MB)) MB)"
+            } else {
+              Write-Host "WARNING: BGE model is too small ($modelSize bytes) — semantic search may not work"
+            }
+          } else {
+            Write-Host "WARNING: BGE model not downloaded — semantic search will be unavailable"
+          }
+
+      - name: Bundle ONNX Runtime DLL with app
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Copy onnxruntime.dll (already downloaded earlier for the build)
+          # into the release folder so semantic search works out of the box.
+          $src = Join-Path $env:ONNXRUNTIME_ROOT "lib\onnxruntime.dll"
+          $dst = "build\bin\Release"
+          if (Test-Path $src) {
+            Copy-Item $src "$dst\onnxruntime.dll" -Force
+            $size = (Get-Item "$dst\onnxruntime.dll").Length
+            Write-Host "Bundled onnxruntime.dll ($('{0:N1}' -f ($size/1MB)) MB)"
+          } else {
+            Write-Host "WARNING: onnxruntime.dll not found at $src"
+            Write-Host "  Semantic search will be unavailable in this build."
+          }
 
       - name: Build portable ZIP
         shell: pwsh

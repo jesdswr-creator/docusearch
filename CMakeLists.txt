@@ -375,27 +375,46 @@ endif()
 if(DOCUSEARCH_HAS_ONNXRUNTIME)
     if(TARGET onnxruntime::onnxruntime)
         target_link_libraries(DocuSearch PRIVATE onnxruntime::onnxruntime)
+        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
+        message(STATUS "ONNX Runtime: enabled via vcpkg target (semantic search available)")
     elseif(TARGET onnxruntime)
         target_link_libraries(DocuSearch PRIVATE onnxruntime)
-    else()
-        # Fallback: assume manual install at ONNXRUNTIME_ROOT
-        if(DEFINED ONNXRUNTIME_ROOT)
-            target_include_directories(DocuSearch PRIVATE "${ONNXRUNTIME_ROOT}/include")
-            target_link_libraries(DocuSearch PRIVATE
-                "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib")
+        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
+        message(STATUS "ONNX Runtime: enabled via onnxruntime target (semantic search available)")
+    elseif(DEFINED ONNXRUNTIME_ROOT)
+        # Fallback: use pre-built ONNX Runtime binaries at ONNXRUNTIME_ROOT.
+        # This is the typical layout from Microsoft's GitHub releases:
+        #   <root>/include/  — headers
+        #   <root>/lib/      — onnxruntime.lib + onnxruntime.dll (both!)
+        # Some older releases put the DLL in <root>/bin/ — check both.
+        target_include_directories(DocuSearch PRIVATE "${ONNXRUNTIME_ROOT}/include")
+        target_link_libraries(DocuSearch PRIVATE
+            "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib")
+        # Find the DLL — it could be in lib/ (newer releases) or bin/ (older).
+        set(ONNXRUNTIME_DLL_PATH "")
+        if(EXISTS "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll")
+            set(ONNXRUNTIME_DLL_PATH "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll")
+        elseif(EXISTS "${ONNXRUNTIME_ROOT}/bin/onnxruntime.dll")
+            set(ONNXRUNTIME_DLL_PATH "${ONNXRUNTIME_ROOT}/bin/onnxruntime.dll")
+        endif()
+        if(ONNXRUNTIME_DLL_PATH)
             add_custom_command(TARGET DocuSearch POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_ROOT}/bin/onnxruntime.dll"
+                "${ONNXRUNTIME_DLL_PATH}"
                 "$<TARGET_FILE_DIR:DocuSearch>")
+            target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
+            message(STATUS "ONNX Runtime: enabled via ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT} "
+                           "(DLL: ${ONNXRUNTIME_DLL_PATH})")
         else()
-            message(WARNING "DOCUSEARCH_HAS_ONNXRUNTIME is ON but onnxruntime target not found. "
-                            "Set ONNXRUNTIME_ROOT to point at the ONNX Runtime install dir.")
-            set(DOCUSEARCH_HAS_ONNXRUNTIME OFF)
+            message(WARNING "DOCUSEARCH_HAS_ONNXRUNTIME is ON and ONNXRUNTIME_ROOT is set, "
+                            "but onnxruntime.dll not found in lib/ or bin/. "
+                            "Semantic search will be compiled in but may fail to load.")
+            target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
         endif()
-    endif()
-    if(DOCUSEARCH_HAS_ONNXRUNTIME)
-        target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_ONNXRUNTIME=1)
-        message(STATUS "ONNX Runtime: enabled (semantic search available)")
+    else()
+        message(WARNING "DOCUSEARCH_HAS_ONNXRUNTIME is ON but onnxruntime target not found "
+                        "and ONNXRUNTIME_ROOT is not set. Disabling ONNX Runtime.")
+        set(DOCUSEARCH_HAS_ONNXRUNTIME OFF)
     endif()
 else()
     message(STATUS "ONNX Runtime: disabled (semantic search unavailable; "

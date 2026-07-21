@@ -427,11 +427,13 @@ void MainWindow::buildTitleBar() {
 }
 
 // ============================================================
-// Central area: sidebar + (search bar + 3-panel splitter) + right panel
+// Central area: top menu bar + (search bar + 3-panel splitter) + right panel
 // ============================================================
 void MainWindow::buildCentral() {
     // The central widget's main layout was created in the ctor.
-    // We add a horizontal layout containing: sidebar + center + right panel.
+    // We add a horizontal layout containing: center + right panel.
+    // (The left sidebar has been replaced by a horizontal top menu bar
+    // that sits above the search bar — same navigation, less screen space.)
     auto* centralWidget = this->centralWidget();
     auto* mainLay = qobject_cast<QVBoxLayout*>(centralWidget->layout());
 
@@ -441,18 +443,36 @@ void MainWindow::buildCentral() {
     mainLay->addLayout(hLay, 1);
 
     // ============================================================
-    // 1) LEFT SIDEBAR (170px — compact professional width)
+    // 1) CENTER PANEL (top menu bar + search bar + 3-panel splitter)
     // ============================================================
-    sidebar_ = new QWidget(centralWidget);
-    sidebar_->setObjectName("sidebar");
-    sidebar_->setFixedWidth(140);
+    auto* centerWidget = new QWidget(centralWidget);
+    auto* centerLay = new QVBoxLayout(centerWidget);
+    centerLay->setContentsMargins(0, 0, 0, 0);
+    centerLay->setSpacing(0);
 
-    auto* sidebarLay = new QVBoxLayout(sidebar_);
-    sidebarLay->setContentsMargins(0, 0, 0, 0);
-    sidebarLay->setSpacing(0);
+    // ── Top menu bar (replaces the old left sidebar) ──────────
+    // A horizontal strip with nav buttons + indexed-status badge.
+    sidebar_ = new QWidget(centerWidget);
+    sidebar_->setObjectName("topMenuBar");
+    sidebar_->setFixedHeight(40);
+    auto* menuBarLay = new QHBoxLayout(sidebar_);
+    menuBarLay->setContentsMargins(8, 0, 8, 0);
+    menuBarLay->setSpacing(4);
 
+    // Use a QButtonGroup for mutual-exclusion nav buttons.
+    // We re-use sidebarList_ as a QListWidget for state-tracking
+    // (so existing onSidebarClicked logic keeps working) but
+    // display it as a horizontal button strip.
     sidebarList_ = new QListWidget(sidebar_);
-    sidebarList_->setObjectName("sidebar");
+    sidebarList_->setObjectName("topMenuList");
+    sidebarList_->setViewMode(QListView::ListMode);
+    sidebarList_->setFlow(QListView::LeftToRight);
+    sidebarList_->setWrapping(false);
+    sidebarList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sidebarList_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sidebarList_->setFixedHeight(36);
+    sidebarList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    sidebarList_->setFocusPolicy(Qt::NoFocus);
     const QStringList navLabels = {
         "Search", "Saved", "Tags", "Notes",
         "Stats", "Settings", "Help", "About"
@@ -460,56 +480,42 @@ void MainWindow::buildCentral() {
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
-        item->setSizeHint(QSize(150, 36));
+        item->setSizeHint(QSize(80, 30));
+        item->setTextAlignment(Qt::AlignCenter);
     }
     if (sidebarList_->count() > 0) {
         sidebarList_->setCurrentRow(0);
     }
-    sidebarLay->addWidget(sidebarList_, 1);
+    menuBarLay->addWidget(sidebarList_, 1);
 
-    // Indexed status section pinned to bottom of sidebar.
-    auto* statusSection = new QWidget(sidebar_);
-    statusSection->setObjectName("indexedStatus");
-    auto* sLay = new QVBoxLayout(statusSection);
-    sLay->setContentsMargins(16, 12, 16, 12);
-    sLay->setSpacing(4);
-
-    auto* headerRow = new QWidget(statusSection);
-    auto* hrLay = new QHBoxLayout(headerRow);
-    hrLay->setContentsMargins(0, 0, 0, 0);
-    hrLay->setSpacing(6);
-    auto* dotLbl = new QLabel(headerRow);
+    // Compact indexed-status badge on the right side of the menu bar.
+    auto* statusBadge = new QWidget(sidebar_);
+    statusBadge->setObjectName("indexedStatus");
+    auto* sbLay = new QHBoxLayout(statusBadge);
+    sbLay->setContentsMargins(8, 4, 8, 4);
+    sbLay->setSpacing(6);
+    auto* dotLbl = new QLabel(statusBadge);
     dotLbl->setFixedSize(8, 8);
-    // dotLbl styled by QSS
-    indexedHeaderLbl_ = new QLabel("Indexed", headerRow);
+    indexedHeaderLbl_ = new QLabel("Indexed", statusBadge);
     indexedHeaderLbl_->setObjectName("indexedHeader");
-    hrLay->addWidget(dotLbl);
-    hrLay->addWidget(indexedHeaderLbl_);
-    hrLay->addStretch();
-    sLay->addWidget(headerRow);
-
-    indexedInfoLbl_ = new QLabel("0 files\n0 B", statusSection);
+    indexedInfoLbl_ = new QLabel("0 files", statusBadge);
     indexedInfoLbl_->setObjectName("indexedInfo");
-    sLay->addWidget(indexedInfoLbl_);
+    sbLay->addWidget(dotLbl);
+    sbLay->addWidget(indexedHeaderLbl_);
+    sbLay->addWidget(indexedInfoLbl_);
 
-    indexedBar_ = new QProgressBar(statusSection);
+    indexedBar_ = new QProgressBar(statusBadge);
     indexedBar_->setObjectName("indexedBar");
     indexedBar_->setRange(0, 100);
     indexedBar_->setValue(0);
     indexedBar_->setTextVisible(false);
-    sLay->addWidget(indexedBar_);
+    indexedBar_->setFixedWidth(80);
+    indexedBar_->setFixedHeight(6);
+    sbLay->addWidget(indexedBar_);
 
-    sidebarLay->addWidget(statusSection);
+    menuBarLay->addWidget(statusBadge);
 
-    hLay->addWidget(sidebar_);
-
-    // ============================================================
-    // 2) CENTER PANEL (search bar + results | viewer splitter)
-    // ============================================================
-    auto* centerWidget = new QWidget(centralWidget);
-    auto* centerLay = new QVBoxLayout(centerWidget);
-    centerLay->setContentsMargins(0, 0, 0, 0);
-    centerLay->setSpacing(0);
+    centerLay->addWidget(sidebar_);
 
     // Search bar
     searchBar_ = new SearchBar(centerWidget);
@@ -530,11 +536,13 @@ void MainWindow::buildCentral() {
 
     // ── Center column: FilePreviewPane (TOP) + PreviewPane (existing) ──
     // The FilePreviewPane shows the actual rendered file (PDF/image/text/office).
-    // The existing PreviewPane below shows the extracted text + tabs (unchanged).
+    // The existing PreviewPane below shows the extracted text + tabs.
+    // Both panes are flush against each other (no gap) — they look like one
+    // unified viewer with a thin separator.
     auto* centerColumn = new QWidget(mainSplitter_);
     auto* centerColLay = new QVBoxLayout(centerColumn);
     centerColLay->setContentsMargins(0, 0, 0, 0);
-    centerColLay->setSpacing(1);
+    centerColLay->setSpacing(0);  // no gap between the two panes
 
     filePreviewPane_ = new FilePreviewPane(centerColumn);
     filePreviewPane_->setObjectName("filePreviewPane");

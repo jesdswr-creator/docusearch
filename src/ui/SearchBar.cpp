@@ -107,11 +107,11 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     extractBtn_->setMinimumHeight(36);
     extractBtn_->setMaximumHeight(36);
 
-    // Refresh
-    refreshBtn_ = new QPushButton(this);
-    refreshBtn_->setObjectName("refreshBtn");
-    refreshBtn_->setCursor(Qt::PointingHandCursor);
-    refreshBtn_->setFixedSize(36, 36);
+    // Refresh button — REMOVED (was confusing; auto-scan every 1 hour
+    // handles folder rescans automatically). Keep the member pointer
+    // so existing code that references it doesn't break, but don't
+    // create or show the button.
+    refreshBtn_ = nullptr;
 
     // Dummy buttons (not added to layout — no longer needed)
     filtersBtn_ = new QPushButton(this); filtersBtn_->setVisible(false);
@@ -119,13 +119,12 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     gridBtn_ = new QPushButton(this); gridBtn_->setVisible(false);
     moreBtn_ = new QPushButton(this); moreBtn_->setVisible(false);
 
-    // Layout: input | Search | Saved | Add Folder | Extract | Refresh
+    // Layout: input | Search | Saved | Add Folder | Extract
     layout->addWidget(inputWrap, 1);
     layout->addWidget(searchBtn_);
     layout->addWidget(savedBox_);
     layout->addWidget(addFolderBtn_);
     layout->addWidget(extractBtn_);
-    layout->addWidget(refreshBtn_);
 
     // Signals
     connect(clearBtn_, &QPushButton::clicked, this, [this]{ edit_->clear(); emit searchRequested(QString()); });
@@ -137,7 +136,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
         if (idx > 0) { emit savedSearchSelected(savedBox_->itemText(idx)); savedBox_->setCurrentIndex(0); }
     });
     connect(addFolderBtn_, &QPushButton::clicked, this, &SearchBar::addFolderRequested);
-    connect(refreshBtn_, &QPushButton::clicked, this, &SearchBar::refreshRequested);
+    // Note: refreshBtn_ removed — auto-scan handles rescans.
     connect(extractBtn_, &QPushButton::clicked, this, &SearchBar::extractRequested);
     connect(filtersBtn_, &QPushButton::clicked, this, &SearchBar::filtersRequested);
 
@@ -164,8 +163,7 @@ void SearchBar::refreshIcons() {
     addFolderBtn_->setIconSize(QSize(16, 16));
     extractBtn_->setIcon(loadLucideIcon("file-text", whiteText, 16));
     extractBtn_->setIconSize(QSize(16, 16));
-    refreshBtn_->setIcon(loadLucideIcon("refresh-cw", QColor("#059669"), 16));
-    refreshBtn_->setIconSize(QSize(16, 16));
+    // refreshBtn_ removed — no icon to set.
 }
 
 QString SearchBar::text() const { return edit_->text(); }

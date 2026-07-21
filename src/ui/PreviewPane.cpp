@@ -46,10 +46,14 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     v->setSpacing(0);
 
     // ---- Viewer header ----
+    // NOTE: The top FilePreviewPane already shows the file preview with its
+    // own zoom controls, Open, and OCR buttons. This bottom pane is now
+    // extracted-text-only, so we hide the duplicate zoom/Open/OCR buttons.
+    // We keep just the filename label so users know which file's text is shown.
     auto* header = new QWidget(this);
     header->setObjectName("viewerHeader");
     auto* hLay = new QHBoxLayout(header);
-    hLay->setContentsMargins(12, 8, 12, 8);
+    hLay->setContentsMargins(12, 6, 12, 6);
     hLay->setSpacing(6);
 
     // File type icon + filename
@@ -59,39 +63,17 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     viewerTitle_ = new QLabel(header);
     viewerTitle_->setObjectName("viewerTitle");
-    viewerTitle_->setText("No file selected");
+    viewerTitle_->setText("Extracted Text");
     hLay->addWidget(viewerTitle_);
-
-    // No page navigation buttons — PDF pages are shown in a scroll area
-
-    // Zoom controls: − 100% +
-    zoomOutBtn_ = new QPushButton(header);
-    zoomOutBtn_->setObjectName("zoomBtn");
-    zoomOutBtn_->setCursor(Qt::PointingHandCursor);
-    zoomOutBtn_->setToolTip("Zoom out");
-    zoomOutBtn_->setText("−");
-    zoomOutBtn_->setFixedSize(32, 32);
-    zoomLevel_ = new QLabel(header);
-    zoomLevel_->setObjectName("zoomLevel");
-    zoomLevel_->setText("100%");
-    zoomInBtn_ = new QPushButton(header);
-    zoomInBtn_->setObjectName("zoomBtn");
-    zoomInBtn_->setCursor(Qt::PointingHandCursor);
-    zoomInBtn_->setToolTip("Zoom in");
-    zoomInBtn_->setText("+");
-    zoomInBtn_->setFixedSize(32, 32);
-    hLay->addSpacing(8);
-    hLay->addWidget(zoomOutBtn_);
-    hLay->addWidget(zoomLevel_);
-    hLay->addWidget(zoomInBtn_);
 
     hLay->addStretch();
 
-    // Action buttons: Open (blue), OCR (green) — only working buttons
+    // Action buttons: Open (blue), OCR (green) — kept for convenience
+    // so users can still trigger OCR/Open from the extracted-text pane.
     openBtn_ = new QPushButton(header);
     openBtn_->setObjectName("openBtn");
     openBtn_->setCursor(Qt::PointingHandCursor);
-    openBtn_->setToolTip("Open in default application");
+    openBtn_->setToolTip("Open file in default application");
     openBtn_->setText("Open");
 
     ocrBtn_ = new QPushButton(header);
@@ -100,7 +82,15 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     ocrBtn_->setToolTip("Run OCR on this file (for scanned PDFs and images)");
     ocrBtn_->setText("OCR");
 
-    // More button — created but hidden (Print/Export not essential)
+    // Zoom buttons hidden — top FilePreviewPane handles zoom now.
+    zoomOutBtn_ = new QPushButton(header);
+    zoomOutBtn_->setVisible(false);
+    zoomInBtn_ = new QPushButton(header);
+    zoomInBtn_->setVisible(false);
+    zoomLevel_ = new QLabel(header);
+    zoomLevel_->setVisible(false);
+
+    // More button — hidden (Print/Export not essential)
     moreBtn_ = new QPushButton(header);
     moreBtn_->setObjectName("moreActionBtn");
     moreBtn_->setVisible(false);

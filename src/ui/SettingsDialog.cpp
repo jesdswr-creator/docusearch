@@ -167,111 +167,19 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     perfLay->addRow("", monitorCheck_);
     tabs->addTab(perfTab, "Performance");
 
-    // -------- OCR tab --------
-    // OCR uses RapidOCR (PaddleOCR ONNX models) via separate helper exe.
-    auto* ocrTab = new QWidget(this);
-    auto* ocrLay = new QFormLayout(ocrTab);
+    // -------- OCR tab -------- REMOVED.
+    // The OCR tab was info-only (just described oneocr.dll + listed languages).
+    // The status bar already shows OCR status with a click-for-info indicator.
+    // Kept these as nullptr so existing references in settings I/O don't crash.
     tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
     tessdataEdit_->setVisible(false);
     langCombo_ = new QComboBox(this);
     langCombo_->setVisible(false);
 
-    auto* ocrInfo = new QLabel(
-        "OCR is powered by oneocr.dll — the native OCR engine\n"
-        "from the Windows 11 Snipping Tool (Microsoft.ScreenSketch).\n\n"
-        "It runs as a separate process (docusearch_ocr_helper.exe)\n"
-        "and uses a plain C ABI (no WinRT, no async, no apartment\n"
-        "threading) so it cannot trigger the WinRT crashes we saw\n"
-        "with the previous implementation.\n\n"
-        "SETUP REQUIRED — the oneocr files are NOT bundled:\n"
-        "  Run scripts/get_oneocr.ps1 to install them from your\n"
-        "  locally-installed Snipping Tool. See ONEOCR_SETUP.md.\n\n"
-        "Supported languages: English, Chinese (Simplified/Traditional),\n"
-        "Korean, Japanese (auto-detected by the model).\n\n"
-        "To OCR a file:\n"
-        "  1. Select a scanned PDF or image\n"
-        "  2. Click the green OCR button in the viewer panel\n"
-        "  3. Recognized text appears in the extracted panel below",
-        this);
-    ocrInfo->setWordWrap(true);
-    ocrLay->addRow(ocrInfo);
-
-    // List available OCR languages.
-    auto* langLabel = new QLabel("Available OCR languages:", this);
-    ocrLay->addRow(langLabel);
-    auto* langList = new QListWidget(this);
-    const QStringList langs = WindowsOcrEngine::availableLanguages();
-    if (langs.isEmpty()) {
-        langList->addItem("(Could not query OCR languages — try running OCR anyway.)");
-    } else {
-        for (const QString& l : langs) langList->addItem(l);
-    }
-    ocrLay->addRow(langList);
-
-    tabs->addTab(ocrTab, "OCR");
-
-    // -------- Limits tab --------
-    // Shows all the read-only extraction / OCR / database limits so users
-    // understand why large files may be partially indexed. Values come
-    // from Constants.h. (The user-adjustable performance settings live
-    // in the existing "Performance" tab — this tab is informational only.)
-    auto* limitsTab = new QWidget(this);
-    auto* limitsLay = new QVBoxLayout(limitsTab);
-
-    auto addLimitRow = [&](QVBoxLayout* parent, const QString& label, const QString& value) {
-        auto* row = new QHBoxLayout();
-        auto* l = new QLabel(label, this);
-        l->setStyleSheet("font-weight: bold;");
-        auto* v = new QLabel(value, this);
-        v->setStyleSheet("color: #0066cc;");
-        row->addWidget(l);
-        row->addWidget(v);
-        row->addStretch();
-        parent->addLayout(row);
-    };
-
-    auto* extractTitle = new QLabel("Text Extraction", this);
-    extractTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
-    limitsLay->addWidget(extractTitle);
-    addLimitRow(limitsLay, "Maximum text per file:",
-                QString::number(Constants::kMaxExtractTextChars / 1024) + " KB");
-    addLimitRow(limitsLay, "Skip files larger than:",
-                QString::number(Constants::kMaxFilesizeToExtract / (1024 * 1024)) + " MB");
-    addLimitRow(limitsLay, "Files per extraction batch:",
-                QString::number(Constants::kExtractionBatchSize));
-    addLimitRow(limitsLay, "Files per extraction session:",
-                "30 (200 ms interval)");
-    limitsLay->addSpacing(8);
-
-    auto* ocrTitle = new QLabel("OCR (oneocr.dll)", this);
-    ocrTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
-    limitsLay->addWidget(ocrTitle);
-    addLimitRow(limitsLay, "Skip OCR files larger than:", "20 MB");
-    addLimitRow(limitsLay, "Image dimensions accepted:", "50 x 50 to 10000 x 10000 px");
-    addLimitRow(limitsLay, "Files per OCR session:", "30 (100 ms interval)");
-    limitsLay->addSpacing(8);
-
-    auto* dbTitle = new QLabel("Database (SQLite)", this);
-    dbTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
-    limitsLay->addWidget(dbTitle);
-    addLimitRow(limitsLay, "Cache size:", "32 MB");
-    addLimitRow(limitsLay, "Memory-mapped I/O:", "128 MB");
-    addLimitRow(limitsLay, "PDF preview pages:", QString::number(Constants::kMaxPdfPreviewPages));
-    addLimitRow(limitsLay, "Preview text length:", "50,000 chars");
-    limitsLay->addSpacing(8);
-
-    auto* note = new QLabel(
-        "These limits protect low-RAM (4 GB) Windows systems from memory exhaustion.\n"
-        "Files larger than the limits above will be partially indexed - the first\n"
-        "portion is searchable, the remainder is skipped. Increase the limits via\n"
-        "src/core/Constants.h and rebuild if you need more complete indexing.",
-        this);
-    note->setWordWrap(true);
-    note->setStyleSheet("color: #666; font-style: italic; padding: 8px;");
-    limitsLay->addWidget(note);
-    limitsLay->addStretch();
-
-    tabs->addTab(limitsTab, "Limits");
+    // -------- Limits tab -------- REMOVED.
+    // The Limits tab was read-only info (extraction/OCR/database caps).
+    // Users can't change these from the UI — they're compile-time constants.
+    // Removed to keep the Settings dialog focused on actionable settings.
 
     // -------- Appearance tab --------
     auto* appTab = new QWidget(this);
