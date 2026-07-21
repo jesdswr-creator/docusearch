@@ -23,6 +23,7 @@
 #include "../database/FileRepository.h"
 #include "../backup/BackupManager.h"
 #include "../search/SearchEngine.h"
+#include "../search/QueryParser.h"
 #include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
