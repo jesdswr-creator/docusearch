@@ -39,6 +39,10 @@ public:
     void setSemanticWeight(float weight);
     void setTopK(int k);
 
+    // Set the type filter (e.g., "pdf") so semantic-only results that
+    // don't match the filter are excluded. Empty = no filter.
+    void setTypeFilter(const QString& ext) { m_typeFilter = ext.toLower(); }
+
     // Combine keyword results with semantic results.
     // Never throws — on any error, returns keyword results as-is.
     std::vector<HybridResult> search(
@@ -52,6 +56,7 @@ private:
     bool        m_semanticEnabled = false;
     float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword
     int         m_topK            = 20;
+    QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
 };
 
 } // namespace DocuSearch

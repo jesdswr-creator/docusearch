@@ -852,6 +852,11 @@ void MainWindow::onSearch(const QString& query) {
         // This is the "AI" feature — without this wiring, the Semantic
         // toggle button does nothing functional.
         if (semanticEnabled_ && bgeService_ && bgeService_->isReady() && hybridSearch_) {
+            // Pass the type filter to the hybrid engine so semantic-only
+            // results respect it (e.g., type:pdf won't show .txt files).
+            const auto parsed = QueryParser::parse(query);
+            hybridSearch_->setTypeFilter(parsed.typeFilter);
+
             // Convert SearchHit → ExistingSearchResult for the hybrid engine.
             std::vector<DocuSearch::ExistingSearchResult> keywordResults;
             keywordResults.reserve(hits.size());

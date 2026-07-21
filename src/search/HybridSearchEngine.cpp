@@ -6,6 +6,7 @@
 #include "../embeddings/BgeService.h"
 #include "../core/Logger.h"
 
+#include <QFileInfo>
 #include <algorithm>
 #include <cmath>
 
@@ -66,11 +67,24 @@ std::vector<HybridResult> HybridSearchEngine::search(
             for (const auto& sh : semanticHits) {
                 auto it = resultMap.find(sh.fileId);
                 if (it != resultMap.end()) {
+                    // File already in keyword results — just update its
+                    // semantic score. (Type filter was already applied
+                    // by the keyword search, so this is safe.)
                     it->second.semanticScore = sh.similarity;
                     it->second.combinedScore =
                         it->second.keywordScore * (1.0f - m_semanticWeight) +
                         sh.similarity * m_semanticWeight;
                 } else {
+                    // NEW semantic-only hit (not in keyword results).
+                    // Apply the type filter here — if the user searched
+                    // type:pdf, don't add a .txt file just because it's
+                    // semantically similar.
+                    if (!m_typeFilter.isEmpty()) {
+                        QFileInfo fi(sh.filePath);
+                        if (fi.suffix().toLower() != m_typeFilter) {
+                            continue;  // skip — doesn't match type filter
+                        }
+                    }
                     HybridResult h;
                     h.fileId        = sh.fileId;
                     h.filename      = sh.filename;
