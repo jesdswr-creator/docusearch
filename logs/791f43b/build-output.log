@@ -1,0 +1,236 @@
+MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+  1>Checking Build System
+  Automatic MOC and UIC for target DocuSearch
+  1>Automatic RCC for resources/app.qrc
+  Building Custom Rule D:/a/docusearch/docusearch/CMakeLists.txt
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  SehTranslator.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  TextExtractor.cpp
+  PdfExtractor.cpp
+  DocxExtractor.cpp
+  XlsxExtractor.cpp
+  PptxExtractor.cpp
+  DocumentExtractorRegistry.cpp
+  WindowsOcrEngine.cpp
+  OcrWorkerPool.cpp
+  MetadataIndexer.cpp
+  ContentIndexer.cpp
+  PriorityScheduler.cpp
+  Indexer.cpp
+  Generating Code...
+  Compiling...
+  QueryParser.cpp
+  SearchEngine.cpp
+  FileWatcher.cpp
+  ThumbnailGenerator.cpp
+  TextPreview.cpp
+  ImagePreview.cpp
+  PdfPreview.cpp
+  OfficePreview.cpp
+  FilePreviewPane.cpp
+  BgeTokenizer.cpp
+  BgeEmbeddingEngine.cpp
+  BgeEmbeddingDb.cpp
+  BgeService.cpp
+  HybridSearchEngine.cpp
+  SettingsManager.cpp
+  BackupManager.cpp
+  JumpList.cpp
+  Theme.cpp
+  SearchBar.cpp
+  ResultsPane.cpp
+  Generating Code...
+  Compiling...
+  PreviewPane.cpp
+  MetadataPane.cpp
+  TagsNotesPane.cpp
+  IndexingProgress.cpp
+  SettingsDialog.cpp
+  SearchResultsHighlighter.cpp
+  MainWindow.cpp
+D:\a\docusearch\docusearch\src\ui\MainWindow.cpp(857,33): error C2653: 'QueryParser': is not a class or namespace name [D:\a\docusearch\docusearch\build\DocuSearch.vcxproj]
+D:\a\docusearch\docusearch\src\ui\MainWindow.cpp(857,46): error C3861: 'parse': identifier not found [D:\a\docusearch\docusearch\build\DocuSearch.vcxproj]
+D:\a\docusearch\docusearch\src\ui\MainWindow.cpp(1710,23): warning C4858: discarding return value: Use QThreadPool::start(Callable&&) if you don't need the returned QFuture [D:\a\docusearch\docusearch\build\DocuSearch.vcxproj]
+  main.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  Automatic MOC and UIC for target docusearch_ocr_helper
+  Building Custom Rule D:/a/docusearch/docusearch/CMakeLists.txt
+  ocr_helper_main.cpp
+D:\a\docusearch\docusearch\src\ocr\ocr_helper_main.cpp(147,28): warning C4996: '_wgetenv': This function or variable may be unsafe. Consider using _wdupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details. [D:\a\docusearch\docusearch\build\docusearch_ocr_helper.vcxproj]
+  mocs_compilation_Release.cpp
+  Generating Code...
+  docusearch_ocr_helper.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\docusearch_ocr_helper.exe
+  D:/a/docusearch/docusearch/build/bin/Release/docusearch_ocr_helper.exe: message: deploying dependencies
+  Automatic MOC and UIC for target tst_ExtractorFuzz
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_ExtractorFuzz.cpp
+  SehTranslator.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  TextExtractor.cpp
+  PdfExtractor.cpp
+  DocxExtractor.cpp
+  XlsxExtractor.cpp
+  PptxExtractor.cpp
+  DocumentExtractorRegistry.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_ExtractorFuzz.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_ExtractorFuzz.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_ExtractorFuzz.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\poppler-cpp.dll -> D:\a\docusearch\docusearch\build\bin\Release\poppler-cpp.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\poppler-cpp.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\poppler.dll -> D:\a\docusearch\docusearch\build\bin\Release\poppler.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\poppler.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\z.dll -> D:\a\docusearch\docusearch\build\bin\Release\z.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\z.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\jpeg62.dll -> D:\a\docusearch\docusearch\build\bin\Release\jpeg62.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\jpeg62.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\openjp2.dll -> D:\a\docusearch\docusearch\build\bin\Release\openjp2.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\openjp2.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\libpng16.dll -> D:\a\docusearch\docusearch\build\bin\Release\libpng16.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\libpng16.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\tiff.dll -> D:\a\docusearch\docusearch\build\bin\Release\tiff.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\tiff.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\liblzma.dll -> D:\a\docusearch\docusearch\build\bin\Release\liblzma.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\liblzma.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\freetype.dll -> D:\a\docusearch\docusearch\build\bin\Release\freetype.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\freetype.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\bz2.dll -> D:\a\docusearch\docusearch\build\bin\Release\bz2.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\bz2.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\brotlidec.dll -> D:\a\docusearch\docusearch\build\bin\Release\brotlidec.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\brotlidec.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\brotlicommon.dll -> D:\a\docusearch\docusearch\build\bin\Release\brotlicommon.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\brotlicommon.dll: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\iconv-2.dll -> D:\a\docusearch\docusearch\build\bin\Release\iconv-2.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\iconv-2.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_FileRepository
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_FileRepository.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_FileRepository.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_FileRepository.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_FileRepository.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll done
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_FileUtils
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_FileUtils.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_FileUtils.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_FileUtils.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_FileUtils.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll skipped, up to date
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_FtsTokenizer
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_FtsTokenizer.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_FtsTokenizer.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_FtsTokenizer.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_FtsTokenizer.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll skipped, up to date
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_OcrHelper
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_OcrHelper.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_OcrHelper.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_OcrHelper.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_OcrHelper.exe: message: deploying dependencies
+  Automatic MOC and UIC for target tst_PriorityScheduler
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_PriorityScheduler.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_PriorityScheduler.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_PriorityScheduler.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_PriorityScheduler.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll skipped, up to date
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_QueryParser
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_QueryParser.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_QueryParser.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_QueryParser.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_QueryParser.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll skipped, up to date
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
+  Automatic MOC and UIC for target tst_StringUtils
+  Building Custom Rule D:/a/docusearch/docusearch/tests/CMakeLists.txt
+  tst_StringUtils.cpp
+  Logger.cpp
+  Config.cpp
+  StringUtils.cpp
+  FileUtils.cpp
+  Database.cpp
+  Schema.cpp
+  FileRepository.cpp
+  QueryParser.cpp
+  SearchEngine.cpp
+  PriorityScheduler.cpp
+  mocs_compilation_Release.cpp
+  Generating Code...
+  tst_StringUtils.vcxproj -> D:\a\docusearch\docusearch\build\bin\Release\tst_StringUtils.exe
+  D:/a/docusearch/docusearch/build/bin/Release/tst_StringUtils.exe: message: deploying dependencies
+  D:\a\docusearch\docusearch\build\vcpkg_installed\x64-windows\bin\sqlite3.dll -> D:\a\docusearch\docusearch\build\bin\Release\sqlite3.dll skipped, up to date
+  D:/a/docusearch/docusearch/build/bin/Release\sqlite3.dll: message: deploying dependencies
