@@ -826,12 +826,72 @@ void MainWindow::onSearch(const QString& query) {
     }
     try {
         QElapsedTimer t; t.start();
+
+        // Always run keyword (FTS5 BM25) search first.
         auto hits = search_->search(query, 500);
-        resultsPane_->setResults(hits);
-        statusBar()->showMessage(QString("%1 result%2 in %3 ms")
-                                 .arg(hits.size())
-                                 .arg(hits.size() == 1 ? "" : "s")
-                                 .arg(t.elapsed()));
+
+        // If semantic search is enabled AND the BGE service is ready,
+        // run hybrid search to merge keyword results with semantic matches.
+        // This is the "AI" feature — without this wiring, the Semantic
+        // toggle button does nothing functional.
+        if (semanticEnabled_ && bgeService_ && bgeService_->isReady() && hybridSearch_) {
+            // Convert SearchHit → ExistingSearchResult for the hybrid engine.
+            std::vector<DocuSearch::ExistingSearchResult> keywordResults;
+            keywordResults.reserve(hits.size());
+            for (const auto& h : hits) {
+                ExistingSearchResult r;
+                r.fileId     = h.fileId;
+                r.filename   = h.filename;
+                r.path       = h.path;
+                r.extension  = h.extension;
+                r.bm25Score  = h.score;
+                keywordResults.push_back(r);
+            }
+
+            // Run hybrid search (keyword + cosine, weighted average).
+            auto hybridResults = hybridSearch_->search(query, keywordResults);
+
+            // Convert HybridResult → SearchHit for display.
+            QList<SearchHit> merged;
+            merged.reserve(hybridResults.size());
+            for (const auto& hr : hybridResults) {
+                SearchHit h;
+                h.fileId       = hr.fileId;
+                h.filename     = hr.filename;
+                h.path         = hr.path;
+                h.extension    = hr.extension;
+                h.score        = hr.combinedScore;
+                h.snippet      = QString("[keyword: %1, semantic: %2, combined: %3]")
+                    .arg(hr.keywordScore, 0, 'f', 3)
+                    .arg(hr.semanticScore, 0, 'f', 3)
+                    .arg(hr.combinedScore, 0, 'f', 3);
+                // Preserve favorite flag + dates from the original hit if present.
+                for (const auto& orig : hits) {
+                    if (orig.fileId == hr.fileId) {
+                        h.size          = orig.size;
+                        h.modifiedDate  = orig.modifiedDate;
+                        h.isFavorite    = orig.isFavorite;
+                        if (!orig.snippet.isEmpty()) h.snippet = orig.snippet;
+                        break;
+                    }
+                }
+                merged.append(h);
+            }
+            resultsPane_->setResults(merged);
+            statusBar()->showMessage(
+                QString("AI search: %1 result%2 (%3 keyword + semantic) in %4 ms")
+                    .arg(merged.size())
+                    .arg(merged.size() == 1 ? "" : "s")
+                    .arg(hits.size())
+                    .arg(t.elapsed()));
+        } else {
+            // Keyword-only search (existing behavior).
+            resultsPane_->setResults(hits);
+            statusBar()->showMessage(QString("%1 result%2 in %3 ms")
+                                     .arg(hits.size())
+                                     .arg(hits.size() == 1 ? "" : "s")
+                                     .arg(t.elapsed()));
+        }
     } catch (...) {
         statusBar()->showMessage("Search error - try a different query");
     }
@@ -1356,6 +1416,23 @@ void MainWindow::onExtract() {
                     sqlite3_step(ins);
                     sqlite3_finalize(ins);
                 }
+
+                // ── Generate BGE embedding for this document ──────
+                // This is what makes semantic search actually work —
+                // without embeddings in the BgeEmbeddings table, the
+                // HybridSearchEngine has nothing to compare against.
+                // We embed synchronously here (one file at a time, 15-25ms
+                // each on CPU) to keep the code simple. For large batches,
+                // the user can also use the "Embed All Documents Now"
+                // button in Settings.
+                if (bgeService_ && bgeService_->isReady()) {
+                    try {
+                        bgeService_->embedDocument(item.fileId, extractedText);
+                    } catch (...) {
+                        // Embedding failure is non-fatal — keyword search still works.
+                    }
+                }
+
                 ++state->done;
             } else if (raw) {
                 sqlite3_exec(raw,
@@ -2160,6 +2237,50 @@ void MainWindow::onOpenSettings() {
                     db_->open(Config::instance().dbPath(), &err);
                     statusBar()->showMessage("Restore failed.", 5000);
                 }
+            });
+
+        // Wire up "Embed All Documents Now" button → BgeService::embedDocumentsBatch()
+        QObject::connect(&dlg, &SettingsDialog::embedAllRequested,
+            this, [this]() {
+                if (!bgeService_ || !bgeService_->isReady()) {
+                    QMessageBox::information(this, "Semantic Search",
+                        "Semantic search is not ready.\n\n"
+                        "Make sure the BGE model is installed at:\n"
+                        "  models/bge-small-en-v1.5/model.onnx\n"
+                        "  models/bge-small-en-v1.5/vocab.txt\n\n"
+                        "And that onnxruntime.dll is present.");
+                    return;
+                }
+                // Gather all files that have extracted text but no embedding yet.
+                QVector<int> fileIds;
+                QStringList texts;
+                sqlite3* raw = db_->raw();
+                if (!raw) return;
+                sqlite3_stmt* stmt = nullptr;
+                const char* sql =
+                    "SELECT dt.file_id, dt.extracted_text "
+                    "FROM DocumentText dt "
+                    "WHERE NOT EXISTS ("
+                    "  SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id"
+                    ");";
+                if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const int fileId = sqlite3_column_int64(stmt, 0);
+                        const unsigned char* txt = sqlite3_column_text(stmt, 1);
+                        fileIds.append(fileId);
+                        texts.append(txt ? QString::fromUtf8(
+                            reinterpret_cast<const char*>(txt)) : QString());
+                    }
+                    sqlite3_finalize(stmt);
+                }
+                if (fileIds.isEmpty()) {
+                    statusBar()->showMessage(
+                        "All documents already have embeddings.", 5000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    QString("Embedding %1 documents...").arg(fileIds.size()), 0);
+                bgeService_->embedDocumentsBatch(fileIds, texts);
             });
 
         const int rc = dlg.exec();

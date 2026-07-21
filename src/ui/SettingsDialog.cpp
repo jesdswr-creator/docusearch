@@ -252,11 +252,28 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* embGroup = new QGroupBox("Embedding Status", this);
     auto* embLay = new QVBoxLayout(embGroup);
     auto* embLbl = new QLabel(
-        "Embeddings are generated in the background after extraction.\n"
-        "Check the status bar for progress messages like "
-        "'Embedding documents: X/Y'.", this);
+        "Embeddings are generated automatically when documents are extracted.\n"
+        "If you enabled semantic search AFTER documents were already indexed,\n"
+        "click the button below to backfill embeddings for all existing documents.\n\n"
+        "Check the status bar for progress: 'Embedding documents: X/Y'.", this);
     embLbl->setWordWrap(true);
     embLay->addWidget(embLbl);
+
+    auto* embedAllBtn = new QPushButton("Embed All Documents Now", this);
+    embedAllBtn->setToolTip(
+        "Generate BGE embeddings for all indexed documents that don't have one yet.\n"
+        "Runs in the background — check the status bar for progress.\n"
+        "Required for semantic search to work on documents indexed before BGE was enabled.");
+    embLay->addWidget(embedAllBtn);
+
+    // Wire up the "Embed All" button to a signal that MainWindow will handle.
+    connect(embedAllBtn, &QPushButton::clicked, this, [this]() {
+        // Emit a signal that MainWindow connects to.
+        // We use a dynamic property + emit pattern since SettingsDialog
+        // doesn't have a direct reference to BgeService.
+        emit embedAllRequested();
+    });
+
     semLay->addWidget(embGroup);
 
     semLay->addStretch();

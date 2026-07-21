@@ -37,6 +37,12 @@ signals:
     // the database, let the restore overwrite the .db file, then reopen.
     void restoreRequested(const QString& backupZipPath);
 
+    // Emitted when the user clicks "Embed All Documents Now" in the
+    // Semantic Search tab. MainWindow connects this to a slot that
+    // gathers all indexed files without embeddings and runs
+    // BgeService::embedDocumentsBatch() in the background.
+    void embedAllRequested();
+
 private slots:
     void onAddDrive();
     void onRemoveDrive();
