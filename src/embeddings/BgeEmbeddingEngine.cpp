@@ -59,11 +59,20 @@ bool BgeEmbeddingEngine::initialize(const QString& modelPath) {
         opts->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
         m_sessionOptions = new std::unique_ptr<Ort::SessionOptions>(std::move(opts));
 
-        // Create Session
-        auto sess = std::make_unique<Ort::Session>(
-            **static_cast<std::unique_ptr<Ort::Env>*>(m_env),
-            m_modelPath.c_str(),
-            **static_cast<std::unique_ptr<Ort::SessionOptions>*>(m_sessionOptions));
+        // Create Session.
+        // On Windows, the Ort::Session constructor that takes a path requires
+        // a const wchar_t* (UTF-16). On Linux/macOS it takes const char*.
+        // We use the wide-string overload on Windows and the narrow overload
+        // elsewhere.
+        const auto& envRef = **static_cast<std::unique_ptr<Ort::Env>*>(m_env);
+        const auto& optsRef = **static_cast<std::unique_ptr<Ort::SessionOptions>*>(m_sessionOptions);
+#ifdef _WIN32
+        // Convert UTF-8 path to UTF-16 wide string.
+        const std::wstring widePath = modelPath.toStdWString();
+        auto sess = std::make_unique<Ort::Session>(envRef, widePath.c_str(), optsRef);
+#else
+        auto sess = std::make_unique<Ort::Session>(envRef, m_modelPath.c_str(), optsRef);
+#endif
         m_session = new std::unique_ptr<Ort::Session>(std::move(sess));
 
         // Validate
