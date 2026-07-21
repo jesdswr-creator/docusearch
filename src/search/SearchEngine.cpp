@@ -100,6 +100,7 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
         if (!q.typeFilter.isEmpty())   sql += " AND extension = ? ";
         if (!q.folderFilter.isEmpty()) sql += " AND path LIKE ? ESCAPE '\\' ";
         if (q.favoritesOnly)          sql += " AND is_favorite = 1 ";
+        if (q.needsOcrOnly)           sql += " AND indexing_status = 'needs_ocr' ";
         if (!q.tagFilter.isEmpty())   sql += " AND id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
         sql += " ORDER BY modified_date DESC LIMIT " + QString::number(limit) + ";";
 
@@ -150,6 +151,7 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
         if (!q.typeFilter.isEmpty())   sql += " AND f.extension = ? ";
         if (!q.folderFilter.isEmpty()) sql += " AND f.path LIKE ? ESCAPE '\\' ";
         if (q.favoritesOnly)          sql += " AND f.is_favorite = 1 ";
+        if (q.needsOcrOnly)           sql += " AND f.indexing_status = 'needs_ocr' ";
         if (!q.tagFilter.isEmpty())   sql += " AND f.id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
         sql += " ORDER BY score ASC LIMIT " + QString::number(limit) + ";";
 

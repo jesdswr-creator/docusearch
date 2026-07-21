@@ -6,6 +6,7 @@
 #include "../core/Logger.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <cmath>
 #include <cstring>
 #include <array>
@@ -83,6 +84,19 @@ bool BgeEmbeddingEngine::initialize(const QString& modelPath) {
             return false;
         }
 
+        // CRITICAL: Load vocab.txt — without it, the tokenizer returns
+        // empty output and semantic search produces garbage embeddings.
+        // The vocab.txt sits next to model.onnx in the same folder.
+        const QFileInfo modelFi(modelPath);
+        const QString vocabPath = modelFi.absolutePath() + "/vocab.txt";
+        if (!m_tokenizer->loadVocabulary(vocabPath)) {
+            DS_WARN("BGE", "Failed to load vocab.txt at: " + vocabPath);
+            DS_WARN("BGE", "Semantic search will be DISABLED — vocab is required "
+                           "for meaningful embeddings.");
+            return false;
+        }
+        DS_INFO("BGE", "Tokenizer vocabulary loaded from: " + vocabPath);
+
         m_initialized = true;
         DS_INFO("BGE", "BGE engine initialized. Inputs: " + QString::number(numInputs));
         return true;
@@ -126,6 +140,14 @@ bool BgeEmbeddingEngine::embed(const QString& text, std::vector<float>& outEmbed
     try {
         // 1. Tokenize
         BgeTokenizer::TokenizerOutput tokens = m_tokenizer->encode(text);
+
+        // CRITICAL: If tokenizer returned empty (vocab not loaded),
+        // we cannot produce a meaningful embedding. Return false so
+        // the caller knows to skip semantic scoring.
+        if (tokens.inputIds.empty()) {
+            DS_WARN("BGE", "Tokenizer returned empty — vocab not loaded.");
+            return false;
+        }
 
         // 2. Create input tensors
         Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(

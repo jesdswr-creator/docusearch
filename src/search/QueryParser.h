@@ -29,6 +29,7 @@ struct ParsedQuery {
     QString tagFilter;       // tag:<name> - file must have this tag
     bool    favoritesOnly = false;
     bool    ocrOnly       = false;
+    bool    needsOcrOnly  = false;  // is:needs-ocr — files awaiting OCR
     bool    valid         = true;
     QString errorMessage;
 };

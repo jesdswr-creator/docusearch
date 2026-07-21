@@ -58,6 +58,11 @@ $Files = @(
         Name = "config.json"
         Url  = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json"
         MinSize = 100B
+    },
+    @{
+        Name = "vocab.txt"
+        Url  = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt"
+        MinSize = 100KB
     }
 )
 

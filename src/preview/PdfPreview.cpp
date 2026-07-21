@@ -18,7 +18,7 @@
 #include <QHBoxLayout>
 #include <QPixmap>
 #include <QImage>
-#include <QTimer>
+#include <QShowEvent>
 
 namespace DocuSearch {
 
@@ -109,11 +109,23 @@ bool PdfPreview::loadFile(const QString& filePath) {
     try {
         // poppler::document::load_from_file returns a raw pointer that
         // we own. Wrap it in shared_ptr<void> with a custom deleter.
-        poppler::document* docRaw = poppler::document::load_from_file(
-            filePath.toStdString());
+        // Note: For password-protected PDFs, load_from_file returns nullptr.
+        // We try with empty owner/user passwords as a fallback (some PDFs
+        // have an empty owner password that unlocks them).
+        const std::string stdPath = filePath.toStdString();
+        poppler::document* docRaw = poppler::document::load_from_file(stdPath);
+        if (!docRaw) {
+            // Try with empty passwords (some PDFs have empty owner password).
+            docRaw = poppler::document::load_from_file(stdPath, "", "");
+        }
         if (!docRaw || docRaw->pages() == 0) {
             delete docRaw;
-            m_pageCanvas->setText("Cannot open PDF\n(locked or corrupted)");
+            m_pageCanvas->setText(
+                "Cannot open PDF\n\n"
+                "The file may be:\n"
+                "  - Password-protected (use 'Open' to view externally)\n"
+                "  - Corrupted or truncated\n"
+                "  - In an unsupported PDF version");
             m_document.reset();
             m_totalPages = 0;
             updateButtonStates();
@@ -137,16 +149,15 @@ bool PdfPreview::loadFile(const QString& filePath) {
             m_pageLabel->setText(QString("Page 1 of %1").arg(m_totalPages));
         }
 
-        // Render page 0 first at 100% so we have something to show,
-        // then immediately call onFitWindow() to scale it down to fit
-        // the viewport. This makes PDFs open at a comfortable reading
-        // size instead of overflowing.
+        // Render page 0 at 100% so we have something to show immediately.
+        // The fit-to-window call is deferred to showEvent — at that point
+        // the scroll area has its final viewport size, so the zoom
+        // calculation is accurate. (Using QTimer::singleShot(0, ...) was
+        // racy because the widget may not have been laid out yet — see
+        // HIGH-2 in the review report.)
         renderPage(0);
         updateButtonStates();
-
-        // Defer the fit-to-window call so the scroll area has its final
-        // viewport size before we compute the zoom level.
-        QTimer::singleShot(0, this, [this]() { onFitWindow(); });
+        m_pendingFit = true;  // trigger onFitWindow() in showEvent
 
         return true;
     } catch (const std::exception& e) {
@@ -298,8 +309,21 @@ void PdfPreview::clear() {
     m_currentPage = 0;
     m_totalPages  = 0;
     m_zoomLevel   = 1.0;
+    m_pendingFit  = false;
     m_pageLabel->setText("No document loaded");
     updateButtonStates();
+}
+
+void PdfPreview::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // If loadFile() requested a fit-to-window call (m_pendingFit=true)
+    // and we now have a real viewport size, do the fit. This runs on
+    // the first showEvent after loadFile() — at that point the layout
+    // has settled and viewport()->width() returns the real width.
+    if (m_pendingFit && m_document && m_totalPages > 0) {
+        m_pendingFit = false;
+        onFitWindow();
+    }
 }
 
 void PdfPreview::updateButtonStates() {

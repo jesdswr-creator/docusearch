@@ -150,6 +150,86 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
     return results;
 }
 
+std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
+    const std::vector<float>& queryEmbedding,
+    const std::vector<int>& fileIds,
+    int topK,
+    float threshold) {
+
+    std::vector<SemanticHit> results;
+    if (!m_db) return results;
+    if (static_cast<int>(queryEmbedding.size()) != EMBEDDING_DIM) return results;
+
+    // If fileIds is empty, fall back to scanning all (same as searchSimilar).
+    if (fileIds.empty()) {
+        return searchSimilar(queryEmbedding, topK, threshold);
+    }
+
+    // Build a parameterized IN clause: "WHERE file_id IN (?, ?, ?, ...)"
+    // and bind each fileId. This avoids SQL injection and handles up to
+    // ~999 parameters (SQLite default limit). If fileIds is larger, we
+    // batch — but for hybrid search, fileIds is typically 200 (top BM25).
+    const int SQLITE_MAX_PARAMS = 999;
+    const int batchCount = std::min(static_cast<int>(fileIds.size()), SQLITE_MAX_PARAMS);
+
+    QString sql = QString(
+        "SELECT b.file_id, f.path, f.filename, b.embedding "
+        "FROM BgeEmbeddings b "
+        "LEFT JOIN Files f ON b.file_id = f.id "
+        "WHERE b.status = 'completed' AND b.file_id IN (");
+    for (int i = 0; i < batchCount; ++i) {
+        if (i > 0) sql += ",";
+        sql += "?";
+    }
+    sql += ");";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db, sql.toUtf8().constData(), -1, &stmt, nullptr) != SQLITE_OK) {
+        DS_WARN("BGE", "Failed to prepare searchSimilarFiltered stmt.");
+        return results;
+    }
+
+    // Bind the file IDs.
+    for (int i = 0; i < batchCount; ++i) {
+        sqlite3_bind_int64(stmt, i + 1, fileIds[i]);
+    }
+
+    // Compute cosine similarity for each row.
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const int   fileId = sqlite3_column_int(stmt, 0);
+        const char* path   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const char* name   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        const void* blob   = sqlite3_column_blob(stmt, 3);
+        const int   size   = sqlite3_column_bytes(stmt, 3);
+
+        if (!blob || size != EMBEDDING_BYTES) continue;
+
+        std::vector<float> emb(EMBEDDING_DIM);
+        std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
+
+        const float sim = cosineSimilarity(queryEmbedding, emb);
+        if (sim >= threshold) {
+            SemanticHit hit;
+            hit.fileId    = fileId;
+            hit.filePath  = path  ? QString::fromUtf8(path) : QString();
+            hit.filename  = name  ? QString::fromUtf8(name) : QString();
+            hit.similarity = sim;
+            results.push_back(hit);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    // Sort by similarity descending, trim to topK.
+    std::sort(results.begin(), results.end(),
+        [](const SemanticHit& a, const SemanticHit& b) {
+            return a.similarity > b.similarity;
+        });
+    if (static_cast<int>(results.size()) > topK) {
+        results.resize(topK);
+    }
+    return results;
+}
+
 bool BgeEmbeddingDb::hasEmbedding(int fileId) {
     if (!m_db) return false;
     sqlite3_stmt* stmt = nullptr;

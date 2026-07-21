@@ -168,13 +168,24 @@ static bool LoadOneocr() {
     }
 
     // Make sure oneocr.dll can locate onnxruntime.dll in the same folder.
+    // SetDllDirectoryW adds dir to the DLL search path for dependent DLLs.
     SetDllDirectoryW(dir.c_str());
 
+    // SECURITY: Use LoadLibraryExW with LOAD_WITH_ALTERED_SEARCH_PATH and
+    // the FULL ABSOLUTE PATH to oneocr.dll. This prevents DLL hijacking
+    // where a malicious oneocr.dll placed in the current working directory
+    // (or another search-path location) would be loaded instead of the
+    // legitimate one. LOAD_WITH_ALTERED_SEARCH_PATH makes the DLL's own
+    // directory the primary search location for its dependencies (like
+    // onnxruntime.dll). See MISSED-3 in the review report.
     std::wstring dllPath = dir + L"\\oneocr.dll";
-    g_oneocrDll = LoadLibraryW(dllPath.c_str());
+    g_oneocrDll = LoadLibraryExW(
+        dllPath.c_str(),
+        nullptr,
+        LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!g_oneocrDll) {
         DWORD err = GetLastError();
-        std::cerr << "[oneocr] LoadLibraryW failed for oneocr.dll (error " << err << ")." << std::endl;
+        std::cerr << "[oneocr] LoadLibraryExW failed for oneocr.dll (error " << err << ")." << std::endl;
         if (err == 126 /* ERROR_MOD_NOT_FOUND */) {
             std::cerr << "[oneocr] onnxruntime.dll is probably missing from the same folder." << std::endl;
         }

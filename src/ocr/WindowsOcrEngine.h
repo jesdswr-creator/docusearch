@@ -44,6 +44,13 @@ public:
     // surface the install-instructions error message to the user.
     bool init();
 
+    // Shutdown hook — call before QApplication is destroyed to clean
+    // up any pending state. Currently a no-op because we create a
+    // fresh QProcess per ocrFile() call (no long-lived QProcess member),
+    // but kept for forward compatibility and to match the shutdown
+    // pattern used by other singletons.
+    void shutdown() {}
+
     // OCR an image. Returns extracted text (empty on failure).
     QString ocrImage(const QImage& img);
 

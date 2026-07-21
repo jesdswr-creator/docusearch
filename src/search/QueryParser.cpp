@@ -109,6 +109,12 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             q.favoritesOnly = (val == "1" || val.toLower() == "true" || val.isEmpty());
         } else if (field == "ocr") {
             q.ocrOnly = true;
+        } else if (field == "is") {
+            // is:favorite, is:ocr, is:needs-ocr — low-3 enhancement
+            const QString v = val.toLower();
+            if (v == "favorite" || v == "fav")      q.favoritesOnly = true;
+            else if (v == "ocr")                    q.ocrOnly = true;
+            else if (v == "needs-ocr" || v == "needsocr") q.needsOcrOnly = true;
         } else if (field == "tag") {
             // Tag filtering is applied as a sub-join against the Tags table in
             // SearchEngine (Tags are NOT in the FTS5 index - they live in a

@@ -30,8 +30,13 @@ void HybridSearchEngine::setTopK(int k) {
 }
 
 float HybridSearchEngine::normalizeScore(float bm25Score) {
-    // Sigmoid: maps BM25 (any positive value) to (0, 1).
-    return 1.0f / (1.0f + std::exp(-bm25Score * 0.1f));
+    // FTS5's bm25() returns NEGATIVE values (smaller = more relevant).
+    // Negate so higher = more relevant, then apply sigmoid centered at 0.
+    // Sigmoid maps any real number to (0, 1).
+    // For a typical BM25 score of -5 (very relevant), negation gives +5,
+    // sigmoid(5*0.5) ≈ 0.92. For -1 (barely relevant), sigmoid(0.5) ≈ 0.62.
+    const float posScore = -bm25Score;
+    return 1.0f / (1.0f + std::exp(-posScore * 0.5f));
 }
 
 std::vector<HybridResult> HybridSearchEngine::search(

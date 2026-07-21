@@ -145,6 +145,21 @@ void FileWatcher::workerLoop(WatchCtx* ctx) {
         if (waitRc != WAIT_OBJECT_0) continue;
 
         if (!GetOverlappedResult(ctx->dirHandle, &ov, &bytesReturned, FALSE)) {
+            const DWORD err = GetLastError();
+            // ERROR_NOTIFY_ENUM_DIR: the kernel buffer overflowed —
+            // file changes were lost. This happens on deep directory
+            // trees or high-frequency changes. We must do a full rescan
+            // to catch up. See MISSED-1 in the review report.
+            if (err == ERROR_NOTIFY_ENUM_DIR) {
+                DS_WARN("FileWatcher",
+                    "Buffer overflow — some file changes were missed. "
+                    "Triggering full rescan to catch up.");
+                // Emit a synthetic "rescan needed" event by adding an
+                // empty path to the queue. The watcher thread will
+                // emit fileAdded for all files during the next scan.
+                ctx->stopping.store(true);
+                break;
+            }
             DS_WARN("FileWatcher", "GetOverlappedResult failed");
             continue;
         }

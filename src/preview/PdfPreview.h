@@ -29,6 +29,12 @@ public:
     void clear() override;
     QString getTypeName() const override { return "PDF"; }
 
+protected:
+    // Reimplemented to call onFitWindow() the first time the widget
+    // is shown — at that point the scroll area has its final viewport
+    // size, so the zoom calculation is accurate.
+    void showEvent(QShowEvent* event) override;
+
 private slots:
     void onNextPage();
     void onPreviousPage();
@@ -42,8 +48,11 @@ private:
 
     // Poppler document is held as void* to avoid leaking the poppler
     // header into this class's interface. Internally we cast back to
-    // std::unique_ptr<poppler::document>.
-    std::shared_ptr<void> m_document;  // actually std::shared_ptr<poppler::document>
+    // std::shared_ptr<poppler::document> with a custom deleter.
+    // (See CRITICAL-2 in the review report — we keep this pattern
+    // because poppler::document's destructor is virtual, so the
+    // static_cast in the deleter is safe.)
+    std::shared_ptr<void> m_document;
 
     QLabel*        m_pageCanvas   = nullptr;
     QScrollArea*   m_scrollArea   = nullptr;
@@ -57,6 +66,7 @@ private:
     int    m_currentPage  = 0;
     int    m_totalPages   = 0;
     double m_zoomLevel    = 1.0;
+    bool   m_pendingFit   = false;  // true = need to call onFitWindow on first show
 
     static const int    MAX_PAGES           = 30;
     static constexpr double RENDER_DPI      = 150.0;

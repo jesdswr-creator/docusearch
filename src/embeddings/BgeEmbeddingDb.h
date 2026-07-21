@@ -36,9 +36,22 @@ public:
     bool getEmbedding(int fileId, std::vector<float>& outEmbedding);
 
     // Search for similar embeddings. Returns up to topK results with
-    // similarity >= threshold.
+    // similarity >= threshold. Scans ALL embeddings (O(N)) — for large
+    // datasets, prefer searchSimilarFiltered() which only scans the
+    // specified file IDs.
     std::vector<SemanticHit> searchSimilar(
         const std::vector<float>& queryEmbedding,
+        int topK,
+        float threshold);
+
+    // Search for similar embeddings ONLY within the given set of file IDs.
+    // This is the recommended approach for hybrid search — first get the
+    // top 200 BM25 results, then run cosine similarity only on those 200
+    // embeddings (not all 100K). See HIGH-5 in the review report.
+    // Empty fileIds = scan all (same as searchSimilar).
+    std::vector<SemanticHit> searchSimilarFiltered(
+        const std::vector<float>& queryEmbedding,
+        const std::vector<int>& fileIds,
         int topK,
         float threshold);
 

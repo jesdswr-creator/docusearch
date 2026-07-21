@@ -11,7 +11,16 @@
 namespace DocuSearch {
 
 bool Schema::initialize(Database& db) {
-    return createSchemaV1(db);
+    // Always create the base schema (idempotent — CREATE TABLE IF NOT EXISTS).
+    // This handles fresh installs and ensures all base tables exist.
+    if (!createSchemaV1(db)) {
+        return false;
+    }
+    // Run any pending migrations. This handles upgrades from older versions
+    // (e.g. v1.0 databases that don't have BgeEmbeddings/SemanticSettings).
+    // See MISSED-6 in the review report — without this, upgrading from v1.0
+    // would crash on first query to BgeEmbeddings.
+    return migrate(db);
 }
 
 int Schema::currentVersion(Database& db) {
@@ -177,9 +186,70 @@ bool Schema::createSchemaV1(Database& db) {
 bool Schema::migrate(Database& db) {
     const int cur = currentVersion(db);
     if (cur >= kLatestSchemaVersion) return true;
-    DS_INFO("Database", QString("Migrating schema from v%1 to v%2").arg(cur).arg(kLatestSchemaVersion));
-    // Future: apply deltas per version.
-    return createSchemaV1(db);
+    DS_INFO("Database", QString("Migrating schema from v%1 to v%2")
+                .arg(cur).arg(kLatestSchemaVersion));
+
+    // v0 (fresh install or pre-versioning) → v1: create base schema.
+    if (cur < 1) {
+        if (!createSchemaV1(db)) return false;
+    }
+
+    // v1 → v2: add BGE embedding tables + semantic settings.
+    // Uses CREATE TABLE IF NOT EXISTS so it's safe to run on a database
+    // that already has these tables (e.g. if v1 schema creation already
+    // added them in a newer build).
+    if (cur < 2) {
+        if (!migrateV1ToV2(db)) return false;
+    }
+
+    // Future migrations: v2 → v3, v3 → v4, etc.
+    // if (cur < 3) { if (!migrateV2ToV3(db)) return false; }
+
+    db.exec(QString("PRAGMA user_version = %1;").arg(kLatestSchemaVersion));
+    DS_INFO("Database", QString("Schema migrated to v%1").arg(kLatestSchemaVersion));
+    return true;
+}
+
+bool Schema::migrateV1ToV2(Database& db) {
+    // Add BgeEmbeddings table (file_id PK, 384-float embedding as BLOB).
+    // CREATE TABLE IF NOT EXISTS is safe even if the table already exists.
+    if (!db.exec("CREATE TABLE IF NOT EXISTS BgeEmbeddings ("
+                 "  file_id     INTEGER PRIMARY KEY,"
+                 "  embedding   BLOB    NOT NULL,"
+                 "  created_at  INTEGER NOT NULL DEFAULT 0,"
+                 "  updated_at  INTEGER NOT NULL DEFAULT 0,"
+                 "  status      TEXT    NOT NULL DEFAULT 'completed',"
+                 "  FOREIGN KEY(file_id) REFERENCES Files(id) ON DELETE CASCADE"
+                 ");")) {
+        DS_ERROR("Database", "Failed to create BgeEmbeddings table during v1→v2 migration.");
+        return false;
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_bge_status ON BgeEmbeddings(status);");
+
+    // Add SemanticSettings table (key/value).
+    if (!db.exec("CREATE TABLE IF NOT EXISTS SemanticSettings ("
+                 "  key         TEXT PRIMARY KEY,"
+                 "  value       TEXT,"
+                 "  updated_at  INTEGER NOT NULL DEFAULT 0"
+                 ");")) {
+        DS_ERROR("Database", "Failed to create SemanticSettings table during v1→v2 migration.");
+        return false;
+    }
+
+    // Insert default semantic settings (INSERT OR IGNORE = don't overwrite existing).
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('semantic_enabled',     'false');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('model_path',           './models/bge-small-en-v1.5/model.onnx');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('similarity_threshold', '0.40');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('semantic_weight',      '0.40');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('top_k',                '20');");
+
+    DS_INFO("Database", "v1→v2 migration complete: added BgeEmbeddings + SemanticSettings tables.");
+    return true;
 }
 
 } // namespace DocuSearch

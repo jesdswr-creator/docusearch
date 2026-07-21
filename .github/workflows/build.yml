@@ -564,7 +564,8 @@ jobs:
           $files = @(
             @{ Name = "model.onnx";      Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx"; MinSize = 40MB },
             @{ Name = "tokenizer.json";  Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer.json"; MinSize = 100KB },
-            @{ Name = "config.json";     Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json";    MinSize = 100  }
+            @{ Name = "config.json";     Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/config.json";    MinSize = 100  },
+            @{ Name = "vocab.txt";       Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt";     MinSize = 100KB }
           )
 
           foreach ($f in $files) {
