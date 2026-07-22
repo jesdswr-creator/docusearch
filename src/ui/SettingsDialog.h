@@ -43,6 +43,12 @@ signals:
     // BgeService::embedDocumentsBatch() in the background.
     void embedAllRequested();
 
+    // Task 3 Fix D: Wire settings sliders to HybridSearchEngine.
+    // Emitted in real-time as the user drags the sliders.
+    void aiWeightChanged(float weight);      // 0.0 to 1.0
+    void aiThresholdChanged(float threshold); // 0.0 to 1.0
+    void aiTopKChanged(int topK);             // 5 to 100
+
 private slots:
     void onAddDrive();
     void onRemoveDrive();

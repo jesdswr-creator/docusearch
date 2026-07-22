@@ -2449,6 +2449,27 @@ void MainWindow::onOpenSettings() {
                 }
             });
 
+        // Task 3 Fix D: Wire AI settings sliders to HybridSearchEngine.
+        // Changes take effect immediately — no need to restart or click Apply.
+        QObject::connect(&dlg, &SettingsDialog::aiWeightChanged,
+            this, [this](float weight) {
+                if (hybridSearch_) hybridSearch_->setSemanticWeight(weight);
+                statusBar()->showMessage(
+                    QString("AI weight set to %1%").arg(int(weight * 100)), 2000);
+            });
+        QObject::connect(&dlg, &SettingsDialog::aiThresholdChanged,
+            this, [this](float threshold) {
+                if (hybridSearch_) hybridSearch_->setThreshold(threshold);
+                statusBar()->showMessage(
+                    QString("AI threshold set to %1%").arg(int(threshold * 100)), 2000);
+            });
+        QObject::connect(&dlg, &SettingsDialog::aiTopKChanged,
+            this, [this](int topK) {
+                if (hybridSearch_) hybridSearch_->setTopK(topK);
+                statusBar()->showMessage(
+                    QString("AI top-K set to %1").arg(topK), 2000);
+            });
+
         // Wire up "Embed All Documents Now" button → BgeService::embedDocumentsBatch()
         QObject::connect(&dlg, &SettingsDialog::embedAllRequested,
             this, [this]() {

@@ -229,22 +229,32 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     searchLay->addWidget(weightLbl);
     auto* weightSlider = new QSlider(Qt::Horizontal, this);
     weightSlider->setRange(0, 100);
-    weightSlider->setValue(40);
+    weightSlider->setValue(30);  // 30% AI, 70% keyword (matches default)
     searchLay->addWidget(weightSlider);
 
-    auto* threshLbl = new QLabel("Minimum Similarity Threshold (40%)", this);
+    auto* threshLbl = new QLabel("Minimum Similarity Threshold (50%)", this);
     searchLay->addWidget(threshLbl);
     auto* threshSlider = new QSlider(Qt::Horizontal, this);
     threshSlider->setRange(0, 100);
-    threshSlider->setValue(40);
+    threshSlider->setValue(50);  // 0.50 threshold (matches default)
     searchLay->addWidget(threshSlider);
 
     auto* topkLbl = new QLabel("Maximum AI Results", this);
     searchLay->addWidget(topkLbl);
     auto* topkSpin = new QSpinBox(this);
     topkSpin->setRange(5, 100);
-    topkSpin->setValue(20);
+    topkSpin->setValue(20);  // matches default
     searchLay->addWidget(topkSpin);
+
+    // Task 3 Fix D: Wire sliders to emit signals in real-time.
+    // MainWindow connects these to HybridSearchEngine::setSemanticWeight,
+    // setThreshold, and setTopK.
+    connect(weightSlider, &QSlider::valueChanged, this,
+        [this](int value) { emit aiWeightChanged(value / 100.0f); });
+    connect(threshSlider, &QSlider::valueChanged, this,
+        [this](int value) { emit aiThresholdChanged(value / 100.0f); });
+    connect(topkSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+        [this](int value) { emit aiTopKChanged(value); });
 
     semLay->addWidget(searchGroup);
 
