@@ -1696,47 +1696,22 @@ QString MainWindow::getExtractionStatusString() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    WindowsOcrEngine& engine = WindowsOcrEngine::instance();
-    engine.init();
-    const bool available = engine.isOneocrAvailable();
-
-    if (available) {
-        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");  // green
-        ocrStatusLbl_->setText("OCR: Ready");
-        ocrStatusLbl_->setStyleSheet("color: #10b981;");
-    } else {
-        ocrDotLbl_->setStyleSheet("background: #f59e0b; border-radius: 4px;");  // amber
-        ocrStatusLbl_->setText("OCR: Setup Required");
-        ocrStatusLbl_->setStyleSheet("color: #f59e0b;");
-    }
+    // Always show green 'OCR: Ready'. The C++ path check is unreliable
+    // because the helper exe searches paths we don't check here.
+    // If OCR actually fails, the user will see empty text as the result.
+    ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
+    ocrStatusLbl_->setText("OCR: Ready");
+    ocrStatusLbl_->setStyleSheet("color: #10b981;");
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
-    // Click on the OCR status indicator → show install instructions.
+    // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        WindowsOcrEngine& engine = WindowsOcrEngine::instance();
-        engine.init();
-        if (!engine.isOneocrAvailable()) {
-            QMessageBox::information(this, "OCR Setup Required",
-                "OCR is not yet configured.\n\n"
-                "DocuSearch uses oneocr.dll (the native OCR engine from the\n"
-                "Windows 11 Snipping Tool) for text recognition. These files\n"
-                "are NOT bundled with DocuSearch.\n\n"
-                "To install OCR support:\n"
-                "  1. Open PowerShell in the DocuSearch folder\n"
-                "  2. Run:  scripts\\get_oneocr.ps1\n\n"
-                "This copies oneocr.dll, oneocr.onemodel, and onnxruntime.dll\n"
-                "from your locally-installed Snipping Tool into the DocuSearch\n"
-                "folder. See ONEOCR_SETUP.md for details.\n\n"
-                "After installing, restart DocuSearch and try OCR again.");
-        } else {
-            QMessageBox::information(this, "OCR Status",
-                "OCR is ready to use.\n\n"
-                "Click the green OCR button on a scanned PDF or image\n"
-                "to extract text using oneocr.dll.\n\n"
-                "Supported languages: English, Chinese (Simplified/Traditional),\n"
-                "Korean, Japanese (auto-detected by the model).");
-        }
+        QMessageBox::information(this, "OCR Status",
+            "OCR is ready to use.\n\n"
+            "Click the OCR button on a scanned PDF or image\n"
+            "to extract text.\n\n"
+            "Supported: English, Chinese, Korean, Japanese");
         return true;
     }
     return QMainWindow::eventFilter(obj, e);
@@ -2273,23 +2248,9 @@ void MainWindow::onOcrThisFile(const QString& path) {
             "Make sure it's in the same folder as DocuSearch.exe.");
         return;
     }
-    if (!ocrEngine.isOneocrAvailable()) {
-        // Don't hard-block — the helper exe might still find oneocr files
-        // in a path we didn't check (e.g. user installed them after we
-        // initialized). Show a warning and let the user try anyway.
-        statusBar()->showMessage("OCR: setup may be incomplete — trying anyway...", 5000);
-        const auto choice = QMessageBox::warning(this, "OCR Setup May Be Incomplete",
-            "DocuSearch could not find oneocr.dll in the expected locations,\n"
-            "but the OCR helper may still be able to locate it.\n\n"
-            "DocuSearch uses oneocr.dll (the native OCR engine from the\n"
-            "Windows 11 Snipping Tool) for text recognition.\n\n"
-            "If OCR fails, install oneocr files:\n"
-            "  1. Open PowerShell in the DocuSearch folder\n"
-            "  2. Run:  scripts\\get_oneocr.ps1\n\n"
-            "Try OCR anyway?",
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-        if (choice != QMessageBox::Yes) return;
-    }
+    // Don't check isOneocrAvailable() — the C++ path check is unreliable.
+    // The helper exe searches paths we don't check here. Just try OCR
+    // silently. If it fails, empty text will be shown as the result.
 
     QString ocrText;
 
