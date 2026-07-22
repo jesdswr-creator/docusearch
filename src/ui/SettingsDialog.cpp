@@ -227,34 +227,83 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* weightLbl = new QLabel(
         "AI Weight (40% = balanced, 0% = keyword only)", this);
     searchLay->addWidget(weightLbl);
+    // Read current AI settings from SemanticSettings table so sliders
+    // show the actual current values, not hardcoded defaults.
+    int weightVal = 30, threshVal = 50, topkVal = 20;
+    if (db_) {
+        sqlite3* raw = db_->raw();
+        if (raw) {
+            sqlite3_stmt* s = nullptr;
+            if (sqlite3_prepare_v2(raw,
+                "SELECT key, value FROM SemanticSettings;", -1, &s, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(s) == SQLITE_ROW) {
+                    const char* key = reinterpret_cast<const char*>(sqlite3_column_text(s, 0));
+                    const char* val = reinterpret_cast<const char*>(sqlite3_column_text(s, 1));
+                    if (!key || !val) continue;
+                    QString k = QString::fromUtf8(key);
+                    QString v = QString::fromUtf8(val);
+                    if (k == "semantic_weight") weightVal = qRound(v.toFloat() * 100);
+                    else if (k == "similarity_threshold") threshVal = qRound(v.toFloat() * 100);
+                    else if (k == "top_k") topkVal = v.toInt();
+                }
+                sqlite3_finalize(s);
+            }
+        }
+    }
+
     auto* weightSlider = new QSlider(Qt::Horizontal, this);
     weightSlider->setRange(0, 100);
-    weightSlider->setValue(30);  // 30% AI, 70% keyword (matches default)
+    weightSlider->setValue(weightVal);
     searchLay->addWidget(weightSlider);
 
-    auto* threshLbl = new QLabel("Minimum Similarity Threshold (50%)", this);
+    auto* threshLbl = new QLabel(QString("Minimum Similarity Threshold (%1%)").arg(threshVal), this);
     searchLay->addWidget(threshLbl);
     auto* threshSlider = new QSlider(Qt::Horizontal, this);
     threshSlider->setRange(0, 100);
-    threshSlider->setValue(50);  // 0.50 threshold (matches default)
+    threshSlider->setValue(threshVal);
     searchLay->addWidget(threshSlider);
 
     auto* topkLbl = new QLabel("Maximum AI Results", this);
     searchLay->addWidget(topkLbl);
     auto* topkSpin = new QSpinBox(this);
     topkSpin->setRange(5, 100);
-    topkSpin->setValue(20);  // matches default
+    topkSpin->setValue(topkVal);
     searchLay->addWidget(topkSpin);
 
-    // Task 3 Fix D: Wire sliders to emit signals in real-time.
-    // MainWindow connects these to HybridSearchEngine::setSemanticWeight,
-    // setThreshold, and setTopK.
+    // Task 3 Fix D: Wire sliders to emit signals in real-time AND persist to DB.
     connect(weightSlider, &QSlider::valueChanged, this,
-        [this](int value) { emit aiWeightChanged(value / 100.0f); });
+        [this](int value) {
+            emit aiWeightChanged(value / 100.0f);
+            if (db_) {
+                sqlite3* raw = db_->raw();
+                if (raw) {
+                    QString sql = QString("UPDATE SemanticSettings SET value='%1' WHERE key='semantic_weight';").arg(value / 100.0f);
+                    sqlite3_exec(raw, sql.toUtf8().constData(), nullptr, nullptr, nullptr);
+                }
+            }
+        });
     connect(threshSlider, &QSlider::valueChanged, this,
-        [this](int value) { emit aiThresholdChanged(value / 100.0f); });
+        [this](int value) {
+            emit aiThresholdChanged(value / 100.0f);
+            if (db_) {
+                sqlite3* raw = db_->raw();
+                if (raw) {
+                    QString sql = QString("UPDATE SemanticSettings SET value='%1' WHERE key='similarity_threshold';").arg(value / 100.0f);
+                    sqlite3_exec(raw, sql.toUtf8().constData(), nullptr, nullptr, nullptr);
+                }
+            }
+        });
     connect(topkSpin, qOverload<int>(&QSpinBox::valueChanged), this,
-        [this](int value) { emit aiTopKChanged(value); });
+        [this](int value) {
+            emit aiTopKChanged(value);
+            if (db_) {
+                sqlite3* raw = db_->raw();
+                if (raw) {
+                    QString sql = QString("UPDATE SemanticSettings SET value='%1' WHERE key='top_k';").arg(value);
+                    sqlite3_exec(raw, sql.toUtf8().constData(), nullptr, nullptr, nullptr);
+                }
+            }
+        });
 
     semLay->addWidget(searchGroup);
 

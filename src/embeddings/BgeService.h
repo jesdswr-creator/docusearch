@@ -41,6 +41,16 @@ public:
         int topK = 20,
         float threshold = 0.40f);
 
+    // Search ONLY within the given file IDs — much faster than scanning
+    // all embeddings. Use this in hybrid search: first get top BM25 results,
+    // then only compute cosine similarity for those files.
+    // Never throws — returns empty vector on any error.
+    std::vector<SemanticHit> searchFiltered(
+        const QString& query,
+        const std::vector<int>& fileIds,
+        int topK = 20,
+        float threshold = 0.40f);
+
     // Embed a single document. Returns true on success.
     // If the document is already embedded, returns true immediately.
     bool embedDocument(int fileId, const QString& text);

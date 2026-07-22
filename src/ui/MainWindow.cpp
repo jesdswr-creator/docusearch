@@ -292,6 +292,16 @@ MainWindow::MainWindow(QWidget* parent)
     });
     autoScanTimer_->start();
 
+    // Startup diff: check for files that changed while app was closed.
+    // Runs after 2 seconds (lets UI settle) — catches new/deleted/modified
+    // files without doing a full hash rescan.
+    QTimer::singleShot(2000, this, [this]() {
+        if (!contentExtractionRunning_) {
+            statusBar()->showMessage("Checking for file changes...", 3000);
+            autoScanIndexedFolders();
+        }
+    });
+
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 

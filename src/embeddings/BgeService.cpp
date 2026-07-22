@@ -75,6 +75,23 @@ std::vector<SemanticHit> BgeService::search(
     return {};
 }
 
+std::vector<SemanticHit> BgeService::searchFiltered(
+    const QString& query, const std::vector<int>& fileIds,
+    int topK, float threshold) {
+    if (!m_initialized) return {};
+    try {
+        std::vector<float> queryEmbed;
+        const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
+        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+        return m_database->searchSimilarFiltered(queryEmbed, fileIds, topK, threshold);
+    } catch (const std::exception& e) {
+        DS_WARN("BGE", QString("Exception during filtered search: %1").arg(e.what()));
+    } catch (...) {
+        DS_WARN("BGE", "Unknown exception during filtered search.");
+    }
+    return {};
+}
+
 bool BgeService::embedDocument(int fileId, const QString& text) {
     if (!m_initialized) return false;
     try {
