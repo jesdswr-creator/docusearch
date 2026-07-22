@@ -47,8 +47,8 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
                                QWidget* parent)
     : QDialog(parent), current_(current), repo_(repo), db_(db) {
     setWindowTitle("Settings - DocuSearch");
-    setMinimumWidth(720);
-    setMinimumHeight(600);
+    setMinimumWidth(780);
+    setMinimumHeight(640);
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(12, 12, 12, 12);

@@ -52,6 +52,7 @@ public:
 
 private:
     static float normalizeScore(float bm25Score);
+    float computeAiWeight(const QString& query) const;
 
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticEnabled = false;

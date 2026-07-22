@@ -498,7 +498,7 @@ void MainWindow::buildCentral() {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
         // Wider items so "Settings" (8 chars) fits at 10pt font.
-        item->setSizeHint(QSize(95, 28));
+        item->setSizeHint(QSize(110, 28));
         item->setTextAlignment(Qt::AlignCenter);
     }
     if (sidebarList_->count() > 0) {
@@ -1267,7 +1267,9 @@ void MainWindow::onExtract() {
     }
 
     if (todo.isEmpty()) {
-        statusBar()->showMessage("No files need content extraction.", 3000);
+        // Show detailed extraction status instead of a generic message.
+        QString statusMsg = getExtractionStatusString();
+        statusBar()->showMessage(statusMsg, 5000);
         return;
     }
 
@@ -1328,8 +1330,9 @@ void MainWindow::onExtract() {
             updateIndexStats();
             refreshPreviewForSelectedFile();
             statusBar()->showMessage(
-                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                    .arg(state->done).arg(state->failed).arg(total), 8000);
+                QString("Extraction complete: %1 succeeded, %2 failed (out of %3). %4")
+                    .arg(state->done).arg(state->failed).arg(total)
+                    .arg(getExtractionStatusString()), 8000);
             return;
         }
 
@@ -1657,6 +1660,39 @@ void MainWindow::autoScanIndexedFolders() {
 // ============================================================
 // OCR status indicator
 // ============================================================
+QString MainWindow::getExtractionStatusString() {
+    if (!db_) return "Database not open.";
+    sqlite3* raw = db_->raw();
+    if (!raw) return "Database not accessible.";
+
+    int total = 0, done = 0, failed = 0, pending = 0, needsOcr = 0, skipped = 0;
+    sqlite3_stmt* s = nullptr;
+    if (sqlite3_prepare_v2(raw,
+        "SELECT indexing_status, COUNT(*) FROM Files GROUP BY indexing_status;",
+        -1, &s, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            const char* status = reinterpret_cast<const char*>(sqlite3_column_text(s, 0));
+            const int count = sqlite3_column_int(s, 1);
+            total += count;
+            QString sStr = status ? QString::fromUtf8(status) : "";
+            if (sStr == "content_done") done += count;
+            else if (sStr == "failed") failed += count;
+            else if (sStr == "pending") pending += count;
+            else if (sStr == "metadata_only") pending += count;
+            else if (sStr == "needs_ocr") needsOcr += count;
+            else if (sStr == "skipped") skipped += count;
+        }
+        sqlite3_finalize(s);
+    }
+
+    if (pending == 0 && needsOcr == 0) {
+        return QString("All files extracted: %1 done, %2 failed, %3 skipped (total: %4)")
+            .arg(done).arg(failed).arg(skipped).arg(total);
+    }
+    return QString("Extraction: %1 done, %2 pending, %3 need OCR, %4 failed (total: %5)")
+        .arg(done).arg(pending).arg(needsOcr).arg(failed).arg(total);
+}
+
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 

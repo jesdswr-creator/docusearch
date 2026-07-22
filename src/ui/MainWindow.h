@@ -140,6 +140,8 @@ public:
     void updateOcrStatusIndicator();
     // Initialize the BGE semantic search subsystem (optional, async).
     void initializeSemanticSearch();
+    // Returns a human-readable extraction status string for the status bar.
+    QString getExtractionStatusString();
 
     // Owned subsystems
     std::unique_ptr<Database>       db_;

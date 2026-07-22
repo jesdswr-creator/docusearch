@@ -32,12 +32,45 @@ void HybridSearchEngine::setTopK(int k) {
 
 float HybridSearchEngine::normalizeScore(float bm25Score) {
     // FTS5's bm25() returns NEGATIVE values (smaller = more relevant).
-    // Negate so higher = more relevant, then apply sigmoid centered at 0.
-    // Sigmoid maps any real number to (0, 1).
-    // For a typical BM25 score of -5 (very relevant), negation gives +5,
-    // sigmoid(5*0.5) ≈ 0.92. For -1 (barely relevant), sigmoid(0.5) ≈ 0.62.
     const float posScore = -bm25Score;
     return 1.0f / (1.0f + std::exp(-posScore * 0.5f));
+}
+
+float HybridSearchEngine::computeAiWeight(const QString& query) const {
+    // Task 3 Fix E: Query-adaptive AI/keyword weighting.
+    // Natural language questions get more AI weight.
+    // Short keyword-like queries get less AI weight.
+    float base = m_semanticWeight;
+
+    bool hasFieldFilter = query.contains(':');
+    bool hasQuotedPhrase = query.contains('"');
+    int wordCount = query.split(' ', Qt::SkipEmptyParts).size();
+
+    // Detect natural language patterns.
+    static const QStringList nlPatterns = {
+        "what", "which", "find", "show", "about",
+        "related", "similar", "regarding", "concerning",
+        "where", "how", "who", "when", "why"
+    };
+    bool isNaturalLanguage = false;
+    const QString lowerQuery = query.toLower();
+    for (const auto& pattern : nlPatterns) {
+        if (lowerQuery.startsWith(pattern) ||
+            lowerQuery.contains(" " + pattern + " ")) {
+            isNaturalLanguage = true;
+            break;
+        }
+    }
+
+    // Field filters (type:pdf) = user knows what they want → less AI.
+    if (hasFieldFilter) return std::min(base, 0.15f);
+    // Quoted phrases = exact match intent → less AI.
+    if (hasQuotedPhrase) return std::min(base, 0.20f);
+    // Natural language questions → more AI.
+    if (isNaturalLanguage && wordCount > 4) return std::min(base + 0.20f, 0.60f);
+    // Very short queries (1-2 words) → keyword is better.
+    if (wordCount <= 2) return std::min(base, 0.25f);
+    return base;
 }
 
 std::vector<HybridResult> HybridSearchEngine::search(
@@ -45,6 +78,9 @@ std::vector<HybridResult> HybridSearchEngine::search(
     const std::vector<ExistingSearchResult>& keywordResults) {
 
     try {
+        // Compute adaptive AI weight based on query type.
+        const float aiWeight = computeAiWeight(queryText);
+
         // 1. Convert keyword results to a map by fileId.
         std::map<int, HybridResult> resultMap;
         for (const auto& r : keywordResults) {
@@ -55,7 +91,7 @@ std::vector<HybridResult> HybridSearchEngine::search(
             h.extension     = r.extension;
             h.keywordScore  = normalizeScore(r.bm25Score);
             h.semanticScore = 0.0f;
-            h.combinedScore = h.keywordScore * (1.0f - m_semanticWeight);
+            h.combinedScore = h.keywordScore * (1.0f - aiWeight);
             resultMap[r.fileId] = h;
         }
 
@@ -72,8 +108,8 @@ std::vector<HybridResult> HybridSearchEngine::search(
                     // by the keyword search, so this is safe.)
                     it->second.semanticScore = sh.similarity;
                     it->second.combinedScore =
-                        it->second.keywordScore * (1.0f - m_semanticWeight) +
-                        sh.similarity * m_semanticWeight;
+                        it->second.keywordScore * (1.0f - aiWeight) +
+                        sh.similarity * aiWeight;
                 } else {
                     // NEW semantic-only hit (not in keyword results).
                     // Apply the type filter here — if the user searched
@@ -91,7 +127,7 @@ std::vector<HybridResult> HybridSearchEngine::search(
                     h.path          = sh.filePath;
                     h.keywordScore  = 0.0f;
                     h.semanticScore = sh.similarity;
-                    h.combinedScore = sh.similarity * m_semanticWeight;
+                    h.combinedScore = sh.similarity * aiWeight;
                     resultMap[sh.fileId] = h;
                 }
             }
