@@ -96,6 +96,15 @@ std::vector<int> BgeTokenizer::wordpieceTokenize(const QString& word) {
         isFirst = false;
         ++subwordCount;
     }
+
+    // Task 4 Fix 1: If we hit the subword limit but there's still text
+    // remaining, the word is too complex for WordPiece decomposition.
+    // Return [UNK] instead of silently truncating — truncation produces
+    // wrong embeddings because the model sees an incomplete word.
+    if (!remaining.isEmpty()) {
+        result.clear();
+        result.push_back(UNK_TOKEN_ID);
+    }
     return result;
 }
 

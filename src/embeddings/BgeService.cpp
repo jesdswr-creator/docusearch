@@ -61,7 +61,11 @@ std::vector<SemanticHit> BgeService::search(
     if (!m_initialized) return {};
     try {
         std::vector<float> queryEmbed;
-        if (!m_engine->embed(query, queryEmbed)) return {};
+        // BGE instruction prefix: prepend instruction for query embedding
+        // (NOT for document embedding — BGE uses asymmetric design).
+        // See Task 3 Fix A in review report.
+        const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
+        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
         return m_database->searchSimilar(queryEmbed, topK, threshold);
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Exception during search: %1").arg(e.what()));

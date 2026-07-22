@@ -38,6 +38,7 @@ public:
     void setSemanticEnabled(bool enabled);
     void setSemanticWeight(float weight);
     void setTopK(int k);
+    void setThreshold(float t) { m_threshold = std::clamp(t, 0.0f, 1.0f); }
 
     // Set the type filter (e.g., "pdf") so semantic-only results that
     // don't match the filter are excluded. Empty = no filter.
@@ -54,7 +55,8 @@ private:
 
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticEnabled = false;
-    float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword
+    float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword (read from SemanticSettings)
+    float       m_threshold       = 0.50f;  // cosine similarity threshold (read from SemanticSettings)
     int         m_topK            = 20;
     QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
 };

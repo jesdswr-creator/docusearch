@@ -62,7 +62,7 @@ std::vector<HybridResult> HybridSearchEngine::search(
         // 2. If semantic search is enabled, merge in semantic hits.
         if (m_semanticEnabled && m_bgeService && m_bgeService->isReady()) {
             const auto semanticHits =
-                m_bgeService->search(queryText, m_topK * 2, 0.65f);
+                m_bgeService->search(queryText, m_topK * 2, m_threshold);
 
             for (const auto& sh : semanticHits) {
                 auto it = resultMap.find(sh.fileId);

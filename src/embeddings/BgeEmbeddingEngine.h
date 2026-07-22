@@ -37,6 +37,14 @@ public:
     // On success, outEmbedding has exactly 384 floats.
     bool embed(const QString& text, std::vector<float>& outEmbedding);
 
+    // BGE Small EN v1.5 is instruction-tuned. For QUERY embedding,
+    // prepend this instruction prefix for optimal retrieval quality.
+    // For DOCUMENT embedding, no prefix needed (asymmetric design).
+    static QString queryPrefix() {
+        return QStringLiteral(
+            "Represent this sentence for searching relevant passages: ");
+    }
+
     bool isReady() const { return m_initialized; }
     int getEmbeddingDim() const { return EMBEDDING_DIM; }
 
