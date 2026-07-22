@@ -175,6 +175,13 @@ bool FileRepository::deleteFile(qint64 fileId) {
     sqlite3_step(s2);
     sqlite3_finalize(s2);
 
+    // Also delete BGE embedding (no FK cascade on this table — explicit delete).
+    sqlite3_stmt* s3 = nullptr;
+    sqlite3_prepare_v2(raw, "DELETE FROM BgeEmbeddings WHERE file_id = ?1;", -1, &s3, nullptr);
+    sqlite3_bind_int64(s3, 1, fileId);
+    sqlite3_step(s3);
+    sqlite3_finalize(s3);
+
     db_.commit();
     return rc == SQLITE_DONE;
 }

@@ -1947,6 +1947,16 @@ void MainWindow::onFileAdded(const QString& path) {
     if (!repo_ || !db_) return;
     try {
         if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return;
+
+        // Check if extension is supported.
+        const QString ext = FileUtils::extensionOf(path).toLower();
+        static const QSet<QString> supportedExts = {
+            "pdf","doc","docx","xls","xlsx","xlsm","ppt","pptx",
+            "txt","csv","md","rtf",
+            "png","jpg","jpeg","bmp","gif","tiff","tif","webp"
+        };
+        if (!supportedExts.contains(ext)) return;
+
         const QFileInfo fi(path);
         FileRecord r;
         r.path         = FileUtils::toNative(path);
@@ -1958,7 +1968,105 @@ void MainWindow::onFileAdded(const QString& path) {
         r.indexingStatus = Constants::IndexingStatus::kPending;
         r.ocrStatus      = Constants::OcrStatus::kPending;
         repo_->upsertFile(r);
-        DS_INFO("Watcher", "Added: " + path);
+
+        // Task 2 Part A: Extract text immediately for the new file
+        // (don't wait for the user to click Extract or the hourly scan).
+        // This is a single-file extraction — fast and non-blocking enough
+        // for the main thread.
+        if (fi.size() <= Constants::kMaxFilesizeToExtract) {
+            auto& registry = DocumentExtractorRegistry::instance();
+            try {
+                auto result = registry.extractByExtension(path, ext);
+                QString extractedText = result.text;
+                if (extractedText.size() > Constants::kMaxExtractTextChars) {
+                    extractedText = extractedText.left(Constants::kMaxExtractTextChars);
+                }
+
+                if (!extractedText.isEmpty()) {
+                    sqlite3* raw = db_->raw();
+                    if (raw) {
+                        qint64 now = QDateTime::currentSecsSinceEpoch();
+                        sqlite3_stmt* upd = nullptr;
+                        sqlite3_prepare_v2(raw,
+                            "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
+                            "VALUES (?1, ?2, ?3, ?4, ?5) "
+                            "ON CONFLICT(file_id) DO UPDATE SET "
+                            "  extracted_text=excluded.extracted_text, "
+                            "  text_source=excluded.text_source, "
+                            "  char_count=excluded.char_count, "
+                            "  updated_at=excluded.updated_at;",
+                            -1, &upd, nullptr);
+                        if (upd) {
+                            // Look up the file_id we just inserted.
+                            FileRecord rec;
+                            if (repo_->getByPath(r.path, rec)) {
+                                QByteArray textBytes = extractedText.toUtf8();
+                                QByteArray srcBytes = (result.source.isEmpty() ? "native" : result.source).toUtf8();
+                                sqlite3_bind_int64(upd, 1, rec.id);
+                                sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_int64(upd, 4, extractedText.size());
+                                sqlite3_bind_int64(upd, 5, now);
+                                sqlite3_step(upd);
+                                sqlite3_finalize(upd);
+
+                                // Update Files status.
+                                sqlite3_exec(raw,
+                                    QString("UPDATE Files SET indexing_status='content_done' WHERE id=%1;")
+                                        .arg(rec.id).toUtf8().constData(),
+                                    nullptr, nullptr, nullptr);
+
+                                // Update SearchIndex.
+                                sqlite3_stmt* del = nullptr;
+                                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;", -1, &del, nullptr);
+                                if (del) { sqlite3_bind_int64(del, 1, rec.id); sqlite3_step(del); sqlite3_finalize(del); }
+
+                                QByteArray fn = fi.fileName().toUtf8();
+                                QByteArray pth = r.path.toUtf8();
+                                QByteArray extB = ext.toUtf8();
+                                sqlite3_stmt* ins = nullptr;
+                                sqlite3_prepare_v2(raw,
+                                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
+                                    "VALUES (?1, ?2, ?3, ?4, ?5);",
+                                    -1, &ins, nullptr);
+                                if (ins) {
+                                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                                    sqlite3_bind_text(ins, 4, extB.constData(), -1, SQLITE_TRANSIENT);
+                                    sqlite3_bind_int64(ins, 5, rec.id);
+                                    sqlite3_step(ins);
+                                    sqlite3_finalize(ins);
+                                }
+
+                                // Generate BGE embedding for the new file.
+                                if (bgeService_ && bgeService_->isReady()) {
+                                    try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
+                                }
+                            }
+                        }
+                    }
+                } else if (result.needsOcr) {
+                    // Scanned PDF — mark as needs_ocr.
+                    FileRecord rec;
+                    if (repo_->getByPath(r.path, rec)) {
+                        sqlite3* raw = db_->raw();
+                        if (raw) {
+                            sqlite3_exec(raw,
+                                QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
+                                    .arg(rec.id).toUtf8().constData(),
+                                nullptr, nullptr, nullptr);
+                        }
+                    }
+                }
+            } catch (...) {
+                // Extraction failed — file stays as 'pending', user can retry.
+            }
+        }
+
+        statusBar()->showMessage("New file indexed: " + fi.fileName(), 3000);
+        updateIndexStats();
+        DS_INFO("Watcher", "Added + extracted: " + path);
     } catch (...) {
         DS_INFO("Watcher", "Failed to add: " + path);
     }
@@ -1983,8 +2091,46 @@ void MainWindow::onFileModified(const QString& path) {
 void MainWindow::onFileRenamed(const QString& oldPath, const QString& newPath) {
     if (!repo_ || !db_) return;
     try {
-        repo_->deleteByPath(oldPath);
-        onFileAdded(newPath);
+        // Task 2 Part A: Update path without re-extracting (content unchanged).
+        // Look up file_id by old path, update path + filename in-place.
+        FileRecord r;
+        if (repo_->getByPath(oldPath, r)) {
+            const QFileInfo fi(newPath);
+            sqlite3* raw = db_->raw();
+            if (raw) {
+                sqlite3_stmt* upd = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "UPDATE Files SET path=?1, filename=?2 WHERE id=?3;",
+                    -1, &upd, nullptr);
+                if (upd) {
+                    QByteArray pth = FileUtils::toNative(newPath).toUtf8();
+                    QByteArray fn = fi.fileName().toUtf8();
+                    sqlite3_bind_text(upd, 1, pth.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(upd, 2, fn.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 3, r.id);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
+                }
+                // Update SearchIndex path + filename too.
+                sqlite3_stmt* sIdx = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "UPDATE SearchIndex SET path=?1, filename=?2 WHERE file_id=?3;",
+                    -1, &sIdx, nullptr);
+                if (sIdx) {
+                    QByteArray pth = FileUtils::toNative(newPath).toUtf8();
+                    QByteArray fn = fi.fileName().toUtf8();
+                    sqlite3_bind_text(sIdx, 1, pth.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(sIdx, 2, fn.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(sIdx, 3, r.id);
+                    sqlite3_step(sIdx);
+                    sqlite3_finalize(sIdx);
+                }
+            }
+            statusBar()->showMessage("File renamed: " + fi.fileName(), 3000);
+        } else {
+            // Old path not in DB — treat as new file.
+            onFileAdded(newPath);
+        }
         DS_INFO("Watcher", QString("Renamed: %1 -> %2").arg(oldPath, newPath));
     } catch (...) {
         DS_INFO("Watcher", "Failed to handle rename");
@@ -1994,7 +2140,14 @@ void MainWindow::onFileRenamed(const QString& oldPath, const QString& newPath) {
 void MainWindow::onFileDeleted(const QString& path) {
     if (!repo_ || !db_) return;
     try {
+        // Task 2 Part A: Delete from ALL tables (Files, DocumentText, Tags,
+        // Notes, SearchIndex, BgeEmbeddings). deleteByPath → deleteFile
+        // now handles BgeEmbeddings explicitly.
+        QFileInfo fi(path);
+        QString fname = fi.fileName();
         repo_->deleteByPath(path);
+        statusBar()->showMessage("File removed from index: " + fname, 3000);
+        updateIndexStats();
         DS_INFO("Watcher", "Deleted: " + path);
     } catch (...) {
         DS_INFO("Watcher", "Failed to delete: " + path);
