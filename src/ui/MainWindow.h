@@ -25,6 +25,7 @@
 #include <QString>
 #include <QStringList>
 #include <memory>
+#include <atomic>
 
 #include "../core/Types.h"
 
@@ -212,6 +213,7 @@ public:
     AppSettings     settings_;
     bool            darkMode_             = true;
     bool            contentExtractionRunning_ = false;
+    std::atomic<bool> extractCancelFlag_{false};
     bool            autoScanRunning_      = false;
     bool            maximized_            = false;
     bool            ocrBtnEnabled_        = true;  // false while OCR is running
