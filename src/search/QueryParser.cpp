@@ -7,6 +7,7 @@
 
 #include <QRegularExpression>
 #include <QStringList>
+#include <QSet>
 
 namespace DocuSearch {
 
@@ -83,12 +84,29 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             // Prefix wildcard - FTS5 supports "prefix*"
             ftsTokens.append(tok);  // bare token with * works in FTS5
         } else {
+            // Skip common English stop words to reduce noise.
+            // "of", "the", "a", "in" etc. match almost every document.
+            static const QSet<QString> stopWords = {
+                "of", "the", "a", "an", "in", "is", "to", "for", "and", "or",
+                "on", "at", "by", "it", "as", "be", "was", "are", "from",
+                "that", "this", "with", "has", "have", "had", "but", "all",
+                "her", "his", "its", "she", "him", "you", "your", "they",
+                "them", "we", "us", "our", "my", "me", "so", "if", "no",
+                "do", "did"
+            };
+            if (stopWords.contains(tok.toLower())) {
+                continue;  // skip stop word
+            }
             ftsTokens.append(Utils::fts5Quote(tok));
         }
     }
 
-    // Build FTS5 query string
-    q.ftsQuery = ftsTokens.join(" ");
+    // Build FTS5 query string.
+    // CRITICAL: Join tokens with explicit AND so that "one plustwo marklist"
+    // matches documents containing ALL words, not ANY word. Without explicit
+    // AND, FTS5 treats space-separated tokens as OR by default, which returns
+    // far too many results.
+    q.ftsQuery = ftsTokens.join(" AND ");
 
     // Apply field filters
     for (const auto& f : fields) {

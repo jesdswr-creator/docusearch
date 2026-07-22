@@ -73,6 +73,28 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
     words.removeAll("AND");
     words.removeAll("OR");
     words.removeAll("NOT");
+
+    // Filter out common English stop words so they don't pollute results.
+    // "of", "the", "a", "in", "is", "to" etc. match almost every document
+    // and add noise. Only filter if there are other meaningful words left.
+    static const QSet<QString> stopWords = {
+        "of", "the", "a", "an", "in", "is", "to", "for", "and", "or",
+        "on", "at", "by", "it", "as", "be", "was", "are", "from", "that",
+        "this", "with", "has", "have", "had", "not", "but", "all", "can",
+        "her", "his", "its", "she", "him", "you", "your", "they", "them",
+        "we", "us", "our", "my", "me", "so", "if", "no", "do", "did"
+    };
+    QStringList filtered;
+    for (const auto& w : words) {
+        if (!stopWords.contains(w.toLower())) {
+            filtered.append(w);
+        }
+    }
+    // Only use filtered list if it's non-empty (don't strip ALL words).
+    if (!filtered.isEmpty()) {
+        words = filtered;
+    }
+
     return words;
 }
 

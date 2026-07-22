@@ -846,7 +846,7 @@ void MainWindow::onSearch(const QString& query) {
         QElapsedTimer t; t.start();
 
         // Always run keyword (FTS5 BM25) search first.
-        auto hits = search_->search(query, 500);
+        auto hits = search_->search(query, 50);  // limit to top 50 results
 
         // If semantic search is enabled AND the BGE service is ready,
         // run hybrid search to merge keyword results with semantic matches.
