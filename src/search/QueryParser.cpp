@@ -95,11 +95,17 @@ ParsedQuery QueryParser::parse(const QString& raw) {
                 "her", "his", "its", "she", "him", "you", "your", "they",
                 "them", "we", "us", "our", "my", "me", "so", "if", "no",
                 "do", "did",
-                // Formal/correspondence prepositions (added for better search)
+                // Formal/correspondence prepositions
                 "regarding", "about", "concerning", "pertaining", "re",
                 "into", "onto", "upon", "than", "then", "there", "here",
                 "where", "when", "why", "how", "what", "which", "who",
-                "will", "would", "could", "should", "may", "might", "can"
+                "will", "would", "could", "should", "may", "might", "can",
+                // Document-type words — describe WHAT the file is, not its
+                // content. These appear in filenames but rarely in body text.
+                // Requiring them in FTS5 content search misses real documents.
+                "letter", "report", "memo", "memorandum", "application",
+                "document", "file", "note", "notice", "circular",
+                "order", "notification", "communication", "email", "mail"
             };
             if (stopWords.contains(tok.toLower())) {
                 continue;  // skip stop word
