@@ -77,6 +77,13 @@ public:
         int topK,
         float threshold);
 
+    // Phase 3: Search ALL chunks (for RRF — semantic runs independently).
+    // Scans all chunks in batches of 500, groups by file_id, keeps best.
+    std::vector<SemanticHit> searchSimilarChunksAll(
+        const std::vector<float>& queryEmbedding,
+        int topK,
+        float threshold);
+
     struct Stats {
         int total     = 0;
         int completed = 0;

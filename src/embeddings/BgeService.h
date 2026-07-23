@@ -59,6 +59,13 @@ public:
         int topK = 20,
         float threshold = 0.40f);
 
+    // Phase 3: Search ALL chunks (not filtered by keyword results).
+    // Used for RRF fusion — semantic search runs independently.
+    std::vector<SemanticHit> searchChunksAll(
+        const QString& query,
+        int topK = 50,
+        float threshold = 0.40f);
+
     // Embed a single document. Returns true on success.
     // If the document is already embedded, returns true immediately.
     bool embedDocument(int fileId, const QString& text);

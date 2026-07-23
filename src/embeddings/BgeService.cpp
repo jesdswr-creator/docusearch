@@ -109,6 +109,22 @@ std::vector<SemanticHit> BgeService::searchChunksFiltered(
     return {};
 }
 
+std::vector<SemanticHit> BgeService::searchChunksAll(
+    const QString& query, int topK, float threshold) {
+    if (!m_initialized) return {};
+    try {
+        std::vector<float> queryEmbed;
+        const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
+        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+        return m_database->searchSimilarChunksAll(queryEmbed, topK, threshold);
+    } catch (const std::exception& e) {
+        DS_WARN("BGE", QString("Exception during chunk search all: %1").arg(e.what()));
+    } catch (...) {
+        DS_WARN("BGE", "Unknown exception during chunk search all.");
+    }
+    return {};
+}
+
 bool BgeService::embedDocument(int fileId, const QString& text) {
     if (!m_initialized) return false;
     try {

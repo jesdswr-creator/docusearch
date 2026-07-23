@@ -413,4 +413,73 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
     return results;
 }
 
+// Phase 3: Search ALL chunks (for RRF fusion — semantic runs independently).
+std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
+    const std::vector<float>& queryEmbedding,
+    int topK,
+    float threshold) {
+
+    std::vector<SemanticHit> results;
+    if (!m_db) return results;
+    if (static_cast<int>(queryEmbedding.size()) != EMBEDDING_DIM) return results;
+
+    // Scan all chunks in batches of 500 rows to limit RAM.
+    // Group by file_id, keep MAX similarity per file (best chunk wins).
+    std::map<int, float> bestPerFile;
+    int offset = 0;
+    const int BATCH = 500;
+
+    while (true) {
+        sqlite3_stmt* stmt = nullptr;
+        QString sql = QString(
+            "SELECT file_id, embedding FROM EmbeddingChunks "
+            "WHERE status = 'ready' "
+            "LIMIT %1 OFFSET %2;").arg(BATCH).arg(offset);
+
+        if (sqlite3_prepare_v2(m_db, sql.toUtf8().constData(), -1, &stmt, nullptr) != SQLITE_OK) {
+            break;
+        }
+
+        int rowsRead = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            ++rowsRead;
+            const int fileId = sqlite3_column_int(stmt, 0);
+            const void* blob = sqlite3_column_blob(stmt, 1);
+            const int size = sqlite3_column_bytes(stmt, 1);
+            if (!blob || size != EMBEDDING_BYTES) continue;
+
+            std::vector<float> emb(EMBEDDING_DIM);
+            std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
+
+            const float sim = cosineSimilarity(queryEmbedding, emb);
+            auto it = bestPerFile.find(fileId);
+            if (it == bestPerFile.end() || sim > it->second) {
+                bestPerFile[fileId] = sim;
+            }
+        }
+        sqlite3_finalize(stmt);
+
+        if (rowsRead < BATCH) break;  // no more rows
+        offset += BATCH;
+    }
+
+    // Filter by threshold + sort + trim to topK.
+    for (const auto& [fileId, sim] : bestPerFile) {
+        if (sim >= threshold) {
+            SemanticHit hit;
+            hit.fileId = fileId;
+            hit.similarity = sim;
+            results.push_back(hit);
+        }
+    }
+    std::sort(results.begin(), results.end(),
+        [](const SemanticHit& a, const SemanticHit& b) {
+            return a.similarity > b.similarity;
+        });
+    if (static_cast<int>(results.size()) > topK) {
+        results.resize(topK);
+    }
+    return results;
+}
+
 } // namespace DocuSearch

@@ -9,6 +9,8 @@
 #include <QFileInfo>
 #include <algorithm>
 #include <cmath>
+#include <set>
+#include <map>
 
 namespace DocuSearch {
 
@@ -78,77 +80,118 @@ std::vector<HybridResult> HybridSearchEngine::search(
     const std::vector<ExistingSearchResult>& keywordResults) {
 
     try {
-        // Compute adaptive AI weight based on query type.
         const float aiWeight = computeAiWeight(queryText);
+        const int K = 60;  // RRF constant
 
-        // 1. Convert keyword results to a map by fileId.
-        std::map<int, HybridResult> resultMap;
-        for (const auto& r : keywordResults) {
-            HybridResult h;
-            h.fileId        = r.fileId;
-            h.filename      = r.filename;
-            h.path          = r.path;
-            h.extension     = r.extension;
-            h.keywordScore  = normalizeScore(r.bm25Score);
-            h.semanticScore = 0.0f;
-            h.combinedScore = h.keywordScore * (1.0f - aiWeight);
-            resultMap[r.fileId] = h;
+        // ── Phase 3: RRF (Reciprocal Rank Fusion) ──────────────
+        // Run keyword and semantic searches INDEPENDENTLY, then merge
+        // by rank. This fixes the fundamental flaw where semantic search
+        // could only rank files already found by keyword search.
+
+        // List A: Keyword results (already ranked by BM25).
+        // List B: Semantic results (independent — finds docs keyword missed).
+
+        std::vector<SemanticHit> semanticHits;
+        if (m_semanticEnabled && m_bgeService && m_bgeService->isReady()) {
+            // Phase 3: Search ALL chunks, not just keyword-filtered ones.
+            // This lets AI find documents that keyword search missed.
+            semanticHits = m_bgeService->searchChunksAll(queryText, m_topK * 2, m_threshold);
+
+            // If no chunks, fall back to document-level search (all docs).
+            if (semanticHits.empty()) {
+                semanticHits = m_bgeService->search(queryText, m_topK * 2, m_threshold);
+            }
         }
 
-        // 2. If semantic search is enabled, merge in semantic hits.
-        // Phase 2: Use chunk search first (best chunk per file wins),
-        // fall back to document-level search if no chunks exist.
-        if (m_semanticEnabled && m_bgeService && m_bgeService->isReady()) {
-            std::vector<int> keywordFileIds;
-            keywordFileIds.reserve(resultMap.size());
-            for (const auto& [id, h] : resultMap) {
-                keywordFileIds.push_back(id);
-            }
+        // Build rank maps: fileId → rank (0-based, lower = better).
+        std::map<int, int> keywordRank;
+        for (size_t i = 0; i < keywordResults.size(); ++i) {
+            keywordRank[keywordResults[i].fileId] = static_cast<int>(i);
+        }
 
-            // Try chunk search first (more precise for long documents).
-            auto semanticHits =
-                m_bgeService->searchChunksFiltered(queryText, keywordFileIds, m_topK * 2, m_threshold);
+        std::map<int, int> semanticRank;
+        for (size_t i = 0; i < semanticHits.size(); ++i) {
+            semanticRank[semanticHits[i].fileId] = static_cast<int>(i);
+        }
 
-            // If chunk search returned nothing, fall back to document-level.
-            if (semanticHits.empty()) {
-                semanticHits =
-                    m_bgeService->searchFiltered(queryText, keywordFileIds, m_topK * 2, m_threshold);
-            }
+        // Collect all unique file IDs from both lists.
+        std::set<int> allFileIds;
+        for (const auto& r : keywordResults) allFileIds.insert(r.fileId);
+        for (const auto& sh : semanticHits) allFileIds.insert(sh.fileId);
 
+        // Apply type filter to semantic-only results.
+        auto passesTypeFilter = [&](int fileId) -> bool {
+            if (m_typeFilter.isEmpty()) return true;
+            // Check if this file is in keyword results (already filtered).
+            if (keywordRank.count(fileId)) return true;
+            // For semantic-only results, check extension.
             for (const auto& sh : semanticHits) {
-                auto it = resultMap.find(sh.fileId);
-                if (it != resultMap.end()) {
-                    // File already in keyword results — just update its
-                    // semantic score. (Type filter was already applied
-                    // by the keyword search, so this is safe.)
-                    it->second.semanticScore = sh.similarity;
-                    it->second.combinedScore =
-                        it->second.keywordScore * (1.0f - aiWeight) +
-                        sh.similarity * aiWeight;
-                } else {
-                    // NEW semantic-only hit (not in keyword results).
-                    // Apply the type filter here — if the user searched
-                    // type:pdf, don't add a .txt file just because it's
-                    // semantically similar.
-                    if (!m_typeFilter.isEmpty()) {
-                        QFileInfo fi(sh.filePath);
-                        if (fi.suffix().toLower() != m_typeFilter) {
-                            continue;  // skip — doesn't match type filter
-                        }
-                    }
-                    HybridResult h;
-                    h.fileId        = sh.fileId;
-                    h.filename      = sh.filename;
-                    h.path          = sh.filePath;
-                    h.keywordScore  = 0.0f;
-                    h.semanticScore = sh.similarity;
-                    h.combinedScore = sh.similarity * aiWeight;
-                    resultMap[sh.fileId] = h;
+                if (sh.fileId == fileId) {
+                    QFileInfo fi(sh.filePath);
+                    return fi.suffix().toLower() == m_typeFilter;
                 }
             }
+            return false;
+        };
+
+        // Compute RRF score for each file.
+        std::map<int, HybridResult> resultMap;
+        for (int fileId : allFileIds) {
+            if (!passesTypeFilter(fileId)) continue;
+
+            HybridResult h;
+            h.fileId = fileId;
+
+            // Get filename/path from whichever list has it.
+            auto kwIt = std::find_if(keywordResults.begin(), keywordResults.end(),
+                [fileId](const ExistingSearchResult& r) { return r.fileId == fileId; });
+            if (kwIt != keywordResults.end()) {
+                h.filename  = kwIt->filename;
+                h.path      = kwIt->path;
+                h.extension = kwIt->extension;
+                h.keywordScore = normalizeScore(kwIt->bm25Score);
+            } else {
+                // From semantic results.
+                for (const auto& sh : semanticHits) {
+                    if (sh.fileId == fileId) {
+                        h.filename  = sh.filename;
+                        h.path      = sh.filePath;
+                        h.semanticScore = sh.similarity;
+                        break;
+                    }
+                }
+            }
+
+            // Get semantic score if available.
+            for (const auto& sh : semanticHits) {
+                if (sh.fileId == fileId) {
+                    h.semanticScore = sh.similarity;
+                    break;
+                }
+            }
+
+            // RRF: rrf_score = 1/(K+keyword_rank) + 1/(K+semantic_rank)
+            // If file not in a list, rank = 999 (contributes almost nothing).
+            int kwRank = 999, semRank = 999;
+            auto krIt = keywordRank.find(fileId);
+            if (krIt != keywordRank.end()) kwRank = krIt->second;
+            auto srIt = semanticRank.find(fileId);
+            if (srIt != semanticRank.end()) semRank = srIt->second;
+
+            float rrfScore = 1.0f / (K + kwRank) + 1.0f / (K + semRank);
+
+            // Boost: filename match +0.15, recent (30 days) +0.05.
+            // (Applied via keyword score normalization, not separately here.)
+            h.combinedScore = rrfScore;
+
+            // Also store normalized scores for display.
+            h.keywordScore = (kwRank < 999) ? h.keywordScore : 0.0f;
+            h.semanticScore = (semRank < 999) ? h.semanticScore : 0.0f;
+
+            resultMap[fileId] = h;
         }
 
-        // 3. Convert to vector + sort by combined score desc.
+        // Convert to vector + sort by RRF score descending.
         std::vector<HybridResult> out;
         out.reserve(resultMap.size());
         for (auto& [id, h] : resultMap) out.push_back(h);
@@ -158,7 +201,6 @@ std::vector<HybridResult> HybridSearchEngine::search(
                 return a.combinedScore > b.combinedScore;
             });
 
-        // 4. Cap at m_topK * 2.
         const int cap = std::max(1, m_topK * 2);
         if (static_cast<int>(out.size()) > cap) {
             out.resize(cap);
@@ -170,7 +212,7 @@ std::vector<HybridResult> HybridSearchEngine::search(
         DS_WARN("Hybrid", "Unknown exception — falling back to keyword only.");
     }
 
-    // Fallback: keyword results only, converted to HybridResult.
+    // Fallback: keyword results only.
     std::vector<HybridResult> out;
     out.reserve(keywordResults.size());
     for (const auto& r : keywordResults) {
