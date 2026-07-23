@@ -57,7 +57,7 @@ private:
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticEnabled = false;
     float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword (read from SemanticSettings)
-    float       m_threshold       = 0.50f;  // cosine similarity threshold (read from SemanticSettings)
+    float       m_threshold       = 0.65f;  // cosine similarity threshold (read from SemanticSettings)
     int         m_topK            = 20;
     QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
 };

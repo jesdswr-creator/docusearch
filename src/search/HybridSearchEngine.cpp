@@ -171,20 +171,38 @@ std::vector<HybridResult> HybridSearchEngine::search(
             }
 
             // RRF: rrf_score = 1/(K+keyword_rank) + 1/(K+semantic_rank)
-            // If file not in a list, rank = 999 (contributes almost nothing).
+            // Keyword matches get 3x weight — user wants keyword results
+            // to dominate. AI only BOOSTS files that keyword already found,
+            // and adds semantic-only results ONLY if very similar (0.75+).
             int kwRank = 999, semRank = 999;
             auto krIt = keywordRank.find(fileId);
             if (krIt != keywordRank.end()) kwRank = krIt->second;
             auto srIt = semanticRank.find(fileId);
             if (srIt != semanticRank.end()) semRank = srIt->second;
 
-            float rrfScore = 1.0f / (K + kwRank) + 1.0f / (K + semRank);
+            // Keyword gets 3x weight in RRF — keyword matches dominate.
+            float kwRrf = (kwRank < 999) ? 3.0f / (K + kwRank) : 0.0f;
+            float semRrf = (semRank < 999) ? 1.0f / (K + semRank) : 0.0f;
 
-            // Boost: filename match +0.15, recent (30 days) +0.05.
-            // (Applied via keyword score normalization, not separately here.)
+            // Semantic-only results (not in keyword list) must have
+            // very high similarity (0.75+) to be included at all.
+            // This prevents AI from bringing in irrelevant files.
+            if (kwRank >= 999 && semRank < 999) {
+                // This is a semantic-only hit. Check similarity.
+                float semSim = 0.0f;
+                for (const auto& sh : semanticHits) {
+                    if (sh.fileId == fileId) { semSim = sh.similarity; break; }
+                }
+                if (semSim < 0.75f) {
+                    // Skip — not similar enough to include without keyword match.
+                    continue;
+                }
+            }
+
+            float rrfScore = kwRrf + semRrf;
             h.combinedScore = rrfScore;
 
-            // Also store normalized scores for display.
+            // Store normalized scores for display.
             h.keywordScore = (kwRank < 999) ? h.keywordScore : 0.0f;
             h.semanticScore = (semRank < 999) ? h.semanticScore : 0.0f;
 
