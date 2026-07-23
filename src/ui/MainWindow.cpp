@@ -1285,6 +1285,7 @@ void MainWindow::onExtract() {
 
     contentExtractionRunning_ = true;
     extractCancelFlag_.store(false);
+    if (searchBar_) searchBar_->setExtracting(true);  // Phase 1.4: button shows "Cancel"
     const int total = todo.size();
     // Task 1: No 30-file session limit — process ALL pending files.
     statusBar()->showMessage(
@@ -1320,7 +1321,7 @@ void MainWindow::onExtract() {
             timer->deleteLater();
             contentExtractionRunning_ = false;
             extractCancelFlag_.store(false);
-            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
+            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4: button shows "Extract"
             updateIndexStats();
             refreshPreviewForSelectedFile();
             statusBar()->showMessage(
@@ -1336,6 +1337,7 @@ void MainWindow::onExtract() {
             timer->stop();
             timer->deleteLater();
             contentExtractionRunning_ = false;
+            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4
             if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
             updateIndexStats();
             refreshPreviewForSelectedFile();
@@ -1732,9 +1734,36 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
 // ============================================================
 void MainWindow::initializeSemanticSearch() {
     try {
-        // Always create the HybridSearchEngine — even without BGE, it
-        // just passes through keyword results unchanged.
         hybridSearch_ = std::make_unique<HybridSearchEngine>();
+
+        // Phase 1.1: Load AI settings from SemanticSettings table at startup.
+        // Previously used hardcoded defaults (0.30, 0.50, 20) which ignored
+        // any changes the user made via the Settings sliders.
+        if (db_) {
+            sqlite3* raw = db_->raw();
+            if (raw) {
+                sqlite3_stmt* s = nullptr;
+                if (sqlite3_prepare_v2(raw,
+                    "SELECT key, value FROM SemanticSettings;", -1, &s, nullptr) == SQLITE_OK) {
+                    while (sqlite3_step(s) == SQLITE_ROW) {
+                        const char* key = reinterpret_cast<const char*>(sqlite3_column_text(s, 0));
+                        const char* val = reinterpret_cast<const char*>(sqlite3_column_text(s, 1));
+                        if (!key || !val) continue;
+                        QString k = QString::fromUtf8(key);
+                        QString v = QString::fromUtf8(val);
+                        if (k == "semantic_weight") {
+                            hybridSearch_->setSemanticWeight(v.toFloat());
+                        } else if (k == "similarity_threshold") {
+                            hybridSearch_->setThreshold(v.toFloat());
+                        } else if (k == "top_k") {
+                            hybridSearch_->setTopK(v.toInt());
+                        }
+                    }
+                    sqlite3_finalize(s);
+                }
+            }
+        }
+        DS_INFO("BGE", "AI settings loaded from database.");
 
         // Wire up the toggle button.
         if (semanticToggleBtn_) {
@@ -1742,9 +1771,6 @@ void MainWindow::initializeSemanticSearch() {
                     this, &MainWindow::onSemanticToggled);
         }
 
-        // Try to initialize BGE service. This is OPTIONAL — if the
-        // model file or onnxruntime.dll is missing, semantic search
-        // just stays disabled (toggle button stays disabled too).
         const QString modelPath =
             QCoreApplication::applicationDirPath() +
             "/models/bge-small-en-v1.5/model.onnx";
@@ -1752,8 +1778,6 @@ void MainWindow::initializeSemanticSearch() {
 
         bgeService_ = std::make_unique<BgeService>(this);
 
-        // Connect signals BEFORE initialization so we get the ready()
-        // signal even if init finishes synchronously.
         connect(bgeService_.get(), &BgeService::ready,
                 this, &MainWindow::onBgeReady);
         connect(bgeService_.get(), &BgeService::embeddingProgress,
@@ -1761,7 +1785,6 @@ void MainWindow::initializeSemanticSearch() {
         connect(bgeService_.get(), &BgeService::embeddingFinished,
                 this, &MainWindow::onBgeEmbeddingFinished);
 
-        // Initialize in background so the UI doesn't block.
         QtConcurrent::run([this, dbPath, modelPath]() {
             bgeService_->initialize(dbPath, modelPath);
         });
@@ -1804,6 +1827,11 @@ void MainWindow::onBgeReady() {
     DS_INFO("BGE", "BGE service ready: " + bgeService_->getStatus());
     if (semanticToggleBtn_) {
         semanticToggleBtn_->setEnabled(true);
+        // Phase 1.3: Auto-enable AI when BGE is ready.
+        // Users shouldn't have to manually find and click the AI toggle.
+        if (!semanticToggleBtn_->isChecked()) {
+            semanticToggleBtn_->setChecked(true);
+        }
     }
     if (hybridSearch_) {
         hybridSearch_->setBgeService(bgeService_.get());

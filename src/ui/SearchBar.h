@@ -47,6 +47,13 @@ signals:
     void addFolderRequested();
     void refreshRequested();
     void extractRequested();
+
+    // Phase 1.4: Update extract button text to show extraction state.
+    void setExtracting(bool running) {
+        if (extractBtn_) {
+            extractBtn_->setText(running ? "Cancel" : "Extract");
+        }
+    }
     void filtersRequested();
 
 protected:

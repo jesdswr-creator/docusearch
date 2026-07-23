@@ -37,3 +37,27 @@ upload/
 
 # Tool result scratch dir
 tool-results/
+
+# Phase 1.2: Prevent large SDK/binary files from being committed.
+# These have caused multiple git push failures and lost commits.
+6.7.0/
+6.8.0/
+6.8.1/
+Qt/
+Qt6*/
+aqtinstall.log
+docusearch/
+onnxruntime-win*/
+onnxruntime/
+*.onnx
+*.onemodel
+oneocr.dll
+oneocr.onemodel
+*.tmp
+*.bak
+*.orig
+configure-output.log
+build-output.log
+ci-logs*/
+__pycache__/
+*.pyc
