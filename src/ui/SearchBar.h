@@ -47,14 +47,15 @@ signals:
     void addFolderRequested();
     void refreshRequested();
     void extractRequested();
+    void filtersRequested();
 
+public:
     // Phase 1.4: Update extract button text to show extraction state.
     void setExtracting(bool running) {
         if (extractBtn_) {
             extractBtn_->setText(running ? "Cancel" : "Extract");
         }
     }
-    void filtersRequested();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* e) override;
