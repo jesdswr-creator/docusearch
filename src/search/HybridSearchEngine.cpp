@@ -96,19 +96,24 @@ std::vector<HybridResult> HybridSearchEngine::search(
         }
 
         // 2. If semantic search is enabled, merge in semantic hits.
-        // Use searchFiltered — only compute cosine similarity for the files
-        // already in keyword results (NOT all 100K embeddings). This is
-        // the biggest AI quality + performance fix: O(N) → O(topK).
+        // Phase 2: Use chunk search first (best chunk per file wins),
+        // fall back to document-level search if no chunks exist.
         if (m_semanticEnabled && m_bgeService && m_bgeService->isReady()) {
-            // Collect file IDs from keyword results for filtered search.
             std::vector<int> keywordFileIds;
             keywordFileIds.reserve(resultMap.size());
             for (const auto& [id, h] : resultMap) {
                 keywordFileIds.push_back(id);
             }
 
-            const auto semanticHits =
-                m_bgeService->searchFiltered(queryText, keywordFileIds, m_topK * 2, m_threshold);
+            // Try chunk search first (more precise for long documents).
+            auto semanticHits =
+                m_bgeService->searchChunksFiltered(queryText, keywordFileIds, m_topK * 2, m_threshold);
+
+            // If chunk search returned nothing, fall back to document-level.
+            if (semanticHits.empty()) {
+                semanticHits =
+                    m_bgeService->searchFiltered(queryText, keywordFileIds, m_topK * 2, m_threshold);
+            }
 
             for (const auto& sh : semanticHits) {
                 auto it = resultMap.find(sh.fileId);

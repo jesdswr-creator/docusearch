@@ -1467,7 +1467,7 @@ void MainWindow::onExtract() {
                 // Generate BGE embedding for this document.
                 if (bgeService_ && bgeService_->isReady()) {
                     try {
-                        bgeService_->embedDocument(item.fileId, extractedText);
+                        bgeService_->embedDocumentChunked(item.fileId, extractedText);
                     } catch (...) {}
                 }
 
@@ -2090,7 +2090,7 @@ void MainWindow::onFileAdded(const QString& path) {
 
                                 // Generate BGE embedding for the new file.
                                 if (bgeService_ && bgeService_->isReady()) {
-                                    try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
+                                    try { bgeService_->embedDocumentChunked(rec.id, extractedText); } catch (...) {}
                                 }
                             }
                         }

@@ -202,8 +202,13 @@ bool Schema::migrate(Database& db) {
         if (!migrateV1ToV2(db)) return false;
     }
 
-    // Future migrations: v2 → v3, v3 → v4, etc.
-    // if (cur < 3) { if (!migrateV2ToV3(db)) return false; }
+    // v2 → v3: add EmbeddingChunks table for chunked embeddings.
+    // This is the biggest AI quality improvement — instead of one embedding
+    // per entire document, we store multiple embeddings per chunk (256 tokens,
+    // 64 overlap). This lets the AI find the RELEVANT PART of a long document.
+    if (cur < 3) {
+        if (!migrateV2ToV3(db)) return false;
+    }
 
     db.exec(QString("PRAGMA user_version = %1;").arg(kLatestSchemaVersion));
     DS_INFO("Database", QString("Schema migrated to v%1").arg(kLatestSchemaVersion));
@@ -249,6 +254,39 @@ bool Schema::migrateV1ToV2(Database& db) {
             "('top_k',                '20');");
 
     DS_INFO("Database", "v1→v2 migration complete: added BgeEmbeddings + SemanticSettings tables.");
+    return true;
+}
+
+bool Schema::migrateV2ToV3(Database& db) {
+    // Phase 2: EmbeddingChunks table — one document can have multiple
+    // chunk embeddings (256 tokens each, 64 overlap). This dramatically
+    // improves search quality for long documents.
+    if (!db.exec("CREATE TABLE IF NOT EXISTS EmbeddingChunks ("
+                 "  chunk_id    INTEGER PRIMARY KEY AUTOINCREMENT,"
+                 "  file_id     INTEGER NOT NULL REFERENCES Files(id) ON DELETE CASCADE,"
+                 "  chunk_index INTEGER NOT NULL,"
+                 "  start_offset INTEGER DEFAULT 0,"
+                 "  end_offset   INTEGER DEFAULT 0,"
+                 "  embedding   BLOB    NOT NULL,"
+                 "  created_at  INTEGER NOT NULL DEFAULT 0,"
+                 "  status      TEXT    NOT NULL DEFAULT 'ready',"
+                 "  UNIQUE(file_id, chunk_index)"
+                 ");")) {
+        DS_ERROR("Database", "Failed to create EmbeddingChunks table during v2→v3 migration.");
+        return false;
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_file ON EmbeddingChunks(file_id);");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_status ON EmbeddingChunks(status);");
+
+    // Add default chunk settings to SemanticSettings.
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('chunk_size', '256');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('chunk_overlap', '64');");
+    db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+            "('embedding_mode', 'chunk');");
+
+    DS_INFO("Database", "v2→v3 migration complete: added EmbeddingChunks table.");
     return true;
 }
 

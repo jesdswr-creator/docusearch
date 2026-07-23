@@ -51,9 +51,22 @@ public:
         int topK = 20,
         float threshold = 0.40f);
 
+    // Phase 2: Search chunks — finds best matching chunk per file.
+    // More precise than document-level search for long documents.
+    std::vector<SemanticHit> searchChunksFiltered(
+        const QString& query,
+        const std::vector<int>& fileIds,
+        int topK = 20,
+        float threshold = 0.40f);
+
     // Embed a single document. Returns true on success.
     // If the document is already embedded, returns true immediately.
     bool embedDocument(int fileId, const QString& text);
+
+    // Phase 2: Embed a document as multiple chunks (256 tokens, 64 overlap).
+    // Generates one embedding per chunk and stores in EmbeddingChunks table.
+    // Falls back to single embedding for short documents (< 256 tokens).
+    bool embedDocumentChunked(int fileId, const QString& text);
 
     // Embed a batch of documents in the background. Emits
     // embeddingProgress and embeddingFinished signals.

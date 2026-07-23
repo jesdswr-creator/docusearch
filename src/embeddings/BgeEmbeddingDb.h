@@ -58,6 +58,25 @@ public:
     bool hasEmbedding(int fileId);
     bool deleteEmbedding(int fileId);
 
+    // ── Phase 2: Chunked embeddings ──────────────────────────
+    // Store multiple chunk embeddings for a single file.
+    struct ChunkData {
+        int chunkIndex;
+        int startOffset;
+        int endOffset;
+        std::vector<float> embedding;
+    };
+    bool storeChunks(int fileId, const std::vector<ChunkData>& chunks);
+    bool hasChunks(int fileId);
+    bool deleteChunks(int fileId);
+
+    // Search chunks — returns best matching chunk per file.
+    std::vector<SemanticHit> searchSimilarChunks(
+        const std::vector<float>& queryEmbedding,
+        const std::vector<int>& fileIds,
+        int topK,
+        float threshold);
+
     struct Stats {
         int total     = 0;
         int completed = 0;

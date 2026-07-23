@@ -29,11 +29,12 @@ public:
     // Bumped to 2 when BgeEmbeddings + SemanticSettings tables were added.
     // v1 → v2 migration adds those tables (via CREATE TABLE IF NOT EXISTS,
     // so it's safe to run on a v2 database too).
-    static constexpr int kLatestSchemaVersion = 2;
+    static constexpr int kLatestSchemaVersion = 3;
 
 private:
     static bool createSchemaV1(Database& db);
     static bool migrateV1ToV2(Database& db);
+    static bool migrateV2ToV3(Database& db);
 };
 
 } // namespace DocuSearch

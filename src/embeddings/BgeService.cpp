@@ -92,6 +92,23 @@ std::vector<SemanticHit> BgeService::searchFiltered(
     return {};
 }
 
+std::vector<SemanticHit> BgeService::searchChunksFiltered(
+    const QString& query, const std::vector<int>& fileIds,
+    int topK, float threshold) {
+    if (!m_initialized) return {};
+    try {
+        std::vector<float> queryEmbed;
+        const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
+        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+        return m_database->searchSimilarChunks(queryEmbed, fileIds, topK, threshold);
+    } catch (const std::exception& e) {
+        DS_WARN("BGE", QString("Exception during chunk search: %1").arg(e.what()));
+    } catch (...) {
+        DS_WARN("BGE", "Unknown exception during chunk search.");
+    }
+    return {};
+}
+
 bool BgeService::embedDocument(int fileId, const QString& text) {
     if (!m_initialized) return false;
     try {
@@ -103,6 +120,78 @@ bool BgeService::embedDocument(int fileId, const QString& text) {
         DS_WARN("BGE", QString("Exception embedding file %1: %2").arg(fileId).arg(e.what()));
     } catch (...) {
         DS_WARN("BGE", QString("Unknown exception embedding file %1").arg(fileId));
+    }
+    return false;
+}
+
+bool BgeService::embedDocumentChunked(int fileId, const QString& text) {
+    if (!m_initialized) return false;
+    try {
+        // If already has chunks, skip.
+        if (m_database->hasChunks(fileId)) return true;
+
+        // Also store a single full-document embedding (for backward compat).
+        if (!m_database->hasEmbedding(fileId)) {
+            std::vector<float> fullEmbed;
+            if (m_engine->embed(text, fullEmbed)) {
+                m_database->storeEmbedding(fileId, fullEmbed);
+            }
+        }
+
+        // Split text into chunks of ~1000 chars (approx 256 tokens) with
+        // ~250 char overlap (approx 64 tokens). Simple character-based
+        // chunking — not token-accurate but close enough for quality.
+        const int CHUNK_SIZE = 1000;
+        const int OVERLAP = 250;
+        const int textLen = text.length();
+
+        if (textLen <= CHUNK_SIZE) {
+            // Short document — single chunk, same as existing embedding.
+            return true;
+        }
+
+        std::vector<BgeEmbeddingDb::ChunkData> chunks;
+        int chunkIndex = 0;
+        int offset = 0;
+
+        while (offset < textLen) {
+            int end = std::min(offset + CHUNK_SIZE, textLen);
+
+            // Try to split at sentence boundary (period + space).
+            if (end < textLen) {
+                int sentenceEnd = text.lastIndexOf(". ", end);
+                if (sentenceEnd > offset + CHUNK_SIZE / 2) {
+                    end = sentenceEnd + 1;
+                }
+            }
+
+            QString chunkText = text.mid(offset, end - offset);
+            std::vector<float> chunkEmbed;
+            if (m_engine->embed(chunkText, chunkEmbed)) {
+                BgeEmbeddingDb::ChunkData cd;
+                cd.chunkIndex = chunkIndex;
+                cd.startOffset = offset;
+                cd.endOffset = end;
+                cd.embedding = std::move(chunkEmbed);
+                chunks.push_back(std::move(cd));
+            }
+
+            chunkIndex++;
+            offset = end - OVERLAP;
+            if (offset >= textLen) break;
+            // Cap at 50 chunks to prevent runaway on huge files.
+            if (chunkIndex >= 50) break;
+        }
+
+        if (!chunks.empty()) {
+            m_database->storeChunks(fileId, chunks);
+            DS_INFO("BGE", QString("Stored %1 chunks for file %2").arg(chunks.size()).arg(fileId));
+        }
+        return true;
+    } catch (const std::exception& e) {
+        DS_WARN("BGE", QString("Exception chunking file %1: %2").arg(fileId).arg(e.what()));
+    } catch (...) {
+        DS_WARN("BGE", QString("Unknown exception chunking file %1").arg(fileId));
     }
     return false;
 }
