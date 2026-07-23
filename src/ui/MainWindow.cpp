@@ -293,14 +293,60 @@ MainWindow::MainWindow(QWidget* parent)
     autoScanTimer_->start();
 
     // Startup diff: check for files that changed while app was closed.
-    // Runs after 2 seconds (lets UI settle) — catches new/deleted/modified
-    // files without doing a full hash rescan.
     QTimer::singleShot(2000, this, [this]() {
         if (!contentExtractionRunning_) {
             statusBar()->showMessage("Checking for file changes...", 3000);
             autoScanIndexedFolders();
         }
     });
+
+    // Phase 9: Wire up FileWatcher with debounce.
+    // The watcher monitors indexed folders in real-time. Events are
+    // debounced (500ms) to merge rapid add+modify sequences.
+    watcher_ = std::make_unique<FileWatcher>(this);
+    fileEventDebounceTimer_ = new QTimer(this);
+    fileEventDebounceTimer_->setInterval(500);
+    fileEventDebounceTimer_->setSingleShot(true);
+    connect(fileEventDebounceTimer_, &QTimer::timeout, this, [this]() {
+        // Process all debounced events.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        QStringList toProcess;
+        for (auto it = fileEventDebounce_.begin(); it != fileEventDebounce_.end(); ) {
+            if (now - it.value() >= 400) {
+                toProcess.append(it.key());
+                it = fileEventDebounce_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (const QString& path : toProcess) {
+            // Check if file still exists (might have been deleted).
+            if (QFileInfo::exists(path)) {
+                onFileModified(path);
+            } else {
+                onFileDeleted(path);
+            }
+        }
+    });
+    connect(watcher_.get(), &FileWatcher::fileAdded, this, [this](const QString& path) {
+        fileEventDebounce_[path] = QDateTime::currentMSecsSinceEpoch();
+        if (!fileEventDebounceTimer_->isActive()) {
+            fileEventDebounceTimer_->start();
+        }
+    });
+    connect(watcher_.get(), &FileWatcher::fileModified, this, [this](const QString& path) {
+        fileEventDebounce_[path] = QDateTime::currentMSecsSinceEpoch();
+        if (!fileEventDebounceTimer_->isActive()) {
+            fileEventDebounceTimer_->start();
+        }
+    });
+    connect(watcher_.get(), &FileWatcher::fileDeleted, this, &MainWindow::onFileDeleted);
+    connect(watcher_.get(), &FileWatcher::fileRenamed, this, &MainWindow::onFileRenamed);
+
+    // Start watching indexed folders.
+    if (!settings_.indexedDrives.isEmpty()) {
+        watcher_->addWatches(settings_.indexedDrives);
+    }
 
     refreshSavedSearches();
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");

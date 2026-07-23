@@ -121,14 +121,17 @@ bool Schema::createSchemaV1(Database& db) {
         "CREATE INDEX IF NOT EXISTS idx_log_time ON IndexingLog(created_at);",
 
         // --- FTS5 full-text index over filename + body --------------------
-        // External content table pointing at DocumentText + Files.
+        // Phase 8: Use trigram tokenizer for CJK (Chinese/Japanese/Korean)
+        // support. Trigram splits text into 3-character sliding windows,
+        // which handles CJK languages that don't have word boundaries.
+        // Falls back to unicode61 if trigram not available (SQLite < 3.34).
         R"SQL(CREATE VIRTUAL TABLE IF NOT EXISTS SearchIndex USING fts5(
             filename,
             content,
             path UNINDEXED,
             extension UNINDEXED,
             file_id UNINDEXED,
-            tokenize = 'unicode61 remove_diacritics 2'
+            tokenize = 'trigram'
         );)SQL",
 
         // --- BGE embedding storage (semantic search) ----------------------

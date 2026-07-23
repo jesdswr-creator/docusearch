@@ -17,16 +17,23 @@
 #include <QPalette>
 #include <QColor>
 #include <QIcon>
+#include <QThread>
+#include <QThreadPool>
 
 using namespace DocuSearch;
 
 int main(int argc, char* argv[]) {
     // Install the SEH translator FIRST, before any library that might
     // raise a structured exception (Poppler, zlib, minizip, oneocr).
-    // This converts access-violation-style crashes into catchable
-    // C++ exceptions — the difference between "Extraction failed for
-    // one file" and "the whole app crashed".
     DocuSearch::installSehTranslator();
+
+    // Phase 12: Limit thread pool for 4GB RAM systems.
+    // On 4GB machines, running too many threads causes memory pressure
+    // and CPU thrashing. Cap at 2 threads (enough for parallelism without
+    // overloading). On 8GB+ machines, allow up to (cores-1).
+    const int cores = QThread::idealThreadCount();
+    const int maxThreads = (cores <= 2) ? 2 : std::min(cores - 1, 4);
+    QThreadPool::globalInstance()->setMaxThreadCount(maxThreads);
 
     // Round the scale factor to the nearest integer (1x, 2x, 3x) instead
     // of passing fractional scales (1.25x, 1.5x) through. On Windows,

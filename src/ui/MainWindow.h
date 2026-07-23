@@ -150,6 +150,9 @@ public:
     std::unique_ptr<OcrWorkerPool>  ocrPool_;
     std::unique_ptr<Indexer>        indexer_;
     std::unique_ptr<FileWatcher>    watcher_;
+    // Phase 9: Debounce file watcher events (merge add+modify within 500ms).
+    QHash<QString, qint64> fileEventDebounce_;
+    QTimer* fileEventDebounceTimer_ = nullptr;
     std::unique_ptr<ThumbnailGenerator> thumbs_;
 
     // ---- UI widgets ----
