@@ -87,12 +87,19 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             // Skip common English stop words to reduce noise.
             // "of", "the", "a", "in" etc. match almost every document.
             static const QSet<QString> stopWords = {
+                // Articles & prepositions
                 "of", "the", "a", "an", "in", "is", "to", "for", "and", "or",
                 "on", "at", "by", "it", "as", "be", "was", "are", "from",
                 "that", "this", "with", "has", "have", "had", "but", "all",
+                // Pronouns
                 "her", "his", "its", "she", "him", "you", "your", "they",
                 "them", "we", "us", "our", "my", "me", "so", "if", "no",
-                "do", "did"
+                "do", "did",
+                // Formal/correspondence prepositions (added for better search)
+                "regarding", "about", "concerning", "pertaining", "re",
+                "into", "onto", "upon", "than", "then", "there", "here",
+                "where", "when", "why", "how", "what", "which", "who",
+                "will", "would", "could", "should", "may", "might", "can"
             };
             if (stopWords.contains(tok.toLower())) {
                 continue;  // skip stop word

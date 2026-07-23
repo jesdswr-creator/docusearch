@@ -80,9 +80,13 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
     static const QSet<QString> stopWords = {
         "of", "the", "a", "an", "in", "is", "to", "for", "and", "or",
         "on", "at", "by", "it", "as", "be", "was", "are", "from", "that",
-        "this", "with", "has", "have", "had", "not", "but", "all", "can",
+        "this", "with", "has", "have", "had", "not", "but", "all",
         "her", "his", "its", "she", "him", "you", "your", "they", "them",
-        "we", "us", "our", "my", "me", "so", "if", "no", "do", "did"
+        "we", "us", "our", "my", "me", "so", "if", "no", "do", "did",
+        "regarding", "about", "concerning", "pertaining", "re",
+        "into", "onto", "upon", "than", "then", "there", "here",
+        "where", "when", "why", "how", "what", "which", "who",
+        "will", "would", "could", "should", "may", "might", "can"
     };
     QStringList filtered;
     for (const auto& w : words) {
