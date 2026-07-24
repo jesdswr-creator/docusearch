@@ -363,3 +363,25 @@ Stage Summary:
   • MISSED-4 (premultiplied alpha): Low risk for scanned documents (typically opaque).
   • MISSED-5 (QSqlDatabase connection names): Tests use :memory: SQLite — no collision risk.
 - Files modified: src/search/HybridSearchEngine.cpp, src/ocr/WindowsOcrEngine.h, src/embeddings/BgeTokenizer.cpp, src/embeddings/BgeEmbeddingEngine.cpp, src/embeddings/BgeEmbeddingDb.h, src/embeddings/BgeEmbeddingDb.cpp, src/preview/PdfPreview.h, src/preview/PdfPreview.cpp, src/preview/OfficePreview.cpp, src/database/Database.cpp, src/database/Schema.h, src/database/Schema.cpp, src/monitoring/FileWatcher.cpp, src/search/QueryParser.h, src/search/QueryParser.cpp, src/search/SearchEngine.cpp, src/ocr/ocr_helper_main.cpp, .github/workflows/build.yml, scripts/download_bge_model.ps1, worklog.md
+
+---
+Task ID: 6
+Agent: main
+Task: Reviewer question #8 — wire up or delete ThumbnailGenerator
+
+Work Log:
+- Audited ThumbnailGenerator references across src/, CMakeLists.txt, tests/.
+- Found: declared as `thumbs_` member in MainWindow.h, forward-declared in MainWindow.h, included in MainWindow.cpp, listed in CMakeLists.txt APP_SOURCES + APP_HEADERS.
+- Found: NEVER instantiated, NEVER called. Pure dead code.
+- Decided to DELETE (YAGNI) rather than wire up, because the new FilePreviewPane already covers all preview use cases (PDF/image/text/office) natively.
+- Deleted src/preview/ThumbnailGenerator.h and src/preview/ThumbnailGenerator.cpp.
+- Removed entries from CMakeLists.txt (APP_SOURCES line 228, APP_HEADERS line 289).
+- Removed `#include "../preview/ThumbnailGenerator.h"` from src/ui/MainWindow.cpp.
+- Removed `class ThumbnailGenerator;` forward decl and `std::unique_ptr<ThumbnailGenerator> thumbs_;` member from src/ui/MainWindow.h.
+- Verified zero remaining references: `grep -rn "ThumbnailGenerator\|thumbs_" src/ CMakeLists.txt tests/` → empty.
+- Committed as 3ff1f28.
+
+Stage Summary:
+- Reviewer question #8 RESOLVED (chose delete).
+- Working tree clean.
+- All other previously-tracked reviewer items already addressed in Task ID 5 commit.
