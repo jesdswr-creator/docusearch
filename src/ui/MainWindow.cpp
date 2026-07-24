@@ -1387,8 +1387,12 @@ void MainWindow::onExtract() {
 
     if (todo.isEmpty()) {
         // Show detailed extraction status instead of a generic message.
-        QString statusMsg = getExtractionStatusString();
-        statusBar()->showMessage(statusMsg, 5000);
+        try {
+            QString statusMsg = getExtractionStatusString();
+            statusBar()->showMessage(statusMsg, 5000);
+        } catch (...) {
+            statusBar()->showMessage("All files extracted.", 3000);
+        }
         return;
     }
 
@@ -1451,9 +1455,8 @@ void MainWindow::onExtract() {
             updateIndexStats();
             refreshPreviewForSelectedFile();
             statusBar()->showMessage(
-                QString("Extraction complete: %1 succeeded, %2 failed (out of %3). %4")
-                    .arg(state->done).arg(state->failed).arg(total)
-                    .arg(getExtractionStatusString()), 8000);
+                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+                    .arg(state->done).arg(state->failed).arg(total), 8000);
             return;
         }
 
@@ -1574,9 +1577,15 @@ void MainWindow::onExtract() {
                 }
 
                 // Generate BGE embedding for this document.
+                // Use simple embedDocument (single embedding) during extraction
+                // for speed. Chunked embeddings can be generated later via
+                // the "Generate AI Embeddings" button in Settings.
+                // embedDocumentChunked was crashing because it does up to 50
+                // ONNX inference calls (50 × 20ms = 1s) on the main thread,
+                // blocking the UI and causing apparent crashes.
                 if (bgeService_ && bgeService_->isReady()) {
                     try {
-                        bgeService_->embedDocumentChunked(item.fileId, extractedText);
+                        bgeService_->embedDocument(item.fileId, extractedText);
                     } catch (...) {}
                 }
 
@@ -2199,7 +2208,7 @@ void MainWindow::onFileAdded(const QString& path) {
 
                                 // Generate BGE embedding for the new file.
                                 if (bgeService_ && bgeService_->isReady()) {
-                                    try { bgeService_->embedDocumentChunked(rec.id, extractedText); } catch (...) {}
+                                    try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
                                 }
                             }
                         }
