@@ -235,11 +235,13 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
     }
     if (results.size() > limit) results = results.mid(0, limit);
 
-    // ── Option A: Two-pass search ─────────────────────────────
-    // If strict AND search found nothing, try again with content-only
-    // words (drop document-type words like "letter", "note", "report"
-    // that may not appear in the body text).
-    if (results.isEmpty() && !words.isEmpty()) {
+    // ── P0.3 + P0.4: Two-pass search with soft document-type words ──
+    // Trigger second pass if:
+    //   - Zero results (strict AND found nothing)
+    //   - OR fewer than 3 results (too few, might be wrong type)
+    // AND the query contains document-type words (letter, note, report, etc.)
+    // that may not appear in the body text.
+    if (results.size() < 3 && !words.isEmpty()) {
         // Document-type words that describe WHAT the file is, not its content.
         static const QSet<QString> docTypeWords = {
             "letter", "report", "note", "memo", "memorandum", "application",
