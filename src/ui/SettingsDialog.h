@@ -6,6 +6,7 @@
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QLabel>
 #include "../core/Types.h"
 
 namespace DocuSearch {
@@ -91,6 +92,11 @@ private:
     // OCR
     QLineEdit*   tessdataEdit_;
     QComboBox*   langCombo_;
+
+    // Baidu Cloud OCR (unlimited, cloud-based)
+    QLineEdit*   baiduApiKeyEdit_;
+    QLineEdit*   baiduSecretKeyEdit_;
+    QLabel*      baiduStatusLabel_;
 
     // UI
     QCheckBox*   darkModeCheck_;

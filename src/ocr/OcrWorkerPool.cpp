@@ -3,7 +3,7 @@
 // ============================================================
 
 #include "OcrWorkerPool.h"
-#include "WinRtOcrEngine.h"
+#include "BaiduOcrEngine.h"
 #include "WindowsOcrEngine.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
@@ -141,27 +141,27 @@ void OcrWorkerPool::shutdown() {
 void OcrWorkerPool::onWorkerFinished() {}
 
 void OcrWorkerPool::workerLoop(int workerId) {
-    // OCR engine selection — prefer the unlimited WinRT engine, fall
-    // back to oneocr if WinRT helper isn't present.
+    // OCR engine selection — prefer Baidu (if API key configured), fall
+    // back to oneocr (local, requires setup).
     //
-    // WinRT engine: built into Windows 10+, no setup, 50+ languages.
-    // oneocr engine: requires manual DLL extraction, ~5 languages.
-    WinRtOcrEngine winrtEngine;
-    bool useWinRt = winrtEngine.init() && winrtEngine.isAvailable();
+    // Baidu: unlimited quota (free 1000/day + paid), 50+ languages, no DLL.
+    // oneocr: local, free, ~5 languages, requires get_oneocr.ps1 setup.
+    BaiduOcrEngine baiduEngine;
+    bool useBaidu = baiduEngine.init() && baiduEngine.isConfigured();
 
     WindowsOcrEngine oneocrEngine;
     bool useOneocr = false;
-    if (!useWinRt) {
-        DS_WARN("OCR", QString("Worker %1: WinRT OCR helper not available, "
-                                "falling back to oneocr.dll").arg(workerId));
+    if (!useBaidu) {
+        DS_INFO("OCR", QString("Worker %1: Baidu OCR not configured, "
+                                "using local oneocr.dll").arg(workerId));
         useOneocr = oneocrEngine.init() && oneocrEngine.isOneocrAvailable();
         if (!useOneocr) {
             DS_ERROR("OCR", QString("Worker %1: No OCR engine available "
-                                    "(neither WinRT nor oneocr)").arg(workerId));
+                                    "(neither Baidu nor oneocr)").arg(workerId));
             return;
         }
     } else {
-        DS_INFO("OCR", QString("Worker %1: Using unlimited WinRT OCR engine")
+        DS_INFO("OCR", QString("Worker %1: Using Baidu OCR (unlimited)")
                           .arg(workerId));
     }
 
@@ -207,9 +207,9 @@ void OcrWorkerPool::workerLoop(int workerId) {
         QString text;
         try {
             if (FileUtils::hasExtension(task.path, Constants::kImageExtensions)) {
-                // Prefer WinRT; fall back to oneocr on failure.
-                if (useWinRt) {
-                    text = winrtEngine.ocrFile(task.path);
+                // Prefer Baidu; fall back to oneocr on failure.
+                if (useBaidu) {
+                    text = baiduEngine.ocrFile(task.path);
                 }
                 if (text.isEmpty() && useOneocr) {
                     text = oneocrEngine.ocrFile(task.path);

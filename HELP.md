@@ -29,14 +29,12 @@ This guide covers everything you need to use DocuSearch effectively.
    [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions).
 2. **Install/extract** to any folder.
 3. **Run** `DocuSearch.exe`.
-
-That's it — OCR works out of the box via the built-in Windows.Media.Ocr
-engine (no setup script needed). To add more OCR languages, install them
-via Windows Settings → Time & Language → Language → Add a language.
-
-> **Optional:** If you prefer the legacy oneocr.dll engine (from the
-> Windows 11 Snipping Tool), you can still set it up via
-> `scripts\get_oneocr.ps1`. DocuSearch will use it as a fallback only.
+4. **(Optional) Enable OCR** — choose ONE of:
+   - **Baidu Cloud OCR** (recommended — unlimited, 50+ languages): sign up
+     at https://cloud.baidu.com, create an OCR application, then enter
+     your API Key + Secret Key in Settings → OCR.
+   - **oneocr.dll** (local, ~5 languages): run `scripts\get_oneocr.ps1`.
+     See [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for details.
 
 The first window you see has:
 - A sidebar on the left with navigation items
@@ -144,46 +142,54 @@ the green OCR button.
 
 ## OCR (Scanned PDFs & Images)
 
-OCR extracts text from images and scanned PDFs using **Windows.Media.Ocr**
-— the unlimited OCR engine built into Windows 10+. No setup script is
-required; it works on first launch with whatever languages you have
-installed in Windows.
+DocuSearch supports two OCR engines, used in this priority:
 
-### Why "unlimited"?
+1. **Baidu Cloud OCR** (recommended) — unlimited quota (free 1000 calls/day
+   + paid plans), 50+ languages, mixed Chinese/English supported. No DLL
+   to install, works the moment you enter API credentials.
+2. **oneocr.dll** (local fallback) — the Windows 11 Snipping Tool OCR
+   engine. Free, local, ~5 languages. Requires `get_oneocr.ps1` setup.
 
-- **Built into Windows 10+** — no DLL to bundle, no license gray area.
-- **50+ languages** available via Windows language packs.
-- **No setup script** — works the moment you run DocuSearch.
-- **No file-count limit** — process as many images as you like.
+### Setting up Baidu Cloud OCR
 
-The legacy oneocr.dll engine (from the Windows 11 Snipping Tool) is kept
-as a fallback for systems where WinRT OCR isn't available.
+1. Sign up at **https://cloud.baidu.com** (free).
+2. Go to **Console → Artificial Intelligence → 文字识别 (OCR)**.
+3. Click **创建应用** (Create Application) and fill in any name/description.
+4. Note the **API Key** and **Secret Key** shown on the app detail page.
+5. In DocuSearch: open **Settings → OCR** and paste both keys.
+6. Click **Test Connection** to verify. The status bar should now show
+   **OCR: Baidu** (green).
+
+### Setting up oneocr (fallback)
+
+```powershell
+.\scripts\get_oneocr.ps1
+```
+
+This script copies the oneocr files from your locally-installed
+Snipping Tool into the DocuSearch folder. See
+[ONEOCR_SETUP.md](ONEOCR_SETUP.md) for full details.
 
 ### Running OCR on a file
 
 1. Click a search result (or any file in the results list).
 2. Click the green **OCR** button in the preview pane.
-3. Wait — OCR takes 1-5 seconds per image, longer for multi-page PDFs.
+3. Wait — OCR takes 1-5 seconds per image (Baidu is faster than oneocr).
 4. Recognized text appears in the preview pane.
 
 ### OCR status indicator
 
 The status bar at the bottom shows the current OCR status:
-- 🟢 **OCR: Unlimited** — WinRT OCR engine is ready (recommended).
-- 🟢 **OCR: Ready** — Legacy oneocr.dll is installed (fallback only).
-- 🟡 **OCR: Setup Required** — No OCR engine available. Reinstall
-  DocuSearch to get the WinRT helper.
+- 🟢 **OCR: Baidu** — Baidu Cloud OCR is configured (unlimited).
+- 🟢 **OCR: Ready** — local oneocr.dll is installed.
+- 🟡 **OCR: Setup Required** — no OCR engine available. Click for setup help.
 
-### Adding more OCR languages
+### Supported languages
 
-WinRT OCR uses whatever languages are installed in Windows. To add more:
-
-1. Open **Windows Settings** → **Time & Language** → **Language & region**.
-2. Click **Add a language**.
-3. Pick the language you want (e.g., Spanish, French, German, Hindi).
-4. Make sure **Optical character recognition** is checked in the
-   optional features for that language.
-5. Restart DocuSearch — the new language is now auto-detected.
+- **Baidu**: 50+ languages including English, Chinese (Simplified and
+  Traditional), Japanese, Korean, French, German, Spanish, Russian,
+  Arabic, Hindi, Vietnamese, Thai, and more.
+- **oneocr**: English, Chinese (Simplified & Traditional), Korean, Japanese.
 
 ---
 

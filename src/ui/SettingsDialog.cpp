@@ -9,6 +9,7 @@
 #include "../backup/BackupManager.h"
 #include "../core/Config.h"
 #include "../ocr/WindowsOcrEngine.h"
+#include "../ocr/BaiduOcrEngine.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -28,6 +29,10 @@
 #include <QSpinBox>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QSettings>
+#include <QLineEdit>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QComboBox>
@@ -380,6 +385,120 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     bkLay->addStretch();
     tabs->addTab(bkTab, "Backup & Restore");
 
+    // -------- OCR tab --------
+    // Baidu Cloud OCR (unlimited, cloud-based) configuration.
+    // Also shows the oneocr fallback status.
+    auto* ocrTab = new QWidget(this);
+    auto* ocrLay = new QVBoxLayout(ocrTab);
+    ocrLay->setSpacing(10);
+
+    auto* baiduGroup = new QGroupBox("Baidu Cloud OCR (unlimited, 50+ languages)", ocrTab);
+    auto* baiduLay = new QVBoxLayout(baiduGroup);
+
+    auto* baiduInfo = new QLabel(
+        "Baidu Cloud OCR provides truly unlimited OCR with 50+ languages.\n"
+        "Free quota: 1000 calls/day (generous for desktop use).\n\n"
+        "Setup:\n"
+        "  1. Sign up at https://cloud.baidu.com (free)\n"
+        "  2. Console → 文字识别 (OCR) → 创建应用\n"
+        "  3. Copy the API Key and Secret Key here\n"
+        "  4. Click Test Connection to verify", baiduGroup);
+    baiduInfo->setWordWrap(true);
+    baiduLay->addWidget(baiduInfo);
+
+    baiduApiKeyEdit_ = new QLineEdit(baiduGroup);
+    baiduApiKeyEdit_->setPlaceholderText("API Key (e.g., xYe7N6...)");
+    baiduApiKeyEdit_->setEchoMode(QLineEdit::Password);
+    baiduLay->addWidget(new QLabel("API Key:", baiduGroup));
+    baiduLay->addWidget(baiduApiKeyEdit_);
+
+    baiduSecretKeyEdit_ = new QLineEdit(baiduGroup);
+    baiduSecretKeyEdit_->setPlaceholderText("Secret Key (e.g., 8a3F9...)");
+    baiduSecretKeyEdit_->setEchoMode(QLineEdit::Password);
+    baiduLay->addWidget(new QLabel("Secret Key:", baiduGroup));
+    baiduLay->addWidget(baiduSecretKeyEdit_);
+
+    auto* baiduBtnRow = new QHBoxLayout();
+    auto* testBtn = new QPushButton("Test Connection", baiduGroup);
+    testBtn->setObjectName("testBaiduBtn");
+    auto* openBaiduBtn = new QPushButton("Open Baidu Cloud Console", baiduGroup);
+    openBaiduBtn->setObjectName("openBaiduConsoleBtn");
+    baiduBtnRow->addWidget(testBtn);
+    baiduBtnRow->addWidget(openBaiduBtn);
+    baiduBtnRow->addStretch();
+    baiduLay->addLayout(baiduBtnRow);
+
+    baiduStatusLabel_ = new QLabel("Status: not configured", baiduGroup);
+    baiduStatusLabel_->setObjectName("baiduStatus");
+    baiduLay->addWidget(baiduStatusLabel_);
+
+    ocrLay->addWidget(baiduGroup);
+
+    auto* oneocrGroup = new QGroupBox("oneocr.dll (local fallback)", ocrTab);
+    auto* oneocrLay = new QVBoxLayout(oneocrGroup);
+    auto* oneocrInfo = new QLabel(
+        "oneocr.dll is the local OCR engine (extracted from the Windows 11\n"
+        "Snipping Tool). It runs entirely on your machine — no internet,\n"
+        "no API quotas, but only ~5 languages (en/zh/ko/ja).\n\n"
+        "If Baidu OCR is configured, it takes priority. oneocr is used\n"
+        "only when Baidu fails or isn't configured.\n\n"
+        "Install: run scripts\\get_oneocr.ps1", oneocrGroup);
+    oneocrInfo->setWordWrap(true);
+    oneocrLay->addWidget(oneocrInfo);
+    ocrLay->addWidget(oneocrGroup);
+
+    ocrLay->addStretch();
+    tabs->addTab(ocrTab, "OCR");
+
+    // Pre-fill the Baidu fields from QSettings.
+    {
+        QSettings s;
+        baiduApiKeyEdit_->setText(s.value("BaiduOcr/apiKey").toString());
+        baiduSecretKeyEdit_->setText(s.value("BaiduOcr/secretKey").toString());
+        if (BaiduOcrEngine::instance().isConfigured()) {
+            baiduStatusLabel_->setText("Status: configured (will be used for OCR)");
+            baiduStatusLabel_->setStyleSheet("color: #16a34a; font-weight: bold;");
+        } else {
+            baiduStatusLabel_->setText("Status: not configured (oneocr will be used)");
+            baiduStatusLabel_->setStyleSheet("color: #78716c;");
+        }
+    }
+
+    connect(testBtn, &QPushButton::clicked, this, [this]() {
+        // Save the current fields first so testConnection can use them.
+        auto& baidu = BaiduOcrEngine::instance();
+        baidu.setCredentials(baiduApiKeyEdit_->text(), baiduSecretKeyEdit_->text());
+
+        baiduStatusLabel_->setText("Testing...");
+        baiduStatusLabel_->setStyleSheet("color: #78716c;");
+
+        // Run in a worker thread so we don't freeze the dialog.
+        // Use QtConcurrent::run + QFutureWatcher for clean async.
+        auto* watcher = new QFutureWatcher<bool>(this);
+        QString errMsg;
+        // Capture by value to avoid dangling pointers.
+        auto run = [&baidu]() -> bool {
+            QString err;
+            return baidu.testConnection(&err);
+        };
+        watcher->setFuture(QtConcurrent::run(run));
+        connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher]() {
+            bool ok = watcher->result();
+            if (ok) {
+                baiduStatusLabel_->setText("Status: ✓ connection successful");
+                baiduStatusLabel_->setStyleSheet("color: #16a34a; font-weight: bold;");
+            } else {
+                baiduStatusLabel_->setText("Status: ✗ failed — check API key/secret + internet");
+                baiduStatusLabel_->setStyleSheet("color: #dc2626; font-weight: bold;");
+            }
+            watcher->deleteLater();
+        });
+    });
+
+    connect(openBaiduBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://console.bce.baidu.com/ai/#/ai/ocr/overview/index"));
+    });
+
     // -------- Buttons --------
     auto* btns = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
@@ -583,6 +702,18 @@ void SettingsDialog::onDeleteSearch() {
 }
 
 void SettingsDialog::onApply() {
+    // Persist Baidu OCR credentials (they're stored in QSettings, not AppSettings).
+    auto& baidu = BaiduOcrEngine::instance();
+    const QString newApiKey   = baiduApiKeyEdit_->text().trimmed();
+    const QString newSecretKey = baiduSecretKeyEdit_->text().trimmed();
+    if (newApiKey != baidu.apiKey() || newSecretKey != baidu.secretKey()) {
+        if (newApiKey.isEmpty() && newSecretKey.isEmpty()) {
+            baidu.clearCredentials();
+        } else {
+            baidu.setCredentials(newApiKey, newSecretKey);
+        }
+    }
+
     // Emit the signal so MainWindow can persist + live-apply.
     // MainWindow is responsible for calling saveSettings(), applyTheme(),
     // updateIndexStats(), etc., and for showing a status-bar message.

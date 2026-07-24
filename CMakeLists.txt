@@ -137,35 +137,6 @@ if(MSVC)
     )
 endif()
 
-# ============================================================
-# docusearch_winrt_ocr_helper — UNLIMITED OCR via Windows.Media.Ocr
-# ============================================================
-#
-# This is the recommended OCR engine for all users:
-#   • Built into Windows 10+ (no DLL extraction, no legal gray area)
-#   • 50+ languages via Windows language packs
-#   • No setup script required — works on first launch
-#
-# Built as a SEPARATE exe with /MD (C++/WinRT requires the DLL CRT) so
-# it doesn't conflict with the main app's /MT linkage.
-#
-# Requires Windows SDK 10.0.17763+ (C++/WinRT headers ship in the SDK).
-add_executable(docusearch_winrt_ocr_helper src/ocr/winrt_ocr_helper_main.cpp)
-if(MSVC)
-    set_property(TARGET docusearch_winrt_ocr_helper PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    # windowsapp.lib is required for C++/WinRT projections.
-    target_link_libraries(docusearch_winrt_ocr_helper PRIVATE windowsapp)
-    target_compile_options(docusearch_winrt_ocr_helper PRIVATE
-        /std:c++20 /W3 /permissive- /utf-8 /await /EHsc
-    )
-    target_compile_definitions(docusearch_winrt_ocr_helper PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-        _WINRT_DLL  # ensure C++/WinRT uses DLL import
-    )
-endif()
-
 # Optionally copy oneocr files into the build output, if the developer
 # has placed them under third_party/oneocr/. This is a convenience for
 # local builds — end users install them via scripts/get_oneocr.ps1.
@@ -242,7 +213,7 @@ set(APP_SOURCES
     src/documents/DocumentExtractorRegistry.cpp
     # ocr
     src/ocr/WindowsOcrEngine.cpp
-    src/ocr/WinRtOcrEngine.cpp
+    src/ocr/BaiduOcrEngine.cpp
     src/ocr/OcrWorkerPool.cpp
     # indexer
     src/indexer/MetadataIndexer.cpp
@@ -308,7 +279,7 @@ set(APP_HEADERS
     src/documents/PptxExtractor.h
     src/documents/DocumentExtractorRegistry.h
     src/ocr/WindowsOcrEngine.h
-    src/ocr/WinRtOcrEngine.h
+    src/ocr/BaiduOcrEngine.h
     src/ocr/OcrWorkerPool.h
     src/indexer/MetadataIndexer.h
     src/indexer/ContentIndexer.h

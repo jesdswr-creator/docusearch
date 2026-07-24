@@ -28,7 +28,7 @@
 #include "../indexer/ExtractionWorker.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
-#include "../ocr/WinRtOcrEngine.h"
+#include "../ocr/BaiduOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/FilePreviewPane.h"
@@ -788,9 +788,9 @@ void MainWindow::buildStatusBar() {
     ocrLay->addWidget(ocrStatusLbl_);
     ocrStatusWidget_->setToolTip(
         "OCR (Optical Character Recognition) status.\n"
-        "Green: Unlimited WinRT OCR engine is ready (built into Windows 10+).\n"
-        "Amber: No OCR engine available — reinstall DocuSearch.\n"
-        "Click for more details.");
+        "Green 'Baidu': unlimited Baidu Cloud OCR is configured.\n"
+        "Green 'Ready': local oneocr.dll is installed.\n"
+        "Amber: no OCR engine available — click for setup instructions.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
     // Semantic search toggle button (shows current state).
@@ -1764,18 +1764,16 @@ QString MainWindow::getExtractionStatusString() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    // Check the unlimited WinRT OCR engine first; fall back to oneocr.
-    auto& winrtOcr = DocuSearch::WinRtOcrEngine::instance();
-    if (winrtOcr.isAvailable()) {
-        // WinRT helper present — OCR is functional on any Windows 10+ install
-        // with at least one language pack (which is the default).
+    // Check Baidu OCR first (unlimited, requires API key).
+    auto& baidu = DocuSearch::BaiduOcrEngine::instance();
+    if (baidu.isConfigured()) {
         ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
-        ocrStatusLbl_->setText("OCR: Unlimited");
+        ocrStatusLbl_->setText("OCR: Baidu");
         ocrStatusLbl_->setStyleSheet("color: #10b981;");
         return;
     }
 
-    // Fall back to oneocr (legacy path — requires get_oneocr.ps1 setup).
+    // Fall back to oneocr (local, requires get_oneocr.ps1 setup).
     auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
     if (oneocr.isOneocrAvailable()) {
         ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
@@ -1793,28 +1791,33 @@ void MainWindow::updateOcrStatusIndicator() {
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        auto& winrtOcr = DocuSearch::WinRtOcrEngine::instance();
-        auto& oneocr   = DocuSearch::WindowsOcrEngine::instance();
+        auto& baidu  = DocuSearch::BaiduOcrEngine::instance();
+        auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
 
         QString msg;
-        if (winrtOcr.isAvailable()) {
-            msg = "OCR engine: Windows.Media.Ocr (UNLIMITED)\n\n"
-                  "• Built into Windows 10+ — no setup required.\n"
-                  "• Supports 50+ languages via Windows language packs.\n"
-                  "• To install more languages: Windows Settings →\n"
-                  "  Time & Language → Language → Add a language.\n\n"
-                  "Click an image or scanned PDF's OCR button to extract text.";
+        if (baidu.isConfigured()) {
+            msg = "OCR engine: Baidu Cloud OCR (UNLIMITED)\n\n"
+                  "• Requires an active internet connection.\n"
+                  "• Supports 50+ languages including mixed Chinese/English.\n"
+                  "• Free quota: 1000 calls/day (generous for desktop use).\n"
+                  "• Higher quotas available via Baidu Cloud paid plans.\n\n"
+                  "Manage your API key in Settings → OCR.";
         } else if (oneocr.isOneocrAvailable()) {
-            msg = "OCR engine: oneocr.dll (legacy fallback)\n\n"
-                  "WinRT OCR helper not found — using oneocr.dll instead.\n"
-                  "To enable the unlimited WinRT engine, reinstall DocuSearch\n"
-                  "(the helper exe is bundled with newer builds).\n\n"
-                  "Supported: English, Chinese, Korean, Japanese.";
+            msg = "OCR engine: oneocr.dll (local)\n\n"
+                  "Baidu OCR is NOT configured — using local oneocr instead.\n"
+                  "To enable Baidu OCR (50+ languages, no DLL setup):\n"
+                  "  1. Sign up at https://cloud.baidu.com\n"
+                  "  2. Create an OCR application\n"
+                  "  3. Enter your API Key + Secret Key in Settings → OCR\n\n"
+                  "Supported by oneocr: English, Chinese, Korean, Japanese.";
         } else {
             msg = "No OCR engine is available.\n\n"
-                  "The unlimited WinRT OCR helper exe was not found next to\n"
-                  "DocuSearch.exe. Please reinstall the application.\n\n"
-                  "(Legacy oneocr.dll is also not configured.)";
+                  "Two options:\n\n"
+                  "1. Baidu Cloud OCR (recommended — unlimited, 50+ languages):\n"
+                  "   Sign up at https://cloud.baidu.com, create an OCR app,\n"
+                  "   then enter the API Key + Secret Key in Settings → OCR.\n\n"
+                  "2. oneocr.dll (local, ~5 languages):\n"
+                  "   Run scripts/get_oneocr.ps1 to install.";
         }
         QMessageBox::information(this, "OCR Status", msg);
         return true;
@@ -2550,6 +2553,7 @@ void MainWindow::onOpenSettings() {
                 saveSettings();
                 applyTheme();
                 updateIndexStats();
+                updateOcrStatusIndicator();  // refresh in case Baidu key was added/removed
                 statusBar()->showMessage("Settings applied.", 3000);
             });
 

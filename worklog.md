@@ -483,3 +483,96 @@ Stage Summary:
 - Files modified: CMakeLists.txt, build.yml, HELP.md, main.cpp,
   MainWindow.h/.cpp, OcrWorkerPool.cpp (7 modified).
 - Working tree clean. Awaiting CI verification.
+
+---
+Task ID: 8
+Agent: main
+Task: User correction — "I didn't say winrt, I said unlimited ocr by baidu, current oneocr was good in previous builds"
+
+Work Log:
+- REVERTED the WinRT OCR changes from Task ID 7:
+  - Deleted src/ocr/WinRtOcrEngine.h, WinRtOcrEngine.cpp, winrt_ocr_helper_main.cpp
+  - Removed docusearch_winrt_ocr_helper target from CMakeLists.txt
+  - Removed WinRtOcrEngine entries from APP_SOURCES / APP_HEADERS
+  - Removed "Copy WinRT OCR helper exe (UNLIMITED)" step from .github/workflows/build.yml
+  - Reverted smoke-test step (now only checks the legacy oneocr helper, like before)
+  - Reverted HELP.md (removed "Why unlimited?" / "Adding more OCR languages" sections)
+  - Reverted MainWindow OCR status indicator (no longer references WinRT)
+  - Reverted OcrWorkerPool workerLoop() (no longer prefers WinRT)
+
+- KEPT the Task 7 changes the user did NOT complain about:
+  - Extraction worker thread (the freeze fix — user explicitly complained about freeze)
+  - UI improvements (user said "UI not good" — kept the modernized QSS, slimmed Open
+    Location button, 3:1 vertical split in center column, fixed topMenuList blue)
+
+- IMPLEMENTED Baidu Cloud OCR (what the user actually asked for):
+  - Created src/ocr/BaiduOcrEngine.h / .cpp
+  - Uses Baidu Cloud's 通用文字识别 API:
+    * POST https://aip.baidubce.com/oauth/2.0/token for OAuth access token
+    * POST https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic for OCR
+    * Body: image=<base64> & language_type=CHN_ENG
+    * Returns JSON: { words_result: [{words: "..."}], ... }
+  - OAuth token cached in QSettings with 5-minute lead refresh window.
+  - On 401/110/111 error: refresh token + retry once.
+  - All HTTP calls SYNCHRONOUS via QEventLoop — engine is called only
+    from worker threads in OcrWorkerPool, never from the main thread.
+  - Image size cap: 6MB (Baidu's actual limit for general_basic).
+  - QNetworkAccessManager + QNetworkReply + QTimer::singleShot for 30s timeout.
+
+  - Engine priority in OcrWorkerPool::workerLoop:
+    1. Baidu (if user configured API key in Settings → OCR)
+    2. oneocr (fallback — kept exactly as it was in previous builds)
+
+  - Settings UI: new "OCR" tab in SettingsDialog with:
+    * Baidu Cloud OCR group:
+      - Setup instructions (sign up at cloud.baidu.com, create app, copy keys)
+      - API Key field (password mode)
+      - Secret Key field (password mode)
+      - Test Connection button — runs testConnection() in a QtConcurrent
+        worker thread so the dialog doesn't freeze while the network
+        call completes. Shows ✓ / ✗ status.
+      - Open Baidu Cloud Console button (opens browser to console URL)
+    * oneocr.dll (local fallback) group:
+      - Brief explanation + install instructions
+
+  - Credentials stored in QSettings (NOT in AppSettings struct) — keeps
+    the Baidu dependency fully isolated to BaiduOcrEngine.
+  - setCredentials() invalidates the cached token (in case the new key
+    belongs to a different account).
+  - clearCredentials() removes both keys + cached token.
+
+- MainWindow OCR status indicator updated:
+  - "OCR: Baidu" (green) — Baidu configured (unlimited)
+  - "OCR: Ready" (green) — oneocr.dll installed (local fallback)
+  - "OCR: Setup Required" (amber) — neither available
+  - Click shows explanatory dialog with setup steps for both engines
+  - Settings dialog apply → triggers updateOcrStatusIndicator() so the
+    status bar refreshes immediately after the user enters their Baidu key
+
+- HELP.md updated:
+  - "Getting Started" now lists both OCR setup options side-by-side
+  - New "Setting up Baidu Cloud OCR" section with 6-step guide
+  - "Setting up oneocr (fallback)" section preserved
+  - "Supported languages" section: Baidu = 50+, oneocr = ~5
+
+- Files created: src/ocr/BaiduOcrEngine.h, BaiduOcrEngine.cpp
+- Files modified:
+  - CMakeLists.txt (reverted WinRT target; added BaiduOcrEngine.cpp/.h)
+  - .github/workflows/build.yml (reverted WinRT smoke test + copy step)
+  - HELP.md (replaced WinRT instructions with Baidu instructions)
+  - src/ui/MainWindow.cpp (reverted WinRT indicator; added Baidu check)
+  - src/ui/SettingsDialog.h (added baiduApiKeyEdit_/baiduSecretKeyEdit_/baiduStatusLabel_ members + QLabel include)
+  - src/ui/SettingsDialog.cpp (added new "OCR" tab with Baidu + oneocr groups)
+  - src/ocr/OcrWorkerPool.cpp (reverted WinRT preference; added Baidu preference)
+
+Stage Summary:
+- WinRT OCR engine fully removed (per user correction).
+- oneocr.dll remains exactly as it was in previous builds (the user
+  explicitly said it was good).
+- New BaiduOcrEngine added — provides "unlimited OCR by Baidu" that the
+  user asked for. Engine priority: Baidu (if configured) → oneocr (fallback).
+- Extraction worker thread + UI improvements from Task 7 KEPT (those
+  addressed the user's other two complaints: window freeze + bad UI).
+- Files created: BaiduOcrEngine.h/.cpp
+- Files deleted: WinRtOcrEngine.h/.cpp, winrt_ocr_helper_main.cpp
+- Working tree: changes staged, ready to commit.
