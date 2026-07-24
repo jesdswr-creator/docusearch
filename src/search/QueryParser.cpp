@@ -99,13 +99,15 @@ ParsedQuery QueryParser::parse(const QString& raw) {
                 "regarding", "about", "concerning", "pertaining", "re",
                 "into", "onto", "upon", "than", "then", "there", "here",
                 "where", "when", "why", "how", "what", "which", "who",
-                "will", "would", "could", "should", "may", "might", "can",
-                // Document-type words — describe WHAT the file is, not its
-                // content. These appear in filenames but rarely in body text.
-                // Requiring them in FTS5 content search misses real documents.
-                "letter", "report", "memo", "memorandum", "application",
-                "document", "file", "note", "notice", "circular",
-                "order", "notification", "communication", "email", "mail"
+                "will", "would", "could", "should", "may", "might", "can"
+                // NOTE: Document-type words (letter, note, report, memo, etc.)
+                // are NOT stop words. They are REQUIRED search terms so the
+                // user can filter by document type:
+                //   "letter regarding minz pay fixation" → finds LETTERS only
+                //   "note regarding minz pay fixation" → finds NOTES only
+                // Filename search catches them in filenames, FTS5 catches
+                // them in content. If neither has the word, the document
+                // is not returned — which is correct behavior.
             };
             if (stopWords.contains(tok.toLower())) {
                 continue;  // skip stop word

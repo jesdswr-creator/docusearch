@@ -86,12 +86,10 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
         "regarding", "about", "concerning", "pertaining", "re",
         "into", "onto", "upon", "than", "then", "there", "here",
         "where", "when", "why", "how", "what", "which", "who",
-        "will", "would", "could", "should", "may", "might", "can",
-        // Document-type words — for filename search, these are too common
-        // (every file might have "letter" or "report" in its name).
-        "letter", "report", "memo", "memorandum", "application",
-        "document", "file", "note", "notice", "circular",
-        "order", "notification", "communication", "email", "mail"
+        "will", "would", "could", "should", "may", "might", "can"
+        // NOTE: letter, note, report, memo etc. are NOT stop words.
+        // They filter by document type: "letter pay fixation" finds
+        // letters, "note pay fixation" finds notes.
     };
     QStringList filtered;
     for (const auto& w : words) {
