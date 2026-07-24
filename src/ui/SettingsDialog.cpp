@@ -181,14 +181,12 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // Users can't change these from the UI — they're compile-time constants.
     // Removed to keep the Settings dialog focused on actionable settings.
 
-    // -------- Appearance tab --------
-    auto* appTab = new QWidget(this);
-    auto* appLay = new QVBoxLayout(appTab);
-    darkModeCheck_ = new QCheckBox("Dark mode", this);
+    // -------- Appearance tab removed --------
+    // Theme toggle is now a compact button in the status bar (🌙/☀).
+    // darkModeCheck_ still created (hidden) for settings I/O compatibility.
+    darkModeCheck_ = new QCheckBox(this);
+    darkModeCheck_->setVisible(false);
     darkModeCheck_->setChecked(current_.darkMode);
-    appLay->addWidget(darkModeCheck_);
-    appLay->addStretch();
-    tabs->addTab(appTab, "Appearance");
 
     // -------- Semantic Search tab --------
     // Shows BGE model status, embedding count, and search parameters.

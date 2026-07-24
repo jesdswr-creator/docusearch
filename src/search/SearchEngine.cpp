@@ -234,6 +234,139 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
         results.append(h);
     }
     if (results.size() > limit) results = results.mid(0, limit);
+
+    // ── Option A: Two-pass search ─────────────────────────────
+    // If strict AND search found nothing, try again with content-only
+    // words (drop document-type words like "letter", "note", "report"
+    // that may not appear in the body text).
+    if (results.isEmpty() && !words.isEmpty()) {
+        // Document-type words that describe WHAT the file is, not its content.
+        static const QSet<QString> docTypeWords = {
+            "letter", "report", "note", "memo", "memorandum", "application",
+            "document", "file", "notice", "circular", "order",
+            "notification", "communication", "email", "mail"
+        };
+
+        // Check if any of the search words are document-type words.
+        QStringList contentWords;
+        bool hasDocTypeWord = false;
+        for (const auto& w : words) {
+            if (docTypeWords.contains(w.toLower())) {
+                hasDocTypeWord = true;
+            } else {
+                contentWords.append(w);
+            }
+        }
+
+        // Only do second pass if we dropped at least one word.
+        if (hasDocTypeWord && !contentWords.isEmpty() && contentWords.size() < words.size()) {
+            DS_INFO("Search", "Two-pass: strict search found nothing, "
+                    "retrying without document-type words.");
+
+            // Rebuild FTS5 query with content-only words.
+            QStringList ftsTokens2;
+            for (const auto& w : contentWords) {
+                ftsTokens2.append(Utils::fts5Quote(w));
+            }
+            QString ftsQuery2 = ftsTokens2.join(" AND ");
+
+            // Filename search with content-only words.
+            {
+                QString sql = "SELECT id, path, filename, extension, size, "
+                              "modified_date, is_favorite FROM Files WHERE 1=1 ";
+                for (int i = 0; i < contentWords.size(); ++i) {
+                    sql += " AND filename LIKE ? ESCAPE '\\' ";
+                }
+                if (!q.typeFilter.isEmpty())   sql += " AND extension = ? ";
+                if (!q.folderFilter.isEmpty()) sql += " AND path LIKE ? ESCAPE '\\' ";
+                if (q.favoritesOnly)          sql += " AND is_favorite = 1 ";
+                if (q.needsOcrOnly)           sql += " AND indexing_status = 'needs_ocr' ";
+                if (!q.tagFilter.isEmpty())   sql += " AND id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
+                sql += " ORDER BY modified_date DESC LIMIT " + QString::number(limit) + ";";
+
+                sqlite3_stmt* s = nullptr;
+                if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr) == SQLITE_OK) {
+                    int idx = 1;
+                    for (const auto& w : contentWords) {
+                        bindText(s, idx++, "%" + likeEscape(w) + "%");
+                    }
+                    if (!q.typeFilter.isEmpty())   bindText(s, idx++, q.typeFilter);
+                    if (!q.folderFilter.isEmpty()) bindText(s, idx++, "%" + likeEscape(q.folderFilter) + "%");
+                    if (!q.tagFilter.isEmpty())    bindText(s, idx++, q.tagFilter);
+                    while (sqlite3_step(s) == SQLITE_ROW) {
+                        SearchHit h;
+                        h.fileId       = sqlite3_column_int64(s, 0);
+                        h.path         = colText(s, 1);
+                        h.filename     = colText(s, 2);
+                        h.extension    = colText(s, 3);
+                        h.size         = sqlite3_column_int64(s, 4);
+                        h.modifiedDate = QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
+                        h.isFavorite   = sqlite3_column_int(s, 6) != 0;
+                        h.snippet      = "[Fallback: no letter/note found — showing all matches]";
+                        filenameHits.append(h);
+                    }
+                    sqlite3_finalize(s);
+                }
+            }
+
+            // FTS5 content search with content-only words.
+            if (!ftsQuery2.isEmpty()) {
+                try {
+                    QString sql = "SELECT f.id, f.path, f.filename, f.extension, f.size, "
+                                  "f.modified_date, f.is_favorite, "
+                                  "snippet(SearchIndex, 1, '', '', '...', 16) AS snip, "
+                                  "bm25(SearchIndex) AS score "
+                                  "FROM SearchIndex s JOIN Files f ON f.id = s.file_id "
+                                  "WHERE SearchIndex MATCH ? ";
+                    if (!q.typeFilter.isEmpty())   sql += " AND f.extension = ? ";
+                    if (!q.folderFilter.isEmpty()) sql += " AND f.path LIKE ? ESCAPE '\\' ";
+                    if (q.favoritesOnly)          sql += " AND f.is_favorite = 1 ";
+                    if (q.needsOcrOnly)           sql += " AND f.indexing_status = 'needs_ocr' ";
+                    if (!q.tagFilter.isEmpty())   sql += " AND f.id IN (SELECT file_id FROM Tags WHERE tag = ?) ";
+                    sql += " ORDER BY score ASC LIMIT " + QString::number(limit) + ";";
+
+                    sqlite3_stmt* s = nullptr;
+                    if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr) == SQLITE_OK) {
+                        int idx = 1;
+                        const QByteArray fts = ftsQuery2.toUtf8();
+                        sqlite3_bind_text(s, idx++, fts.constData(), fts.size(), SQLITE_TRANSIENT);
+                        if (!q.typeFilter.isEmpty())   bindText(s, idx++, q.typeFilter);
+                        if (!q.folderFilter.isEmpty()) bindText(s, idx++, "%" + likeEscape(q.folderFilter) + "%");
+                        if (!q.tagFilter.isEmpty())    bindText(s, idx++, q.tagFilter);
+
+                        while (sqlite3_step(s) == SQLITE_ROW) {
+                            SearchHit h;
+                            h.fileId       = sqlite3_column_int64(s, 0);
+                            h.path         = colText(s, 1);
+                            h.filename     = colText(s, 2);
+                            h.extension    = colText(s, 3);
+                            h.size         = sqlite3_column_int64(s, 4);
+                            h.modifiedDate = QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
+                            h.isFavorite   = sqlite3_column_int(s, 6) != 0;
+                            h.snippet      = colText(s, 7);
+                            h.score        = static_cast<float>(sqlite3_column_double(s, 8));
+                            ftsHits.append(h);
+                        }
+                        sqlite3_finalize(s);
+                    }
+                } catch (...) {}
+            }
+
+            // Merge fallback results.
+            QSet<qint64> seen2;
+            for (const auto& h : ftsHits) {
+                if (seen2.contains(h.fileId)) continue;
+                seen2.insert(h.fileId);
+                results.append(h);
+            }
+            for (const auto& h : filenameHits) {
+                if (seen2.contains(h.fileId)) continue;
+                seen2.insert(h.fileId);
+                results.append(h);
+            }
+            if (results.size() > limit) results = results.mid(0, limit);
+        }
+    }
     return results;
 }
 

@@ -183,6 +183,7 @@ public:
     FilePreviewPane* filePreviewPane_     = nullptr;
     // Semantic search toggle button (in search bar).
     QPushButton*    semanticToggleBtn_    = nullptr;
+    QPushButton*    themeToggleBtn_       = nullptr;
 
     // Semantic search subsystem (BGE + hybrid).
     std::unique_ptr<BgeService>        bgeService_;
