@@ -3,6 +3,7 @@
 // ============================================================
 
 #include "OcrWorkerPool.h"
+#include "WinRtOcrEngine.h"
 #include "WindowsOcrEngine.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
@@ -140,11 +141,28 @@ void OcrWorkerPool::shutdown() {
 void OcrWorkerPool::onWorkerFinished() {}
 
 void OcrWorkerPool::workerLoop(int workerId) {
-    // Windows OCR engine (built into Windows 10/11).
-    WindowsOcrEngine engine;
-    if (!engine.init()) {
-        DS_ERROR("OCR", QString("Worker %1: Windows OCR init failed; exiting").arg(workerId));
-        return;
+    // OCR engine selection — prefer the unlimited WinRT engine, fall
+    // back to oneocr if WinRT helper isn't present.
+    //
+    // WinRT engine: built into Windows 10+, no setup, 50+ languages.
+    // oneocr engine: requires manual DLL extraction, ~5 languages.
+    WinRtOcrEngine winrtEngine;
+    bool useWinRt = winrtEngine.init() && winrtEngine.isAvailable();
+
+    WindowsOcrEngine oneocrEngine;
+    bool useOneocr = false;
+    if (!useWinRt) {
+        DS_WARN("OCR", QString("Worker %1: WinRT OCR helper not available, "
+                                "falling back to oneocr.dll").arg(workerId));
+        useOneocr = oneocrEngine.init() && oneocrEngine.isOneocrAvailable();
+        if (!useOneocr) {
+            DS_ERROR("OCR", QString("Worker %1: No OCR engine available "
+                                    "(neither WinRT nor oneocr)").arg(workerId));
+            return;
+        }
+    } else {
+        DS_INFO("OCR", QString("Worker %1: Using unlimited WinRT OCR engine")
+                          .arg(workerId));
     }
 
     QElapsedTimer cpuTimer;
@@ -188,14 +206,17 @@ void OcrWorkerPool::workerLoop(int workerId) {
         bool ok = false;
         QString text;
         try {
-            // For PDFs, we'd render pages first (out of scope here without a
-            // PDF rasterizer; users typically have OCR'd TIFFs already).
             if (FileUtils::hasExtension(task.path, Constants::kImageExtensions)) {
-                text = engine.ocrFile(task.path);
+                // Prefer WinRT; fall back to oneocr on failure.
+                if (useWinRt) {
+                    text = winrtEngine.ocrFile(task.path);
+                }
+                if (text.isEmpty() && useOneocr) {
+                    text = oneocrEngine.ocrFile(task.path);
+                }
                 if (!text.isEmpty()) ok = true;
             } else {
-                // Render first page of PDF to image - requires Poppler-Qt.
-                // Skipped here; mark as not-needed.
+                // PDF page rasterization is handled separately (out of scope here).
                 ok = false;
             }
         } catch (const std::exception& e) {

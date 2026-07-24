@@ -362,28 +362,42 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          # Quick sanity check: verify the built DocuSearch.exe and
-          # docusearch_ocr_helper.exe exist and are runnable.
+          # Quick sanity check: verify the built DocuSearch.exe,
+          # docusearch_ocr_helper.exe (legacy oneocr), and
+          # docusearch_winrt_ocr_helper.exe (unlimited WinRT OCR) all
+          # built successfully and are runnable.
           $ds = "build\bin\Release\DocuSearch.exe"
-          $helper = "build\bin\Release\docusearch_ocr_helper.exe"
+          $helperLegacy = "build\bin\Release\docusearch_ocr_helper.exe"
+          $helperWinRt  = "build\bin\Release\docusearch_winrt_ocr_helper.exe"
           if (Test-Path $ds) {
             $size = (Get-Item $ds).Length
             Write-Host "OK: DocuSearch.exe ($('{0:N1}' -f ($size/1MB)) MB)"
           } else {
             Write-Host "FAIL: DocuSearch.exe not found"
           }
-          if (Test-Path $helper) {
-            $size = (Get-Item $helper).Length
+          if (Test-Path $helperLegacy) {
+            $size = (Get-Item $helperLegacy).Length
             Write-Host "OK: docusearch_ocr_helper.exe ($('{0:N1}' -f ($size/1KB)) KB)"
-            # Helper should exit non-zero with no args (expected behavior).
-            & $helper 2>&1 | Out-Null
+            & $helperLegacy 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "OK: helper exits non-zero with no args (expected)"
+              Write-Host "OK: legacy helper exits non-zero with no args (expected)"
             } else {
-              Write-Host "WARN: helper exited 0 with no args (unexpected)"
+              Write-Host "WARN: legacy helper exited 0 with no args (unexpected)"
             }
           } else {
-            Write-Host "FAIL: docusearch_ocr_helper.exe not found"
+            Write-Host "WARN: docusearch_ocr_helper.exe not found (legacy OCR fallback will be missing)"
+          }
+          if (Test-Path $helperWinRt) {
+            $size = (Get-Item $helperWinRt).Length
+            Write-Host "OK: docusearch_winrt_ocr_helper.exe ($('{0:N1}' -f ($size/1KB)) KB) - UNLIMITED OCR"
+            & $helperWinRt 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "OK: WinRT helper exits non-zero with no args (expected)"
+            } else {
+              Write-Host "WARN: WinRT helper exited 0 with no args (unexpected)"
+            }
+          } else {
+            Write-Host "FAIL: docusearch_winrt_ocr_helper.exe not found — unlimited OCR will be unavailable"
           }
 
       - name: Bundle Qt DLLs (windeployqt) + Poppler DLLs
@@ -498,7 +512,56 @@ jobs:
               }
             }
             if (-not $found) {
-              Write-Host "WARNING: docusearch_ocr_helper.exe not found — OCR will be unavailable"
+              Write-Host "WARNING: docusearch_ocr_helper.exe not found — legacy oneocr OCR will be unavailable (WinRT OCR will still work)"
+            }
+          }
+
+      - name: Copy WinRT OCR helper exe (UNLIMITED)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Copy the UNLIMITED WinRT OCR helper exe to the release folder.
+          # This is the recommended OCR engine for all users:
+          #   • Built into Windows 10+ (no DLL extraction, no license gray area)
+          #   • 50+ languages via Windows language packs
+          #   • Works on first launch with zero setup
+          $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_winrt_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($helperExe) {
+            Copy-Item $helperExe.FullName "build\bin\Release\docusearch_winrt_ocr_helper.exe" -Force
+            Write-Host "Copied docusearch_winrt_ocr_helper.exe from $($helperExe.FullName)"
+          } else {
+            $paths = @(
+              "build\Release\docusearch_winrt_ocr_helper.exe",
+              "build\Debug\docusearch_winrt_ocr_helper.exe",
+              "build\bin\Release\docusearch_winrt_ocr_helper.exe",
+              "build\bin\Debug\docusearch_winrt_ocr_helper.exe"
+            )
+            $found = $false
+            foreach ($p in $paths) {
+              if (Test-Path $p) {
+                Copy-Item $p "build\bin\Release\docusearch_winrt_ocr_helper.exe" -Force
+                Write-Host "Copied from $p"
+                $found = $true
+                break
+              }
+            }
+            if (-not $found) {
+              Write-Host "WARNING: docusearch_winrt_ocr_helper.exe not found — unlimited WinRT OCR will be unavailable"
+            }
+          }
+          # Also ensure the Visual C++ runtime DLLs (vcruntime140.dll, msvcp140.dll)
+          # are present, since the WinRT helper is built with /MD and links the DLL CRT.
+          # windeployqt already bundles these for the main app — they should be in
+          # build\bin\Release already, but double-check.
+          $vcrtSrc = Join-Path $env:VCToolsRedistDir "x86\Microsoft.VC143.CRT"
+          if (Test-Path $vcrtSrc) {
+            foreach ($dll in @("vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll")) {
+              $src = Join-Path $vcrtSrc $dll
+              $dst = "build\bin\Release\$dll"
+              if ((Test-Path $src) -and -not (Test-Path $dst)) {
+                Copy-Item $src $dst -Force
+                Write-Host "Bundled $dll (needed by WinRT helper)"
+              }
             }
           }
 

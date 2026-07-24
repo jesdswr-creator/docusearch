@@ -29,9 +29,14 @@ This guide covers everything you need to use DocuSearch effectively.
    [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions).
 2. **Install/extract** to any folder.
 3. **Run** `DocuSearch.exe`.
-4. **(Optional) Install OCR support** — run `scripts\get_oneocr.ps1`
-   to enable OCR for scanned PDFs and images. See
-   [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for details.
+
+That's it — OCR works out of the box via the built-in Windows.Media.Ocr
+engine (no setup script needed). To add more OCR languages, install them
+via Windows Settings → Time & Language → Language → Add a language.
+
+> **Optional:** If you prefer the legacy oneocr.dll engine (from the
+> Windows 11 Snipping Tool), you can still set it up via
+> `scripts\get_oneocr.ps1`. DocuSearch will use it as a fallback only.
 
 The first window you see has:
 - A sidebar on the left with navigation items
@@ -139,18 +144,20 @@ the green OCR button.
 
 ## OCR (Scanned PDFs & Images)
 
-OCR extracts text from images and scanned PDFs using **oneocr.dll**
-(the native OCR engine from the Windows 11 Snipping Tool).
+OCR extracts text from images and scanned PDFs using **Windows.Media.Ocr**
+— the unlimited OCR engine built into Windows 10+. No setup script is
+required; it works on first launch with whatever languages you have
+installed in Windows.
 
-### One-time setup
+### Why "unlimited"?
 
-```powershell
-.\scripts\get_oneocr.ps1
-```
+- **Built into Windows 10+** — no DLL to bundle, no license gray area.
+- **50+ languages** available via Windows language packs.
+- **No setup script** — works the moment you run DocuSearch.
+- **No file-count limit** — process as many images as you like.
 
-This script copies the oneocr files from your locally-installed
-Snipping Tool into the DocuSearch folder. See
-[ONEOCR_SETUP.md](ONEOCR_SETUP.md) for full details.
+The legacy oneocr.dll engine (from the Windows 11 Snipping Tool) is kept
+as a fallback for systems where WinRT OCR isn't available.
 
 ### Running OCR on a file
 
@@ -162,24 +169,21 @@ Snipping Tool into the DocuSearch folder. See
 ### OCR status indicator
 
 The status bar at the bottom shows the current OCR status:
-- 🟢 **OCR: Ready** — oneocr is installed and ready.
-- 🟡 **OCR: Setup Required** — oneocr is not installed. Click the
-  indicator for install instructions.
+- 🟢 **OCR: Unlimited** — WinRT OCR engine is ready (recommended).
+- 🟢 **OCR: Ready** — Legacy oneocr.dll is installed (fallback only).
+- 🟡 **OCR: Setup Required** — No OCR engine available. Reinstall
+  DocuSearch to get the WinRT helper.
 
-### Supported languages
+### Adding more OCR languages
 
-The oneocr model auto-detects:
-- English
-- Chinese (Simplified & Traditional)
-- Korean
-- Japanese
+WinRT OCR uses whatever languages are installed in Windows. To add more:
 
-### OCR limits
-
-- Files larger than 20 MB are skipped
-- Images must be between 50×50 and 10000×10000 pixels
-- Maximum 30 files per OCR session
-- 100 ms gap between files
+1. Open **Windows Settings** → **Time & Language** → **Language & region**.
+2. Click **Add a language**.
+3. Pick the language you want (e.g., Spanish, French, German, Hindi).
+4. Make sure **Optical character recognition** is checked in the
+   optional features for that language.
+5. Restart DocuSearch — the new language is now auto-detected.
 
 ---
 

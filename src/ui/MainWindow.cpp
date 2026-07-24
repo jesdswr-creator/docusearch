@@ -25,8 +25,10 @@
 #include "../search/SearchEngine.h"
 #include "../search/QueryParser.h"
 #include "../indexer/Indexer.h"
+#include "../indexer/ExtractionWorker.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
+#include "../ocr/WinRtOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/FilePreviewPane.h"
@@ -560,20 +562,22 @@ void MainWindow::buildCentral() {
     sidebarList_->setSelectionMode(QAbstractItemView::SingleSelection);
     sidebarList_->setFocusPolicy(Qt::NoFocus);
     sidebarList_->setStyleSheet(
-        "QListWidget#topMenuList { background: #f5f5f5; border: none; outline: none; }"
+        "QListWidget#topMenuList { background: transparent; border: none; outline: none; }"
         "QListWidget#topMenuList::item { "
-        "  padding: 4px 12px; "
-        "  border-radius: 4px; "
+        "  padding: 6px 16px; "
+        "  border-radius: 6px; "
         "  margin: 2px; "
         "  font-size: 10pt; "
-        "  color: #444; "
+        "  color: #57534e; "
         "}"
         "QListWidget#topMenuList::item:selected { "
-        "  background: #0066cc; "
+        "  background: #16a34a; "
         "  color: white; "
+        "  font-weight: bold; "
         "}"
         "QListWidget#topMenuList::item:hover { "
-        "  background: #e0e0e0; "
+        "  background: #f0fdf4; "
+        "  color: #166534; "
         "}");
     const QStringList navLabels = {
         "Search", "Duplicates",
@@ -637,27 +641,27 @@ void MainWindow::buildCentral() {
     resultsPane_->setMaximumWidth(420);
     mainSplitter_->addWidget(resultsPane_);
 
-    // ── Center column: FilePreviewPane (TOP) + PreviewPane (existing) ──
+    // ── Center column: FilePreviewPane (TOP, flex) + PreviewPane (BOTTOM, compact) ──
     // The FilePreviewPane shows the actual rendered file (PDF/image/text/office).
     // The existing PreviewPane below shows the extracted text + tabs.
-    // Both panes are flush against each other (no gap) — they look like one
-    // unified viewer with a thin separator.
+    // FilePreviewPane gets the lion's share of vertical space (3:1 ratio).
+    // Small 1px gap between them gives a clean visual divider.
     auto* centerColumn = new QWidget(mainSplitter_);
     auto* centerColLay = new QVBoxLayout(centerColumn);
     centerColLay->setContentsMargins(0, 0, 0, 0);
-    centerColLay->setSpacing(0);  // no gap between the two panes
+    centerColLay->setSpacing(1);  // hairline gap between the two panes
 
     filePreviewPane_ = new FilePreviewPane(centerColumn);
     filePreviewPane_->setObjectName("filePreviewPane");
-    filePreviewPane_->setMinimumHeight(180);
-    centerColLay->addWidget(filePreviewPane_, 1);  // takes most space
+    filePreviewPane_->setMinimumHeight(220);
+    centerColLay->addWidget(filePreviewPane_, 3);  // 3/4 of vertical space
 
     previewPane_ = new PreviewPane(centerColumn);
     previewPane_->setObjectName("previewPane");
     previewPane_->setMinimumWidth(360);
-    previewPane_->setMinimumHeight(120);
-    previewPane_->setMaximumHeight(280);  // limit extracted-text pane
-    centerColLay->addWidget(previewPane_, 0);  // fixed-ish height
+    previewPane_->setMinimumHeight(100);
+    previewPane_->setMaximumHeight(220);  // slimmer extracted-text pane
+    centerColLay->addWidget(previewPane_, 1);  // 1/4 of vertical space
 
     mainSplitter_->addWidget(centerColumn);
 
@@ -784,9 +788,9 @@ void MainWindow::buildStatusBar() {
     ocrLay->addWidget(ocrStatusLbl_);
     ocrStatusWidget_->setToolTip(
         "OCR (Optical Character Recognition) status.\n"
-        "Green: oneocr.dll is installed and ready.\n"
-        "Yellow: oneocr.dll is missing — click to install.\n"
-        "Click to open the OCR Setup instructions.");
+        "Green: Unlimited WinRT OCR engine is ready (built into Windows 10+).\n"
+        "Amber: No OCR engine available — reinstall DocuSearch.\n"
+        "Click for more details.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
     // Semantic search toggle button (shows current state).
@@ -819,8 +823,9 @@ void MainWindow::buildStatusBar() {
     openLocationBtn_ = new QPushButton(sb);
     openLocationBtn_->setObjectName("openLocationBtn");
     openLocationBtn_->setCursor(Qt::PointingHandCursor);
-    openLocationBtn_->setText("Open Location");
+    openLocationBtn_->setText("📁 Open");  // compact icon + short label
     openLocationBtn_->setToolTip("Open the folder containing the selected file");
+    openLocationBtn_->setFixedHeight(28);
     sb->addPermanentWidget(openLocationBtn_);
 }
 
@@ -861,85 +866,116 @@ void MainWindow::applyTheme() {
     QApplication::setPalette(pal);
 
     // Warm no-blue QSS — green primary, amber/orange/rose accents.
+    // Modernized: softer borders, larger radius, more padding, better typography.
     const char* colorQss = darkMode_ ?
         // Dark theme — warm dark with green
         "QMainWindow { background: #1c1917; }"
-        "QWidget#topMenuBar { background: #292524; border-bottom: 2px solid #16a34a; }"
+        "QWidget#topMenuBar { background: #292524; border-bottom: 1px solid #44403c; }"
         "QStatusBar { background: #292524; border-top: 1px solid #44403c; color: #e7e5e4; }"
-        "QStatusBar QLabel { color: #e7e5e4; }"
-        "QPushButton { background: #44403c; color: #e7e5e4; border: 1px solid #57534e; border-radius: 6px; padding: 6px 14px; }"
-        "QPushButton:hover { background: #16a34a; color: white; }"
-        "QPushButton:pressed { background: #15803d; }"
-        "QLineEdit { background: #292524; color: #e7e5e4; border: 1px solid #57534e; border-radius: 6px; padding: 6px; }"
-        "QListWidget#resultsPane { background: #231f1e; border: none; }"
-        "QListWidget#resultsPane::item { padding: 8px; border-bottom: 1px solid #292524; }"
-        "QListWidget#resultsPane::item:selected { background: #16a34a; color: white; }"
-        "QTabWidget::pane { border: 1px solid #44403c; border-radius: 6px; }"
-        "QTabBar::tab { background: #292524; padding: 6px 14px; border: 1px solid #44403c; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; color: #a8a29e; }"
+        "QStatusBar::item { border: none; }"
+        "QStatusBar QLabel { color: #e7e5e4; padding: 0 4px; }"
+        "QPushButton { background: #44403c; color: #e7e5e4; border: 1px solid #57534e; border-radius: 8px; padding: 6px 16px; font-size: 10pt; }"
+        "QPushButton:hover { background: #16a34a; color: white; border-color: #16a34a; }"
+        "QPushButton:pressed { background: #15803d; border-color: #15803d; }"
+        "QPushButton:disabled { background: #292524; color: #57534e; border-color: #292524; }"
+        "QLineEdit { background: #292524; color: #e7e5e4; border: 1px solid #57534e; border-radius: 8px; padding: 8px 10px; font-size: 11pt; }"
+        "QLineEdit:focus { border: 2px solid #16a34a; padding: 7px 9px; }"
+        "QListWidget#resultsPane { background: #231f1e; border: 1px solid #44403c; border-radius: 10px; }"
+        "QListWidget#resultsPane::item { padding: 10px; border-bottom: 1px solid #292524; }"
+        "QListWidget#resultsPane::item:selected { background: #14532d; color: #bbf7d0; border-left: 3px solid #16a34a; }"
+        "QListWidget#resultsPane::item:hover { background: #292524; }"
+        "QTabWidget::pane { border: 1px solid #44403c; border-radius: 8px; }"
+        "QTabBar::tab { background: #292524; padding: 8px 16px; border: 1px solid #44403c; border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px; color: #a8a29e; }"
         "QTabBar::tab:selected { background: #1c1917; color: #16a34a; font-weight: bold; }"
-        "QGroupBox { border: 1px solid #44403c; border-radius: 8px; margin-top: 8px; padding-top: 12px; font-weight: bold; color: #16a34a; }"
-        "QProgressBar { border: 1px solid #44403c; border-radius: 4px; background: #292524; }"
-        "QProgressBar::chunk { background: #16a34a; border-radius: 4px; }"
-        "QScrollBar:vertical { background: #1c1917; width: 10px; }"
-        "QScrollBar::handle:vertical { background: #57534e; border-radius: 5px; min-height: 30px; }"
+        "QGroupBox { border: 1px solid #44403c; border-radius: 10px; margin-top: 12px; padding: 12px; padding-top: 18px; font-weight: bold; color: #16a34a; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }"
+        "QProgressBar { border: 1px solid #44403c; border-radius: 6px; background: #292524; }"
+        "QProgressBar::chunk { background: #16a34a; border-radius: 6px; }"
+        "QScrollBar:vertical { background: #1c1917; width: 12px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #57534e; border-radius: 6px; min-height: 32px; margin: 2px; }"
         "QScrollBar::handle:vertical:hover { background: #16a34a; }"
         "QScrollBar::add-line, QScrollBar::sub-line { height: 0; }"
-        "QTextEdit, QPlainTextEdit, QTextBrowser { background: #292524; color: #e7e5e4; border: 1px solid #44403c; border-radius: 6px; }"
-        "QCheckBox { color: #e7e5e4; }"
-        "QSpinBox, QDoubleSpinBox, QComboBox { background: #292524; color: #e7e5e4; border: 1px solid #57534e; border-radius: 4px; padding: 4px; }"
-        "QComboBox QAbstractItemView { background: #292524; color: #e7e5e4; selection-background-color: #16a34a; }"
+        "QScrollBar:horizontal { background: #1c1917; height: 12px; margin: 0; }"
+        "QScrollBar::handle:horizontal { background: #57534e; border-radius: 6px; min-width: 32px; margin: 2px; }"
+        "QScrollBar::handle:horizontal:hover { background: #16a34a; }"
+        "QTextEdit, QPlainTextEdit, QTextBrowser { background: #292524; color: #e7e5e4; border: 1px solid #44403c; border-radius: 8px; padding: 6px; }"
+        "QCheckBox { color: #e7e5e4; spacing: 6px; }"
+        "QSpinBox, QDoubleSpinBox, QComboBox { background: #292524; color: #e7e5e4; border: 1px solid #57534e; border-radius: 6px; padding: 5px 8px; }"
+        "QComboBox QAbstractItemView { background: #292524; color: #e7e5e4; selection-background-color: #16a34a; border: 1px solid #44403c; }"
         "QSlider::groove:horizontal { background: #44403c; height: 6px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #16a34a; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px; }"
-        "QMenu { background: #292524; color: #e7e5e4; border: 1px solid #44403c; }"
+        "QSlider::handle:horizontal { background: #16a34a; width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; }"
+        "QSlider::sub-page:horizontal { background: #16a34a; border-radius: 3px; }"
+        "QMenu { background: #292524; color: #e7e5e4; border: 1px solid #44403c; border-radius: 8px; padding: 4px; }"
+        "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
         "QMenu::item:selected { background: #16a34a; color: white; }"
-        "QToolTip { background: #44403c; color: #e7e5e4; border: 1px solid #57534e; border-radius: 4px; padding: 4px; }"
+        "QToolTip { background: #1c1917; color: #faf8f5; border: 1px solid #16a34a; border-radius: 6px; padding: 6px 10px; }"
+        "QSplitter::handle { background: #44403c; }"
+        "QSplitter::handle:horizontal { width: 1px; }"
+        "QSplitter::handle:vertical { height: 1px; }"
+        "QLabel#indexedHeader { color: #a8a29e; font-size: 9pt; font-weight: bold; }"
+        "QLabel#indexedInfo { color: #16a34a; font-size: 10pt; font-weight: bold; }"
+        "QLabel#statusReady { color: #16a34a; font-weight: bold; }"
+        "QLabel#statusInfo { color: #a8a29e; font-size: 9pt; }"
+        "QLabel#ocrStatus { color: #16a34a; font-weight: bold; font-size: 9pt; }"
         :
-        // Warm light theme — NO BLUE, green primary
+        // Warm light theme — NO BLUE, green primary, soft warm neutrals
         "QMainWindow { background: #faf8f5; }"
-        "QWidget#topMenuBar { background: #ffffff; border-bottom: 2px solid #16a34a; }"
+        "QWidget#topMenuBar { background: #ffffff; border-bottom: 1px solid #e7e2da; }"
         "QStatusBar { background: #ffffff; border-top: 1px solid #e7e2da; color: #44403c; }"
-        "QStatusBar QLabel { color: #44403c; font-weight: bold; }"
-        "QPushButton { background: #16a34a; color: white; border: none; border-radius: 8px; padding: 6px 14px; font-weight: bold; }"
+        "QStatusBar::item { border: none; }"
+        "QStatusBar QLabel { color: #44403c; padding: 0 4px; }"
+        "QPushButton { background: #16a34a; color: white; border: none; border-radius: 8px; padding: 7px 16px; font-weight: bold; font-size: 10pt; }"
         "QPushButton:hover { background: #15803d; }"
         "QPushButton:pressed { background: #166534; }"
-        "QPushButton:disabled { background: #d6d3d1; color: #a8a29e; }"
-        "QPushButton#openLocationBtn { background: #d97706; }"
-        "QPushButton#openLocationBtn:hover { background: #b45309; }"
-        "QPushButton#semanticToggleBtn { background: #d6d3d1; color: #44403c; }"
-        "QPushButton#semanticToggleBtn:checked { background: #16a34a; color: white; }"
-        "QPushButton#themeToggleBtn { background: #f3f1ec; color: #44403c; border: 1px solid #d6d3d1; font-size: 12pt; }"
-        "QLineEdit { background: white; color: #1c1917; border: 2px solid #d6d3d1; border-radius: 8px; padding: 6px 8px; font-size: 11pt; }"
+        "QPushButton:disabled { background: #e7e2da; color: #a8a29e; }"
+        "QPushButton#openLocationBtn { background: #f3f1ec; color: #44403c; border: 1px solid #d6d3d1; }"
+        "QPushButton#openLocationBtn:hover { background: #fef3c7; color: #92400e; border-color: #f59e0b; }"
+        "QPushButton#semanticToggleBtn { background: #f3f1ec; color: #44403c; border: 1px solid #d6d3d1; }"
+        "QPushButton#semanticToggleBtn:checked { background: #16a34a; color: white; border-color: #16a34a; }"
+        "QPushButton#themeToggleBtn { background: #f3f1ec; color: #44403c; border: 1px solid #d6d3d1; font-size: 12pt; padding: 4px 8px; }"
+        "QLineEdit { background: white; color: #1c1917; border: 2px solid #e7e2da; border-radius: 10px; padding: 9px 12px; font-size: 11pt; }"
         "QLineEdit:focus { border: 2px solid #16a34a; }"
-        "QListWidget#resultsPane { background: white; border: 1px solid #e7e2da; border-radius: 8px; }"
-        "QListWidget#resultsPane::item { padding: 8px; border-bottom: 1px solid #f5f5f4; }"
+        "QListWidget#resultsPane { background: white; border: 1px solid #e7e2da; border-radius: 10px; }"
+        "QListWidget#resultsPane::item { padding: 10px; border-bottom: 1px solid #f5f5f4; }"
         "QListWidget#resultsPane::item:selected { background: #f0fdf4; color: #166534; border-left: 3px solid #16a34a; }"
-        "QListWidget#resultsPane::item:hover { background: #f3f1ec; }"
+        "QListWidget#resultsPane::item:hover { background: #fefce8; }"
         "QListWidget#topMenuList { background: transparent; border: none; }"
-        "QListWidget#topMenuList::item { padding: 4px 12px; border-radius: 6px; margin: 2px; font-size: 10pt; color: #44403c; }"
-        "QListWidget#topMenuList::item:selected { background: #f0fdf4; color: #166534; font-weight: bold; }"
-        "QListWidget#topMenuList::item:hover { background: #f3f1ec; }"
-        "QTabWidget::pane { border: 1px solid #e7e2da; border-radius: 8px; }"
-        "QTabBar::tab { background: #f3f1ec; padding: 6px 14px; border: 1px solid #e7e2da; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; color: #78716c; }"
+        "QListWidget#topMenuList::item { padding: 6px 16px; border-radius: 6px; margin: 2px; font-size: 10pt; color: #57534e; }"
+        "QListWidget#topMenuList::item:selected { background: #16a34a; color: white; font-weight: bold; }"
+        "QListWidget#topMenuList::item:hover { background: #f0fdf4; color: #166534; }"
+        "QTabWidget::pane { border: 1px solid #e7e2da; border-radius: 10px; }"
+        "QTabBar::tab { background: #f3f1ec; padding: 8px 16px; border: 1px solid #e7e2da; border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px; color: #78716c; }"
         "QTabBar::tab:selected { background: white; color: #16a34a; font-weight: bold; }"
-        "QGroupBox { border: 1px solid #e7e2da; border-radius: 10px; margin-top: 8px; padding-top: 12px; font-weight: bold; color: #16a34a; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-        "QProgressBar { border: 1px solid #e7e2da; border-radius: 4px; background: #f3f1ec; }"
-        "QProgressBar::chunk { background: #16a34a; border-radius: 4px; }"
-        "QScrollBar:vertical { background: #faf8f5; width: 10px; }"
-        "QScrollBar::handle:vertical { background: #d6d3d1; border-radius: 5px; min-height: 30px; }"
+        "QGroupBox { border: 1px solid #e7e2da; border-radius: 12px; margin-top: 12px; padding: 12px; padding-top: 20px; font-weight: bold; color: #16a34a; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }"
+        "QProgressBar { border: 1px solid #e7e2da; border-radius: 6px; background: #f3f1ec; }"
+        "QProgressBar::chunk { background: #16a34a; border-radius: 6px; }"
+        "QScrollBar:vertical { background: #faf8f5; width: 12px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #d6d3d1; border-radius: 6px; min-height: 32px; margin: 2px; }"
         "QScrollBar::handle:vertical:hover { background: #16a34a; }"
         "QScrollBar::add-line, QScrollBar::sub-line { height: 0; }"
-        "QTextEdit, QPlainTextEdit, QTextBrowser { background: white; color: #1c1917; border: 1px solid #e7e2da; border-radius: 8px; }"
-        "QCheckBox { color: #1c1917; }"
-        "QSpinBox, QDoubleSpinBox, QComboBox { background: white; color: #1c1917; border: 1px solid #d6d3d1; border-radius: 6px; padding: 4px; }"
+        "QScrollBar:horizontal { background: #faf8f5; height: 12px; margin: 0; }"
+        "QScrollBar::handle:horizontal { background: #d6d3d1; border-radius: 6px; min-width: 32px; margin: 2px; }"
+        "QScrollBar::handle:horizontal:hover { background: #16a34a; }"
+        "QTextEdit, QPlainTextEdit, QTextBrowser { background: white; color: #1c1917; border: 1px solid #e7e2da; border-radius: 8px; padding: 6px; }"
+        "QCheckBox { color: #1c1917; spacing: 6px; }"
+        "QSpinBox, QDoubleSpinBox, QComboBox { background: white; color: #1c1917; border: 1px solid #d6d3d1; border-radius: 6px; padding: 5px 8px; }"
         "QComboBox QAbstractItemView { background: white; color: #1c1917; selection-background-color: #f0fdf4; selection-color: #166534; border: 1px solid #e7e2da; }"
         "QSlider::groove:horizontal { background: #e7e2da; height: 6px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #16a34a; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px; }"
-        "QSlider::sub-page:horizontal { background: #a7f3d0; border-radius: 3px; }"
-        "QMenu { background: white; color: #1c1917; border: 1px solid #e7e2da; border-radius: 6px; padding: 4px; }"
-        "QMenu::item { padding: 6px 20px; border-radius: 4px; }"
+        "QSlider::handle:horizontal { background: #16a34a; width: 18px; height: 18px; margin: -6px 0; border-radius: 9px; }"
+        "QSlider::sub-page:horizontal { background: #86efac; border-radius: 3px; }"
+        "QMenu { background: white; color: #1c1917; border: 1px solid #e7e2da; border-radius: 8px; padding: 4px; }"
+        "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
         "QMenu::item:selected { background: #f0fdf4; color: #166534; }"
-        "QToolTip { background: #1c1917; color: #faf8f5; border: none; border-radius: 6px; padding: 6px; }"
+        "QToolTip { background: #1c1917; color: #faf8f5; border: none; border-radius: 6px; padding: 6px 10px; }"
+        "QSplitter::handle { background: #e7e2da; }"
+        "QSplitter::handle:horizontal { width: 1px; }"
+        "QSplitter::handle:vertical { height: 1px; }"
+        "QLabel#indexedHeader { color: #78716c; font-size: 9pt; font-weight: bold; }"
+        "QLabel#indexedInfo { color: #16a34a; font-size: 10pt; font-weight: bold; }"
+        "QLabel#statusReady { color: #16a34a; font-weight: bold; }"
+        "QLabel#statusInfo { color: #78716c; font-size: 9pt; }"
+        "QLabel#ocrStatus { color: #16a34a; font-weight: bold; font-size: 9pt; }"
         ;
     qApp->setStyleSheet(QString(colorQss));
 
@@ -1411,18 +1447,22 @@ void MainWindow::refreshPreviewForSelectedFile() {
     }
 }
 
+
+// ============================================================
+// Extraction — runs entirely on a worker thread to keep the UI alive.
+// ============================================================
 void MainWindow::onExtract() {
     if (!repo_ || !db_) return;
+
+    // ── Toggle cancel if a batch is already running ───────────────
     if (contentExtractionRunning_) {
-        // Toggle cancel if already running.
-        extractCancelFlag_.store(true);
+        if (extractionWorker_) extractionWorker_->cancelExtraction();
         statusBar()->showMessage("Cancelling extraction...", 3000);
         return;
     }
 
-    // Gather files needing content extraction.
-    struct TodoItem { qint64 fileId; QString path; QString ext; };
-    QList<TodoItem> todo;
+    // ── Gather files needing extraction ───────────────────────────
+    QList<ExtractionTodoItem> todo;
     {
         sqlite3* raw = db_->raw();
         if (!raw) return;
@@ -1438,7 +1478,7 @@ void MainWindow::onExtract() {
             "ORDER BY id;";
         if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
             while (sqlite3_step(s) == SQLITE_ROW) {
-                TodoItem it;
+                ExtractionTodoItem it;
                 it.fileId = sqlite3_column_int64(s, 0);
                 const unsigned char* p = sqlite3_column_text(s, 1);
                 const unsigned char* e = sqlite3_column_text(s, 2);
@@ -1451,267 +1491,100 @@ void MainWindow::onExtract() {
     }
 
     if (todo.isEmpty()) {
-        // Show detailed extraction status instead of a generic message.
         try {
-            QString statusMsg = getExtractionStatusString();
-            statusBar()->showMessage(statusMsg, 5000);
+            statusBar()->showMessage(getExtractionStatusString(), 5000);
         } catch (...) {
             statusBar()->showMessage("All files extracted.", 3000);
         }
         return;
     }
 
+    // ── Set up the worker + thread ────────────────────────────────
     contentExtractionRunning_ = true;
-    extractCancelFlag_.store(false);
-    if (searchBar_) searchBar_->setExtracting(true);  // Phase 1.4: button shows "Cancel"
+    if (searchBar_) searchBar_->setExtracting(true);
+
     const int total = todo.size();
-    // Task 1: No 30-file session limit — process ALL pending files.
     statusBar()->showMessage(
         QString("Extracting %1 files... (click Extract again to cancel)").arg(total));
 
-    // Show progress bar
     if (extractionProgressBar_) {
         extractionProgressBar_->setRange(0, total);
         extractionProgressBar_->setValue(0);
         extractionProgressBar_->setVisible(true);
     }
 
-    struct ExtractState {
-        QList<TodoItem> todo;
-        int idx = 0;
-        int done = 0;
-        int failed = 0;
-    };
-    auto state = QSharedPointer<ExtractState>::create();
-    state->todo = std::move(todo);
+    // Tear down any previous worker/thread.
+    if (extractionThread_) {
+        extractionThread_->quit();
+        extractionThread_->wait(2000);
+        delete extractionThread_;
+        extractionThread_ = nullptr;
+    }
 
-    // Task 1: Use 10ms timer instead of 200ms. Adaptive CPU throttle
-    // (see below) handles pacing — no fixed delay needed.
-    auto* timer = new QTimer(this);
-    timer->setInterval(10);
-    timer->setSingleShot(false);
+    extractionThread_ = new QThread(this);
+    extractionWorker_ = new ExtractionWorker();  // no parent — moved to thread
 
-    connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
-      try {
-        // Check cancel flag.
-        if (extractCancelFlag_.load()) {
-            timer->stop();
-            timer->deleteLater();
-            contentExtractionRunning_ = false;
-            extractCancelFlag_.store(false);
-            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4: button shows "Extract"
-            updateIndexStats();
-            refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("Extraction cancelled (%1/%2 completed).")
-                    .arg(state->done + state->failed).arg(total), 8000);
-            return;
-        }
+    // Configure the worker.
+    // Note: BGE embedding generation during extraction was disabled earlier
+    // (caused main-thread freezes). Embeddings are generated on-demand via
+    // the Settings → Semantic Search → "Generate embeddings" button.
+    extractionWorker_->setTodo(todo, db_->path(), /*generateEmbeddings=*/false);
 
-        auto& registry = DocumentExtractorRegistry::instance();
-        sqlite3* raw = db_->raw();
+    extractionWorker_->moveToThread(extractionThread_);
 
-        if (state->idx >= total) {
-            timer->stop();
-            timer->deleteLater();
-            contentExtractionRunning_ = false;
-            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4
-            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
-            updateIndexStats();
-            refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                    .arg(state->done).arg(state->failed).arg(total), 8000);
-            return;
-        }
+    // Wire signals (queued automatically because worker lives on another thread).
+    connect(extractionThread_, &QThread::started,
+            extractionWorker_, &ExtractionWorker::run);
+    connect(extractionWorker_, &ExtractionWorker::fileExtracted,
+            this, &MainWindow::onExtractionFileDone, Qt::QueuedConnection);
+    connect(extractionWorker_, &ExtractionWorker::progress,
+            this, &MainWindow::onExtractionProgress, Qt::QueuedConnection);
+    connect(extractionWorker_, &ExtractionWorker::finished,
+            this, &MainWindow::onExtractionFinished, Qt::QueuedConnection);
 
-        const auto& item = state->todo[state->idx];
-        QFileInfo fi(item.path);
-        statusBar()->showMessage(
-            QString("Extracting: %1 (%2/%3)...")
-                .arg(fi.fileName()).arg(state->idx + 1).arg(total));
-        if (extractionProgressBar_) extractionProgressBar_->setValue(state->idx + 1);
+    // Auto-cleanup when done.
+    connect(extractionWorker_, &ExtractionWorker::finished,
+            extractionThread_, &QThread::quit);
+    connect(extractionWorker_, &ExtractionWorker::finished,
+            extractionWorker_, &QObject::deleteLater);
+    connect(extractionThread_, &QThread::finished,
+            extractionThread_, &QObject::deleteLater);
+    connect(extractionThread_, &QThread::finished,
+            this, [this]() { extractionThread_ = nullptr; extractionWorker_ = nullptr; });
 
-        if (!QFileInfo::exists(item.path)) {
-            if (raw) {
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-            }
-            ++state->failed;
-        } else {
-            // Skip files that are too large (protects low-end systems).
-            if (fi.size() > Constants::kMaxFilesizeToExtract) {
-                if (raw) {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='skipped' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-                }
-                ++state->failed;
-            } else {
-
-            QString extractedText;
-            QString source = "native";
-            bool ok = false;
-
-            try {
-                auto result = registry.extractByExtension(item.path, item.ext);
-                extractedText = result.text;
-                source = result.source.isEmpty() ? "native" : result.source;
-                ok = true;
-
-                if (result.needsOcr && extractedText.isEmpty()) {
-                    if (raw) {
-                        sqlite3_exec(raw,
-                            QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                                .arg(item.fileId).toUtf8().constData(),
-                            nullptr, nullptr, nullptr);
-                    }
-                    ++state->done;
-                    ok = false;
-                }
-            } catch (const std::exception& e) {
-                DS_WARN("Extract", QString("Failed: %1 — %2").arg(item.path).arg(e.what()));
-                ok = false;
-            } catch (...) {
-                ok = false;
-            }
-
-            if (ok && extractedText.size() > Constants::kMaxExtractTextChars) {
-                extractedText = extractedText.left(Constants::kMaxExtractTextChars) + "\n\n[... text truncated for memory ...]";
-            }
-
-            if (ok && !extractedText.isEmpty() && raw) {
-                QByteArray textBytes = extractedText.toUtf8();
-                QByteArray srcBytes = source.toUtf8();
-                qint64 charCount = extractedText.size();
-                qint64 now = QDateTime::currentSecsSinceEpoch();
-
-                sqlite3_stmt* upd = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                    "VALUES (?1, ?2, ?3, ?4, ?5) "
-                    "ON CONFLICT(file_id) DO UPDATE SET "
-                    "  extracted_text=excluded.extracted_text, "
-                    "  text_source=excluded.text_source, "
-                    "  char_count=excluded.char_count, "
-                    "  updated_at=excluded.updated_at;",
-                    -1, &upd, nullptr);
-                if (upd) {
-                    sqlite3_bind_int64(upd, 1, item.fileId);
-                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(upd, 4, charCount);
-                    sqlite3_bind_int64(upd, 5, now);
-                    sqlite3_step(upd);
-                    sqlite3_finalize(upd);
-                }
-
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-
-                sqlite3_stmt* del = nullptr;
-                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
-                                   -1, &del, nullptr);
-                if (del) {
-                    sqlite3_bind_int64(del, 1, item.fileId);
-                    sqlite3_step(del);
-                    sqlite3_finalize(del);
-                }
-
-                QByteArray fn = fi.fileName().toUtf8();
-                QByteArray pth = item.path.toUtf8();
-                QByteArray ext = item.ext.toUtf8();
-                sqlite3_stmt* ins = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                    "VALUES (?1, ?2, ?3, ?4, ?5);",
-                    -1, &ins, nullptr);
-                if (ins) {
-                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(ins, 5, item.fileId);
-                    sqlite3_step(ins);
-                    sqlite3_finalize(ins);
-                }
-
-                // Generate BGE embedding for this document.
-                // Use simple embedDocument (single embedding) during extraction
-                // for speed. Chunked embeddings can be generated later via
-                // the "Generate AI Embeddings" button in Settings.
-                // embedDocumentChunked was crashing because it does up to 50
-                // ONNX inference calls (50 × 20ms = 1s) on the main thread,
-                // blocking the UI and causing apparent crashes.
-                if (bgeService_ && bgeService_->isReady()) {
-                    try {
-                        bgeService_->embedDocument(item.fileId, extractedText);
-                    } catch (...) {}
-                }
-
-                ++state->done;
-            } else if (raw) {
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-                ++state->failed;
-            } else {
-                ++state->failed;
-            }
-            }  // close the else (file not too large)
-        }
-
-        // Task 1: Adaptive CPU throttle via GetSystemTimes().
-        // If CPU usage > 85%, sleep 100ms to let the system cool down.
-        // If <= 85%, proceed immediately (no fixed delay).
-#ifdef _WIN32
-        {
-            static FILETIME prevIdle = {}, prevKernel = {}, prevUser = {};
-            FILETIME idle, kernel, user;
-            if (GetSystemTimes(&idle, &kernel, &user)) {
-                ULARGE_INTEGER idleDiff, kernelDiff, userDiff;
-                ULARGE_INTEGER prevIdleLi, prevKernelLi, prevUserLi;
-                prevIdleLi.QuadPart = (static_cast<ULONGLONG>(prevIdle.dwHighDateTime) << 32) | prevIdle.dwLowDateTime;
-                prevKernelLi.QuadPart = (static_cast<ULONGLONG>(prevKernel.dwHighDateTime) << 32) | prevKernel.dwLowDateTime;
-                prevUserLi.QuadPart = (static_cast<ULONGLONG>(prevUser.dwHighDateTime) << 32) | prevUser.dwLowDateTime;
-                idleDiff.QuadPart = (static_cast<ULONGLONG>(idle.dwHighDateTime) << 32) | idle.dwLowDateTime;
-                kernelDiff.QuadPart = (static_cast<ULONGLONG>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
-                userDiff.QuadPart = (static_cast<ULONGLONG>(user.dwHighDateTime) << 32) | user.dwLowDateTime;
-
-                ULONGLONG totalDiff = (kernelDiff.QuadPart - prevKernelLi.QuadPart) +
-                                      (userDiff.QuadPart - prevUserLi.QuadPart);
-                ULONGLONG idleDiffVal = idleDiff.QuadPart - prevIdleLi.QuadPart;
-                if (totalDiff > 0) {
-                    double cpuUsage = 1.0 - static_cast<double>(idleDiffVal) / totalDiff;
-                    if (cpuUsage > 0.85) {
-                        Sleep(100);  // throttle: CPU > 85%
-                    }
-                }
-                prevIdle = idle;
-                prevKernel = kernel;
-                prevUser = user;
-            }
-        }
-#endif
-
-        ++state->idx;
-      } catch (const std::exception& e) {
-          statusBar()->showMessage(QString("Extraction error: %1").arg(e.what()), 5000);
-          ++state->idx;
-      } catch (...) {
-          statusBar()->showMessage("Extraction error — skipping file.", 3000);
-          ++state->idx;
-      }
-    });
-
-    timer->start();
+    extractionThread_->start();
 }
+
+void MainWindow::onExtractionFileDone(const ExtractionResult& result) {
+    // Optional: log failures to the status bar.
+    if (!result.ok && !result.missingFile && !result.skippedTooLarge) {
+        DS_DEBUG("Extract", QString("File %1 failed: %2")
+                 .arg(result.filename).arg(result.errorMessage));
+    }
+}
+
+void MainWindow::onExtractionProgress(int done, int total) {
+    if (extractionProgressBar_) {
+        extractionProgressBar_->setValue(done);
+    }
+    if (done % 5 == 0 || done == total) {
+        statusBar()->showMessage(
+            QString("Extracting: %1/%2...").arg(done).arg(total));
+    }
+}
+
+void MainWindow::onExtractionFinished(int succeeded, int failed, int total) {
+    contentExtractionRunning_ = false;
+    if (searchBar_) searchBar_->setExtracting(false);
+    if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
+    updateIndexStats();
+    refreshPreviewForSelectedFile();
+
+    statusBar()->showMessage(
+        QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+            .arg(succeeded).arg(failed).arg(total), 8000);
+}
+
 
 void MainWindow::autoScanIndexedFolders() {
     if (!repo_ || !db_) return;
@@ -1891,22 +1764,59 @@ QString MainWindow::getExtractionStatusString() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    // Always show green 'OCR: Ready'. The C++ path check is unreliable
-    // because the helper exe searches paths we don't check here.
-    // If OCR actually fails, the user will see empty text as the result.
-    ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
-    ocrStatusLbl_->setText("OCR: Ready");
-    ocrStatusLbl_->setStyleSheet("color: #10b981;");
+    // Check the unlimited WinRT OCR engine first; fall back to oneocr.
+    auto& winrtOcr = DocuSearch::WinRtOcrEngine::instance();
+    if (winrtOcr.isAvailable()) {
+        // WinRT helper present — OCR is functional on any Windows 10+ install
+        // with at least one language pack (which is the default).
+        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
+        ocrStatusLbl_->setText("OCR: Unlimited");
+        ocrStatusLbl_->setStyleSheet("color: #10b981;");
+        return;
+    }
+
+    // Fall back to oneocr (legacy path — requires get_oneocr.ps1 setup).
+    auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
+    if (oneocr.isOneocrAvailable()) {
+        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
+        ocrStatusLbl_->setText("OCR: Ready");
+        ocrStatusLbl_->setStyleSheet("color: #10b981;");
+        return;
+    }
+
+    // No OCR engine available.
+    ocrDotLbl_->setStyleSheet("background: #f59e0b; border-radius: 4px;");
+    ocrStatusLbl_->setText("OCR: Setup Required");
+    ocrStatusLbl_->setStyleSheet("color: #f59e0b;");
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        QMessageBox::information(this, "OCR Status",
-            "OCR is ready to use.\n\n"
-            "Click the OCR button on a scanned PDF or image\n"
-            "to extract text.\n\n"
-            "Supported: English, Chinese, Korean, Japanese");
+        auto& winrtOcr = DocuSearch::WinRtOcrEngine::instance();
+        auto& oneocr   = DocuSearch::WindowsOcrEngine::instance();
+
+        QString msg;
+        if (winrtOcr.isAvailable()) {
+            msg = "OCR engine: Windows.Media.Ocr (UNLIMITED)\n\n"
+                  "• Built into Windows 10+ — no setup required.\n"
+                  "• Supports 50+ languages via Windows language packs.\n"
+                  "• To install more languages: Windows Settings →\n"
+                  "  Time & Language → Language → Add a language.\n\n"
+                  "Click an image or scanned PDF's OCR button to extract text.";
+        } else if (oneocr.isOneocrAvailable()) {
+            msg = "OCR engine: oneocr.dll (legacy fallback)\n\n"
+                  "WinRT OCR helper not found — using oneocr.dll instead.\n"
+                  "To enable the unlimited WinRT engine, reinstall DocuSearch\n"
+                  "(the helper exe is bundled with newer builds).\n\n"
+                  "Supported: English, Chinese, Korean, Japanese.";
+        } else {
+            msg = "No OCR engine is available.\n\n"
+                  "The unlimited WinRT OCR helper exe was not found next to\n"
+                  "DocuSearch.exe. Please reinstall the application.\n\n"
+                  "(Legacy oneocr.dll is also not configured.)";
+        }
+        QMessageBox::information(this, "OCR Status", msg);
         return true;
     }
     return QMainWindow::eventFilter(obj, e);

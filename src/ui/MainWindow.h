@@ -48,6 +48,7 @@ class FileRepository;
 class SearchEngine;
 class Indexer;
 class OcrWorkerPool;
+class ExtractionWorker;
 class FileWatcher;
 
 class SearchBar;
@@ -106,6 +107,10 @@ private slots:
     void onDetectDuplicates();
     void onAddFolder();
     void onExtract();
+    // Extraction worker slots (called via queued connections from the worker thread).
+    void onExtractionFileDone(const ExtractionResult& result);
+    void onExtractionProgress(int done, int total);
+    void onExtractionFinished(int succeeded, int failed, int total);
     void onRefresh();
     void onFilters();
     void onSidebarClicked(int row);
@@ -218,6 +223,13 @@ public:
     bool            darkMode_             = true;
     bool            contentExtractionRunning_ = false;
     std::atomic<bool> extractCancelFlag_{false};
+
+    // ── Extraction worker (off-main-thread) ──────────────
+    // Prevents UI freeze during PDF/DOCX/XLSX text extraction.
+    // Worker lives on a dedicated QThread; signals deliver progress
+    // back to the main thread (queued connection).
+    QThread*        extractionThread_     = nullptr;
+    ExtractionWorker* extractionWorker_   = nullptr;
     bool            autoScanRunning_      = false;
     bool            maximized_            = false;
     bool            ocrBtnEnabled_        = true;  // false while OCR is running
