@@ -385,3 +385,101 @@ Stage Summary:
 - Reviewer question #8 RESOLVED (chose delete).
 - Working tree clean.
 - All other previously-tracked reviewer items already addressed in Task ID 5 commit.
+
+---
+Task ID: 7
+Agent: main
+Task: User feedback — "unlimited OCR instead of oneocr" + "UI not good" + "extraction freezes window"
+
+Work Log:
+- Read user feedback: three problems.
+  1. oneocr.dll has licensing gray area + requires manual setup script
+  2. UI looks bad (no specifics given)
+  3. Extraction freezes the window
+
+- INVESTIGATED EXTRACTION FREEZE:
+  - onExtract() ran `registry.extractByExtension()` inside a QTimer::timeout
+    callback on the MAIN thread.
+  - Even at 10ms interval, each call took 100-1000ms (PDFs/DOCX) → UI
+    was frozen between timer ticks → "Not responding" window.
+  - Fix: new ExtractionWorker class (QObject) moved to a QThread.
+    Worker opens its own SQLite connection (WAL-safe with the main
+    connection), runs extractByExtension(), writes results back via
+    queued signals (fileExtracted, progress, finished).
+  - Added Q_DECLARE_METATYPE + qRegisterMetaType for ExtractionResult
+    so the queued signal/slot connection works across threads.
+  - Rewrote onExtract(): now 100 lines instead of 300, no QTimer, no
+    CPU throttling on main thread, no in-line DB writes.
+
+- INVESTIGATED OCR — chose Windows.Media.Ocr via WinRT:
+  - "Unlimited" interpretation: no license issues, no setup friction.
+  - WinRT Windows.Media.Ocr is built into Windows 10+, supports 50+
+    languages via Windows language packs, no DLL to bundle.
+  - Previous WinRT OCR crashed because it ran IN-PROCESS. The new
+    docusearch_winrt_ocr_helper.exe runs as a separate process —
+    same pattern as docusearch_ocr_helper.exe (oneocr). Crashes
+    are isolated; main app just sees "helper exited".
+  - Helper uses C++/WinRT (headers ship in Windows SDK 10.0.17763+,
+    no vcpkg dependency needed).
+  - Built with /MD (DLL CRT) + /await + windowsapp.lib to satisfy
+    C++/WinRT requirements. Doesn't conflict with main app's /MT.
+  - WinRtOcrEngine.cpp: thin wrapper that spawns the helper exe via
+    QProcess. Same ===FILE===/===END=== output format as oneocr
+    helper, so existing parsing code is reused.
+  - OcrWorkerPool now prefers WinRT engine, falls back to oneocr if
+    the WinRT helper is missing or returns empty text.
+  - Status bar indicator: "OCR: Unlimited" (WinRT) > "OCR: Ready"
+    (oneocr) > "OCR: Setup Required" (neither).
+
+- UI IMPROVEMENTS:
+  - Fixed topMenuList hardcoded blue #0066cc (clashed with green theme)
+    → green #16a34a, with proper hover states.
+  - Center column: FilePreviewPane now gets 3/4 vertical space (was
+    1:0 with fixed-height 280px PreviewPane). Users can finally see
+    the file preview without squinting.
+  - Hairline 1px gap between FilePreviewPane and PreviewPane for
+    visual divider.
+  - Slimmer "Open Location" button — "📁 Open" instead of long text.
+  - Modernized QSS:
+    * Larger border-radius (8-12px instead of 4-6px) — softer look
+    * More padding on buttons/inputs (16px instead of 14px)
+    * Proper hover states for menu items (green tint instead of gray)
+    * Styled QSplitter handles (1px hairline)
+    * Added specific QSS for indexedHeader/indexedInfo/statusInfo/
+      ocrStatus labels — consistent typography hierarchy
+    * Larger scroll bar handles (12px width, 32px min) — easier to grab
+    * QStatusBar::item { border: none; } removes ugly separators
+  - Updated OCR status tooltip + click dialog to explain WinRT engine.
+
+- CI / packaging:
+  - CMakeLists.txt: new docusearch_winrt_ocr_helper target. Built
+    separately with /MD + /await + windowsapp.lib.
+  - Added WinRtOcrEngine.cpp/.h + ExtractionWorker.cpp/.h to APP_SOURCES
+    and APP_HEADERS.
+  - .github/workflows/build.yml:
+    * Smoke-test step now verifies BOTH helper exes (legacy oneocr +
+      WinRT) build successfully and exit non-zero with no args.
+    * New "Copy WinRT OCR helper exe (UNLIMITED)" step copies the
+      helper into build\bin\Release\.
+    * Also bundles VC++ runtime DLLs (vcruntime140.dll, msvcp140.dll,
+      vcruntime140_1.dll) — the WinRT helper is built with /MD so it
+      needs the DLL CRT.
+  - HELP.md: "Getting Started" no longer mentions the get_oneocr.ps1
+    script as a required step. New "Why unlimited?" section explains
+    the WinRT engine. New "Adding more OCR languages" section walks
+    through installing language packs via Windows Settings.
+
+- Could not verify compilation here (Linux dev env, no MSVC). The
+  changes follow standard C++/WinRT patterns; CI will catch any
+  issues on next build.
+
+Stage Summary:
+- 3 user-reported issues addressed in single commit (1e803b6).
+- Unlimited WinRT OCR is the new default — no setup script required.
+- Extraction runs on a worker thread — UI stays responsive.
+- UI is cleaner: proper color consistency, better spacing, modern QSS.
+- Files created: WinRtOcrEngine.h/.cpp, winrt_ocr_helper_main.cpp,
+  ExtractionWorker.h/.cpp (5 new files).
+- Files modified: CMakeLists.txt, build.yml, HELP.md, main.cpp,
+  MainWindow.h/.cpp, OcrWorkerPool.cpp (7 modified).
+- Working tree clean. Awaiting CI verification.
