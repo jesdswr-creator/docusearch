@@ -225,7 +225,6 @@ set(APP_SOURCES
     # monitoring
     src/monitoring/FileWatcher.cpp
     # preview
-    src/preview/ThumbnailGenerator.cpp
     src/preview/TextPreview.cpp
     src/preview/ImagePreview.cpp
     src/preview/PdfPreview.cpp
@@ -286,7 +285,6 @@ set(APP_HEADERS
     src/search/QueryParser.h
     src/search/SearchEngine.h
     src/monitoring/FileWatcher.h
-    src/preview/ThumbnailGenerator.h
     src/preview/IFilePreview.h
     src/preview/TextPreview.h
     src/preview/ImagePreview.h

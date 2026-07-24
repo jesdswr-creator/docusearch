@@ -49,7 +49,6 @@ class SearchEngine;
 class Indexer;
 class OcrWorkerPool;
 class FileWatcher;
-class ThumbnailGenerator;
 
 class SearchBar;
 class ResultsPane;
@@ -153,7 +152,6 @@ public:
     // Phase 9: Debounce file watcher events (merge add+modify within 500ms).
     QHash<QString, qint64> fileEventDebounce_;
     QTimer* fileEventDebounceTimer_ = nullptr;
-    std::unique_ptr<ThumbnailGenerator> thumbs_;
 
     // ---- UI widgets ----
     // Title bar

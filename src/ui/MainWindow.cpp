@@ -29,7 +29,6 @@
 #include "../ocr/WindowsOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
-#include "../preview/ThumbnailGenerator.h"
 #include "../preview/FilePreviewPane.h"
 #include "../embeddings/BgeService.h"
 #include "../search/HybridSearchEngine.h"
