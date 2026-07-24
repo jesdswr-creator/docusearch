@@ -547,7 +547,7 @@ void MainWindow::buildCentral() {
         "  background: #e0e0e0; "
         "}");
     const QStringList navLabels = {
-        "Search",
+        "Search", "Duplicates",
         "Stats", "Settings", "Help", "About"
     };
     for (int i = 0; i < navLabels.size(); ++i) {
@@ -1311,6 +1311,9 @@ void MainWindow::onSidebarClicked(int row) {
                     QFile f(Config::instance().dbPath());
                     return Utils::formatFileSize(f.exists() ? f.size() : 0);
                 }()));
+        sidebarList_->setCurrentRow(0);
+    } else if (page == "Duplicates") {
+        onDetectDuplicates();
         sidebarList_->setCurrentRow(0);
     }
     // "Search" stays as the current page.

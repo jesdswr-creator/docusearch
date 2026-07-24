@@ -151,7 +151,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     cpuPauseSpin_->setValue(current_.cpuPauseThresholdPct);
     pauseOnHeavyCheck_ = new QCheckBox("Pause indexing when system CPU exceeds threshold", this);
     pauseOnHeavyCheck_->setChecked(current_.pauseOnHeavyLoad);
-    lazyOcrCheck_ = new QCheckBox("Enable lazy OCR (OCR on-demand at search time)", this);
+    lazyOcrCheck_ = new QCheckBox("Run OCR during re-indexing (not at search time)", this);
     lazyOcrCheck_->setChecked(current_.lazyOcrEnabled);
     hashFilesCheck_ = new QCheckBox("Compute file hashes (for duplicate detection)", this);
     hashFilesCheck_->setChecked(current_.hashLargeFiles);
