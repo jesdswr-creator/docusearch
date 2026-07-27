@@ -28,7 +28,6 @@
 #include "../indexer/ExtractionWorker.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
-#include "../ocr/BaiduOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/FilePreviewPane.h"
@@ -475,18 +474,10 @@ void MainWindow::buildTitleBar() {
     appLogoLbl_->setPixmap(loadLucidePixmap("search", QColor("#ffffff"), 16, devicePixelRatio()));
     h->addWidget(appLogoLbl_);
 
-    // Title text: "DocuSearch 1.0.0" (bold) + "• Offline Document Search" (muted)
-    auto* titleWrap = new QWidget(titleBar_);
-    auto* twLay = new QHBoxLayout(titleWrap);
-    twLay->setContentsMargins(0, 0, 0, 0);
-    twLay->setSpacing(6);
-    titleBarText_ = new QLabel(QString("DocuSearch %1").arg(Constants::kAppVersion), titleWrap);
+    // Title text: "DocuSearch" (bold). No version subtitle — keep it minimal.
+    titleBarText_ = new QLabel("DocuSearch", titleBar_);
     titleBarText_->setObjectName("titleBarText");
-    titleBarSubtitle_ = new QLabel("• Offline Document Search", titleWrap);
-    titleBarSubtitle_->setObjectName("titleBarSubtitle");
-    twLay->addWidget(titleBarText_);
-    twLay->addWidget(titleBarSubtitle_);
-    h->addWidget(titleWrap);
+    h->addWidget(titleBarText_);
 
     h->addStretch();
 
@@ -596,19 +587,14 @@ void MainWindow::buildCentral() {
     menuBarLay->addWidget(sidebarList_, 1);
 
     // Compact indexed-status badge on the right side of the menu bar.
+    // Minimal: just "X files" + thin progress bar. No "Indexed" label, no dot.
     auto* statusBadge = new QWidget(sidebar_);
     statusBadge->setObjectName("indexedStatus");
     auto* sbLay = new QHBoxLayout(statusBadge);
     sbLay->setContentsMargins(8, 4, 8, 4);
-    sbLay->setSpacing(6);
-    auto* dotLbl = new QLabel(statusBadge);
-    dotLbl->setFixedSize(8, 8);
-    indexedHeaderLbl_ = new QLabel("Indexed", statusBadge);
-    indexedHeaderLbl_->setObjectName("indexedHeader");
+    sbLay->setSpacing(8);
     indexedInfoLbl_ = new QLabel("0 files", statusBadge);
     indexedInfoLbl_->setObjectName("indexedInfo");
-    sbLay->addWidget(dotLbl);
-    sbLay->addWidget(indexedHeaderLbl_);
     sbLay->addWidget(indexedInfoLbl_);
 
     indexedBar_ = new QProgressBar(statusBadge);
@@ -617,7 +603,7 @@ void MainWindow::buildCentral() {
     indexedBar_->setValue(0);
     indexedBar_->setTextVisible(false);
     indexedBar_->setFixedWidth(80);
-    indexedBar_->setFixedHeight(6);
+    indexedBar_->setFixedHeight(4);
     sbLay->addWidget(indexedBar_);
 
     menuBarLay->addWidget(statusBadge);
@@ -728,11 +714,13 @@ void MainWindow::buildStatusBar() {
     auto* sb = statusBar();
     sb->setSizeGripEnabled(false);
 
-    // Left side: dot + Ready + indexed count + total size + last indexed
+    // Left side: dot + Ready + indexed count + extraction progress.
+    // Simplified — removed "Total size" and "Last indexed" (low-value info;
+    // both are shown in the Stats panel if the user wants them).
     auto* left = new QWidget(sb);
     auto* lLay = new QHBoxLayout(left);
     lLay->setContentsMargins(0, 0, 0, 0);
-    lLay->setSpacing(16);
+    lLay->setSpacing(12);
 
     auto* readyRow = new QWidget(left);
     auto* rLay = new QHBoxLayout(readyRow);
@@ -746,17 +734,19 @@ void MainWindow::buildStatusBar() {
     rLay->addWidget(statusReadyLbl_);
     lLay->addWidget(readyRow);
 
-    statusIndexedLbl_ = new QLabel("Indexed files: 0", left);
+    statusIndexedLbl_ = new QLabel("Indexed: 0", left);
     statusIndexedLbl_->setObjectName("statusInfo");
     lLay->addWidget(statusIndexedLbl_);
 
-    statusSizeLbl_ = new QLabel("Total size: 0 B", left);
+    // "Total size" and "Last indexed" labels are KEPT AS MEMBERS (other
+    // code calls setText on them) but are NOT added to the layout — they
+    // remain hidden. This avoids touching every call site.
+    statusSizeLbl_ = new QLabel(left);
     statusSizeLbl_->setObjectName("statusInfo");
-    lLay->addWidget(statusSizeLbl_);
-
-    statusLastLbl_ = new QLabel("Last indexed: -", left);
+    statusSizeLbl_->setVisible(false);
+    statusLastLbl_ = new QLabel(left);
     statusLastLbl_->setObjectName("statusInfo");
-    lLay->addWidget(statusLastLbl_);
+    statusLastLbl_->setVisible(false);
 
     lLay->addStretch();
 
@@ -788,9 +778,8 @@ void MainWindow::buildStatusBar() {
     ocrLay->addWidget(ocrStatusLbl_);
     ocrStatusWidget_->setToolTip(
         "OCR (Optical Character Recognition) status.\n"
-        "Green 'Baidu': unlimited Baidu Cloud OCR is configured.\n"
-        "Green 'Ready': local oneocr.dll is installed.\n"
-        "Amber: no OCR engine available — click for setup instructions.");
+        "Green: oneocr.dll is installed and ready.\n"
+        "Amber: oneocr.dll is missing — click for install instructions.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
     // Semantic search toggle button (shows current state).
@@ -912,7 +901,6 @@ void MainWindow::applyTheme() {
         "QSplitter::handle { background: #44403c; }"
         "QSplitter::handle:horizontal { width: 1px; }"
         "QSplitter::handle:vertical { height: 1px; }"
-        "QLabel#indexedHeader { color: #a8a29e; font-size: 9pt; font-weight: bold; }"
         "QLabel#indexedInfo { color: #16a34a; font-size: 10pt; font-weight: bold; }"
         "QLabel#statusReady { color: #16a34a; font-weight: bold; }"
         "QLabel#statusInfo { color: #a8a29e; font-size: 9pt; }"
@@ -971,7 +959,6 @@ void MainWindow::applyTheme() {
         "QSplitter::handle { background: #e7e2da; }"
         "QSplitter::handle:horizontal { width: 1px; }"
         "QSplitter::handle:vertical { height: 1px; }"
-        "QLabel#indexedHeader { color: #78716c; font-size: 9pt; font-weight: bold; }"
         "QLabel#indexedInfo { color: #16a34a; font-size: 10pt; font-weight: bold; }"
         "QLabel#statusReady { color: #16a34a; font-weight: bold; }"
         "QLabel#statusInfo { color: #78716c; font-size: 9pt; }"
@@ -1764,16 +1751,7 @@ QString MainWindow::getExtractionStatusString() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    // Check Baidu OCR first (unlimited, requires API key).
-    auto& baidu = DocuSearch::BaiduOcrEngine::instance();
-    if (baidu.isConfigured()) {
-        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
-        ocrStatusLbl_->setText("OCR: Baidu");
-        ocrStatusLbl_->setStyleSheet("color: #10b981;");
-        return;
-    }
-
-    // Fall back to oneocr (local, requires get_oneocr.ps1 setup).
+    // oneocr.dll — local OCR engine. Setup via scripts/get_oneocr.ps1.
     auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
     if (oneocr.isOneocrAvailable()) {
         ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
@@ -1782,7 +1760,7 @@ void MainWindow::updateOcrStatusIndicator() {
         return;
     }
 
-    // No OCR engine available.
+    // oneocr.dll not installed.
     ocrDotLbl_->setStyleSheet("background: #f59e0b; border-radius: 4px;");
     ocrStatusLbl_->setText("OCR: Setup Required");
     ocrStatusLbl_->setStyleSheet("color: #f59e0b;");
@@ -1791,33 +1769,22 @@ void MainWindow::updateOcrStatusIndicator() {
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        auto& baidu  = DocuSearch::BaiduOcrEngine::instance();
         auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
 
         QString msg;
-        if (baidu.isConfigured()) {
-            msg = "OCR engine: Baidu Cloud OCR (UNLIMITED)\n\n"
-                  "• Requires an active internet connection.\n"
-                  "• Supports 50+ languages including mixed Chinese/English.\n"
-                  "• Free quota: 1000 calls/day (generous for desktop use).\n"
-                  "• Higher quotas available via Baidu Cloud paid plans.\n\n"
-                  "Manage your API key in Settings → OCR.";
-        } else if (oneocr.isOneocrAvailable()) {
+        if (oneocr.isOneocrAvailable()) {
             msg = "OCR engine: oneocr.dll (local)\n\n"
-                  "Baidu OCR is NOT configured — using local oneocr instead.\n"
-                  "To enable Baidu OCR (50+ languages, no DLL setup):\n"
-                  "  1. Sign up at https://cloud.baidu.com\n"
-                  "  2. Create an OCR application\n"
-                  "  3. Enter your API Key + Secret Key in Settings → OCR\n\n"
-                  "Supported by oneocr: English, Chinese, Korean, Japanese.";
+                  "• Runs entirely on your machine — no internet needed.\n"
+                  "• Supports: English, Chinese (Simplified & Traditional),\n"
+                  "  Korean, Japanese.\n\n"
+                  "Click an image or scanned PDF's OCR button to extract text.";
         } else {
-            msg = "No OCR engine is available.\n\n"
-                  "Two options:\n\n"
-                  "1. Baidu Cloud OCR (recommended — unlimited, 50+ languages):\n"
-                  "   Sign up at https://cloud.baidu.com, create an OCR app,\n"
-                  "   then enter the API Key + Secret Key in Settings → OCR.\n\n"
-                  "2. oneocr.dll (local, ~5 languages):\n"
-                  "   Run scripts/get_oneocr.ps1 to install.";
+            msg = "OCR is not set up.\n\n"
+                  "To install oneocr.dll:\n"
+                  "  Run scripts\\get_oneocr.ps1\n\n"
+                  "This copies the oneocr files from your locally-installed\n"
+                  "Windows 11 Snipping Tool into the DocuSearch folder.\n\n"
+                  "See ONEOCR_SETUP.md for details.";
         }
         QMessageBox::information(this, "OCR Status", msg);
         return true;
@@ -1961,9 +1928,8 @@ void MainWindow::updateIndexStats() {
             if (f.exists()) dbSize = f.size();
         }
         if (indexedInfoLbl_) {
-            indexedInfoLbl_->setText(QString("%1 files\n%2")
-                .arg(total)
-                .arg(Utils::formatFileSize(dbSize)));
+            // Single-line: "X files". Size info is already in Stats panel.
+            indexedInfoLbl_->setText(QString("%1 files").arg(total));
         }
         if (indexedBar_) {
             // Progress = content_done / total (capped at 100).
@@ -1973,7 +1939,7 @@ void MainWindow::updateIndexStats() {
 
         // Status bar
         if (statusIndexedLbl_) {
-            statusIndexedLbl_->setText(QString("Indexed files: %1").arg(total));
+            statusIndexedLbl_->setText(QString("Indexed: %1").arg(total));
         }
         if (statusSizeLbl_) {
             statusSizeLbl_->setText(QString("Total size: %1").arg(Utils::formatFileSize(dbSize)));
@@ -2553,7 +2519,7 @@ void MainWindow::onOpenSettings() {
                 saveSettings();
                 applyTheme();
                 updateIndexStats();
-                updateOcrStatusIndicator();  // refresh in case Baidu key was added/removed
+                updateOcrStatusIndicator();  // refresh in case OCR setup changed
                 statusBar()->showMessage("Settings applied.", 3000);
             });
 

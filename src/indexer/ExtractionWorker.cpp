@@ -6,6 +6,7 @@
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../core/Logger.h"
 #include "../core/Constants.h"
+#include "../core/SehTranslator.h"
 
 #include <QFileInfo>
 #include <QDateTime>
@@ -33,6 +34,12 @@ void ExtractionWorker::cancelExtraction() {
 
 // ── Main loop ────────────────────────────────────────────────
 void ExtractionWorker::run() {
+    // CRITICAL: install the SEH translator ON THIS THREAD.
+    // _set_se_translator() is per-thread, and main() only installs it on the
+    // main thread. Without this, an access violation inside PDF/DOCX/XLSX
+    // parsers would crash the process instead of being caught by catch(...).
+    installSehTranslator();
+
     const int total = todo_.size();
     if (total == 0) {
         emit finished(0, 0, 0);

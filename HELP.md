@@ -29,12 +29,9 @@ This guide covers everything you need to use DocuSearch effectively.
    [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions).
 2. **Install/extract** to any folder.
 3. **Run** `DocuSearch.exe`.
-4. **(Optional) Enable OCR** — choose ONE of:
-   - **Baidu Cloud OCR** (recommended — unlimited, 50+ languages): sign up
-     at https://cloud.baidu.com, create an OCR application, then enter
-     your API Key + Secret Key in Settings → OCR.
-   - **oneocr.dll** (local, ~5 languages): run `scripts\get_oneocr.ps1`.
-     See [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for details.
+4. **(Optional) Install OCR support** — run `scripts\get_oneocr.ps1`
+   to enable OCR for scanned PDFs and images. See
+   [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for details.
 
 The first window you see has:
 - A sidebar on the left with navigation items
@@ -142,25 +139,10 @@ the green OCR button.
 
 ## OCR (Scanned PDFs & Images)
 
-DocuSearch supports two OCR engines, used in this priority:
+OCR extracts text from images and scanned PDFs using **oneocr.dll**
+(the native OCR engine from the Windows 11 Snipping Tool).
 
-1. **Baidu Cloud OCR** (recommended) — unlimited quota (free 1000 calls/day
-   + paid plans), 50+ languages, mixed Chinese/English supported. No DLL
-   to install, works the moment you enter API credentials.
-2. **oneocr.dll** (local fallback) — the Windows 11 Snipping Tool OCR
-   engine. Free, local, ~5 languages. Requires `get_oneocr.ps1` setup.
-
-### Setting up Baidu Cloud OCR
-
-1. Sign up at **https://cloud.baidu.com** (free).
-2. Go to **Console → Artificial Intelligence → 文字识别 (OCR)**.
-3. Click **创建应用** (Create Application) and fill in any name/description.
-4. Note the **API Key** and **Secret Key** shown on the app detail page.
-5. In DocuSearch: open **Settings → OCR** and paste both keys.
-6. Click **Test Connection** to verify. The status bar should now show
-   **OCR: Baidu** (green).
-
-### Setting up oneocr (fallback)
+### One-time setup
 
 ```powershell
 .\scripts\get_oneocr.ps1
@@ -174,22 +156,23 @@ Snipping Tool into the DocuSearch folder. See
 
 1. Click a search result (or any file in the results list).
 2. Click the green **OCR** button in the preview pane.
-3. Wait — OCR takes 1-5 seconds per image (Baidu is faster than oneocr).
+3. Wait — OCR takes 1-5 seconds per image, longer for multi-page PDFs.
 4. Recognized text appears in the preview pane.
 
 ### OCR status indicator
 
 The status bar at the bottom shows the current OCR status:
-- 🟢 **OCR: Baidu** — Baidu Cloud OCR is configured (unlimited).
-- 🟢 **OCR: Ready** — local oneocr.dll is installed.
-- 🟡 **OCR: Setup Required** — no OCR engine available. Click for setup help.
+- 🟢 **OCR: Ready** — oneocr is installed and ready.
+- 🟡 **OCR: Setup Required** — oneocr is not installed. Click the
+  indicator for install instructions.
 
 ### Supported languages
 
-- **Baidu**: 50+ languages including English, Chinese (Simplified and
-  Traditional), Japanese, Korean, French, German, Spanish, Russian,
-  Arabic, Hindi, Vietnamese, Thai, and more.
-- **oneocr**: English, Chinese (Simplified & Traditional), Korean, Japanese.
+The oneocr model auto-detects:
+- English
+- Chinese (Simplified & Traditional)
+- Korean
+- Japanese
 
 ---
 

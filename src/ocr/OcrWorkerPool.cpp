@@ -3,12 +3,12 @@
 // ============================================================
 
 #include "OcrWorkerPool.h"
-#include "BaiduOcrEngine.h"
 #include "WindowsOcrEngine.h"
 #include "../core/Logger.h"
 #include "../core/FileUtils.h"
 #include "../core/StringUtils.h"
 #include "../core/Constants.h"
+#include "../core/SehTranslator.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>
@@ -141,28 +141,17 @@ void OcrWorkerPool::shutdown() {
 void OcrWorkerPool::onWorkerFinished() {}
 
 void OcrWorkerPool::workerLoop(int workerId) {
-    // OCR engine selection — prefer Baidu (if API key configured), fall
-    // back to oneocr (local, requires setup).
-    //
-    // Baidu: unlimited quota (free 1000/day + paid), 50+ languages, no DLL.
-    // oneocr: local, free, ~5 languages, requires get_oneocr.ps1 setup.
-    BaiduOcrEngine baiduEngine;
-    bool useBaidu = baiduEngine.init() && baiduEngine.isConfigured();
+    // CRITICAL: install the SEH translator ON THIS THREAD.
+    // _set_se_translator() is per-thread — main() only installs it on the
+    // main thread. Without this, an access violation while parsing OCR
+    // output (or anywhere else on this thread) would crash the process.
+    installSehTranslator();
 
-    WindowsOcrEngine oneocrEngine;
-    bool useOneocr = false;
-    if (!useBaidu) {
-        DS_INFO("OCR", QString("Worker %1: Baidu OCR not configured, "
-                                "using local oneocr.dll").arg(workerId));
-        useOneocr = oneocrEngine.init() && oneocrEngine.isOneocrAvailable();
-        if (!useOneocr) {
-            DS_ERROR("OCR", QString("Worker %1: No OCR engine available "
-                                    "(neither Baidu nor oneocr)").arg(workerId));
-            return;
-        }
-    } else {
-        DS_INFO("OCR", QString("Worker %1: Using Baidu OCR (unlimited)")
-                          .arg(workerId));
+    // oneocr.dll engine — local, free, no setup needed beyond get_oneocr.ps1.
+    WindowsOcrEngine engine;
+    if (!engine.init()) {
+        DS_ERROR("OCR", QString("Worker %1: oneocr init failed; exiting").arg(workerId));
+        return;
     }
 
     QElapsedTimer cpuTimer;
@@ -207,20 +196,17 @@ void OcrWorkerPool::workerLoop(int workerId) {
         QString text;
         try {
             if (FileUtils::hasExtension(task.path, Constants::kImageExtensions)) {
-                // Prefer Baidu; fall back to oneocr on failure.
-                if (useBaidu) {
-                    text = baiduEngine.ocrFile(task.path);
-                }
-                if (text.isEmpty() && useOneocr) {
-                    text = oneocrEngine.ocrFile(task.path);
-                }
+                text = engine.ocrFile(task.path);
                 if (!text.isEmpty()) ok = true;
             } else {
-                // PDF page rasterization is handled separately (out of scope here).
                 ok = false;
             }
         } catch (const std::exception& e) {
             DS_ERROR("OCR", QString("Exception on %1: %2").arg(task.path, e.what()));
+            ok = false;
+        } catch (...) {
+            // SEH-translated or unknown — log + continue.
+            DS_ERROR("OCR", QString("Unknown exception on %1").arg(task.path));
             ok = false;
         }
 
