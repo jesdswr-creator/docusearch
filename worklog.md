@@ -660,3 +660,70 @@ Stage Summary:
   subtitle, indexed dot, "Indexed" header label, "Total size" label,
   "Last indexed" label, two-line file-count text.
 - Working tree clean. Ready for commit + CI verification.
+
+---
+Task ID: 10
+Agent: main
+Task: Continue audit — verify destructor + thread cleanup, Poppler thread-safety, final sanity check
+
+Work Log:
+- AUDIT 1: MainWindow destructor + closeEvent cleanup.
+  - FOUND BUG: ~MainWindow() didn't cancel or wait for the ExtractionWorker
+    thread. If the user closed the app while extraction was running, the
+    worker thread kept writing to the SQLite handle after db_->close()
+    returned — guaranteed crash (use-after-free on sqlite3*).
+  - Same issue applied to closeEvent(): no user confirmation for in-progress
+    extraction (only for indexing).
+  - FIX: ~MainWindow() now:
+      1. autoScanTimer_->stop()
+      2. extractionWorker_->cancelExtraction()  (sets cancel flag)
+      3. extractionThread_->quit() + wait(5000)  (graceful)
+      4. extractionThread_->terminate() + wait(2000)  (force if needed)
+      5. delete extractionThread_; null both pointers
+      6. THEN indexer_->stopIndexing(), ocrPool_->shutdown(), watcher_->stop()
+      7. THEN db_->close()  (last — after all writers are stopped)
+  - FIX: closeEvent() now asks "Extraction in progress. Quit anyway?"
+    before allowing close (same pattern as the existing indexer prompt).
+  - Commit: 34c488f
+
+- AUDIT 2: Settings dialog simplification review.
+  - Counted tabs: 5 (Indexing, Performance, AI Search, Saved Searches,
+    Backup & Restore). All clean — no clutter to remove.
+  - Verified that hidden widgets (tessdataEdit_, langCombo_, darkModeCheck_)
+    are correctly marked setVisible(false). They exist only for settings
+    I/O compatibility.
+  - No additional cleanup needed.
+
+- AUDIT 3: Poppler thread-safety verification.
+  - PdfExtractor::extract() creates a fresh poppler::document per call —
+    no shared state across calls.
+  - DocxExtractor, XlsxExtractor, PptxExtractor use minizip which is
+    thread-safe for separate archive handles.
+  - With the SEH translator now installed on worker threads (Task ID 9),
+    any in-process Poppler/minizip crash on a malformed file is caught
+    by catch(...) instead of taking down the process.
+  - No additional fixes needed.
+
+- AUDIT 4: Q_DECLARE_METATYPE + qRegisterMetaType.
+  - Confirmed both are present:
+    * Q_DECLARE_METATYPE(DocuSearch::ExtractionResult) in ExtractionWorker.h
+    * qRegisterMetaType<ExtractionResult> in main.cpp (registered twice —
+      once with namespace prefix, once without, for safety)
+  - Required for queued signal/slot delivery from worker → main thread.
+  - No additional fixes needed.
+
+- AUDIT 5: Final sanity check.
+  - No Baidu/WinRT code references in src/ or build files (only legacy
+    comments describing what the previous WinRT impl was — those are
+    accurate documentation, not active code).
+  - indexedHeaderLbl_ + titleBarSubtitle_ declarations exist in MainWindow.h
+    but are never instantiated/accessed (left as nullptr). Safe — minimal
+    diff for future cleanup.
+  - All SettingsDialog tabs are properly added and the dialog closes cleanly.
+
+Stage Summary:
+- Second crash source FIXED: destructor now properly tears down the
+  extraction worker thread before closing the database. Without this fix,
+  closing the app during active extraction would crash (use-after-free).
+- All four audits complete. No further issues found.
+- Working tree clean. Ready for CI verification.
