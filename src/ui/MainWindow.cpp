@@ -1670,18 +1670,21 @@ void MainWindow::onExtract() {
                     sqlite3_finalize(ins);
                 }
 
-                // Generate BGE embedding for this document.
-                // Use simple embedDocument (single embedding) during extraction
-                // for speed. Chunked embeddings can be generated later via
-                // the "Generate AI Embeddings" button in Settings.
-                // embedDocumentChunked was crashing because it does up to 50
-                // ONNX inference calls (50 × 20ms = 1s) on the main thread,
-                // blocking the UI and causing apparent crashes.
-                if (bgeService_ && bgeService_->isReady()) {
-                    try {
-                        bgeService_->embedDocument(item.fileId, extractedText);
-                    } catch (...) {}
-                }
+                // NOTE: BGE embedding generation during extraction is DISABLED.
+                // Calling bgeService_->embedDocument() here runs ONNX inference
+                // on the main thread — that was the crash source. The catch(...)
+                // below catches C++ exceptions but NOT SEH exceptions, and ONNX
+                // Runtime can raise SEH (access violations) on certain inputs.
+                //
+                // Users can generate embeddings on-demand via the
+                // "Generate AI Embeddings" button in Settings → AI Search,
+                // which runs in a proper background thread.
+                //
+                // if (bgeService_ && bgeService_->isReady()) {
+                //     try {
+                //         bgeService_->embedDocument(item.fileId, extractedText);
+                //     } catch (...) {}
+                // }
 
                 ++state->done;
             } else if (raw) {
@@ -2319,10 +2322,16 @@ void MainWindow::onFileAdded(const QString& path) {
                                     sqlite3_finalize(ins);
                                 }
 
-                                // Generate BGE embedding for the new file.
-                                if (bgeService_ && bgeService_->isReady()) {
-                                    try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
-                                }
+                                // NOTE: BGE embedding generation during file-add is DISABLED.
+                                // Same reason as in onExtract(): runs ONNX inference on the
+                                // main thread — SEH exceptions from ONNX Runtime bypass
+                                // catch(...) and crash the app.
+                                // Users can generate embeddings via Settings → AI Search →
+                                // "Generate AI Embeddings" (runs in a background thread).
+                                //
+                                // if (bgeService_ && bgeService_->isReady()) {
+                                //     try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
+                                // }
                             }
                         }
                     }
