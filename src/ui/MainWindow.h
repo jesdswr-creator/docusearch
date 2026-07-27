@@ -48,14 +48,7 @@ class FileRepository;
 class SearchEngine;
 class Indexer;
 class OcrWorkerPool;
-class ExtractionWorker;
 class FileWatcher;
-
-// Forward declaration of the struct used in the onExtractionFileDone slot.
-// Full definition lives in src/indexer/ExtractionWorker.h (included by
-// MainWindow.cpp). Forward-declaring here avoids pulling the header into
-// every consumer of MainWindow.h.
-struct ExtractionProgress;
 
 class SearchBar;
 class ResultsPane;
@@ -113,10 +106,6 @@ private slots:
     void onDetectDuplicates();
     void onAddFolder();
     void onExtract();
-    // Extraction worker slots (called via queued connections from the worker thread).
-    void onExtractionFileDone(const ExtractionProgress& result);
-    void onExtractionProgress(int done, int total);
-    void onExtractionFinished(int succeeded, int failed, int total);
     void onRefresh();
     void onFilters();
     void onSidebarClicked(int row);
@@ -230,12 +219,6 @@ public:
     bool            contentExtractionRunning_ = false;
     std::atomic<bool> extractCancelFlag_{false};
 
-    // ── Extraction worker (off-main-thread) ──────────────
-    // Prevents UI freeze during PDF/DOCX/XLSX text extraction.
-    // Worker lives on a dedicated QThread; signals deliver progress
-    // back to the main thread (queued connection).
-    QThread*        extractionThread_     = nullptr;
-    ExtractionWorker* extractionWorker_   = nullptr;
     bool            autoScanRunning_      = false;
     bool            maximized_            = false;
     bool            ocrBtnEnabled_        = true;  // false while OCR is running

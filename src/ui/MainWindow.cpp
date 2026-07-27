@@ -25,7 +25,6 @@
 #include "../search/SearchEngine.h"
 #include "../search/QueryParser.h"
 #include "../indexer/Indexer.h"
-#include "../indexer/ExtractionWorker.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
@@ -400,28 +399,9 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() {
     if (autoScanTimer_) autoScanTimer_->stop();
-
-    // CRITICAL: Cancel + wait for the extraction worker BEFORE closing the DB.
-    // Otherwise the worker thread keeps writing to a closed SQLite handle
-    // after db_->close() returns — guaranteed crash.
-    if (extractionWorker_) {
-        extractionWorker_->cancelExtraction();
-    }
-    if (extractionThread_) {
-        extractionThread_->quit();
-        // Give the worker up to 5 seconds to finish the current file
-        // and emit its finished() signal. If it doesn't, force-terminate.
-        if (!extractionThread_->wait(5000)) {
-            extractionThread_->terminate();
-            extractionThread_->wait(2000);
-        }
-        // The thread is parented to `this` so it would be deleted by Qt's
-        // parent-child mechanism anyway, but delete now to be explicit.
-        delete extractionThread_;
-        extractionThread_   = nullptr;
-        extractionWorker_   = nullptr;  // deleted via deleteLater() in finished()
-    }
-
+    // Cancel any in-progress extraction so the timer callback doesn't
+    // fire on a half-destroyed window.
+    extractCancelFlag_.store(true);
     if (indexer_) indexer_->stopIndexing();
     if (ocrPool_) ocrPool_->shutdown();
     if (watcher_) watcher_->stop();
@@ -438,19 +418,6 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 
     saveSettings();
     if (autoScanTimer_) autoScanTimer_->stop();
-
-    // If extraction is still running, ask the user before quitting.
-    // The destructor will cancel + wait, but better to confirm here so the
-    // user knows their extraction was interrupted.
-    if (contentExtractionRunning_) {
-        const auto rc = QMessageBox::question(
-            this, "Extraction in progress",
-            "Text extraction is still running. Quit anyway?\n"
-            "Already-extracted files will be saved.",
-            QMessageBox::Yes | QMessageBox::No);
-        if (rc != QMessageBox::Yes) { e->ignore(); return; }
-    }
-
     if (indexer_ && indexer_->isRunning()) {
         const auto rc = QMessageBox::question(
             this, "Indexing in progress",
@@ -662,11 +629,10 @@ void MainWindow::buildCentral() {
     resultsPane_->setMaximumWidth(420);
     mainSplitter_->addWidget(resultsPane_);
 
-    // ── Center column: FilePreviewPane (TOP, flex) + PreviewPane (BOTTOM, compact) ──
-    // The FilePreviewPane shows the actual rendered file (PDF/image/text/office).
-    // The existing PreviewPane below shows the extracted text + tabs.
-    // FilePreviewPane gets the lion's share of vertical space (3:1 ratio).
-    // Small 1px gap between them gives a clean visual divider.
+    // ── Center column: FilePreviewPane (TOP) + PreviewPane (BOTTOM) ──
+    // Both panes are user-resizable via the splitter — no forced max height.
+    // Default ratio is 1:1 so users see both the rendered file AND the
+    // extracted text equally. They can drag the splitter handle to adjust.
     auto* centerColumn = new QWidget(mainSplitter_);
     auto* centerColLay = new QVBoxLayout(centerColumn);
     centerColLay->setContentsMargins(0, 0, 0, 0);
@@ -674,15 +640,14 @@ void MainWindow::buildCentral() {
 
     filePreviewPane_ = new FilePreviewPane(centerColumn);
     filePreviewPane_->setObjectName("filePreviewPane");
-    filePreviewPane_->setMinimumHeight(220);
-    centerColLay->addWidget(filePreviewPane_, 3);  // 3/4 of vertical space
+    filePreviewPane_->setMinimumHeight(160);
+    centerColLay->addWidget(filePreviewPane_, 1);
 
     previewPane_ = new PreviewPane(centerColumn);
     previewPane_->setObjectName("previewPane");
     previewPane_->setMinimumWidth(360);
-    previewPane_->setMinimumHeight(100);
-    previewPane_->setMaximumHeight(220);  // slimmer extracted-text pane
-    centerColLay->addWidget(previewPane_, 1);  // 1/4 of vertical space
+    previewPane_->setMinimumHeight(120);
+    centerColLay->addWidget(previewPane_, 1);
 
     mainSplitter_->addWidget(centerColumn);
 
@@ -1471,20 +1436,22 @@ void MainWindow::refreshPreviewForSelectedFile() {
 
 
 // ============================================================
-// Extraction — runs entirely on a worker thread to keep the UI alive.
+// Extraction — timer-based, runs on the main thread but yields between
+// files so the UI stays responsive. Reverted from the worker-thread
+// approach (which had Poppler/minizip thread-safety crashes).
 // ============================================================
 void MainWindow::onExtract() {
     if (!repo_ || !db_) return;
-
-    // ── Toggle cancel if a batch is already running ───────────────
     if (contentExtractionRunning_) {
-        if (extractionWorker_) extractionWorker_->cancelExtraction();
+        // Toggle cancel if already running.
+        extractCancelFlag_.store(true);
         statusBar()->showMessage("Cancelling extraction...", 3000);
         return;
     }
 
-    // ── Gather files needing extraction ───────────────────────────
-    QList<ExtractionTodoItem> todo;
+    // Gather files needing content extraction.
+    struct TodoItem { qint64 fileId; QString path; QString ext; };
+    QList<TodoItem> todo;
     {
         sqlite3* raw = db_->raw();
         if (!raw) return;
@@ -1500,7 +1467,7 @@ void MainWindow::onExtract() {
             "ORDER BY id;";
         if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
             while (sqlite3_step(s) == SQLITE_ROW) {
-                ExtractionTodoItem it;
+                TodoItem it;
                 it.fileId = sqlite3_column_int64(s, 0);
                 const unsigned char* p = sqlite3_column_text(s, 1);
                 const unsigned char* e = sqlite3_column_text(s, 2);
@@ -1513,100 +1480,267 @@ void MainWindow::onExtract() {
     }
 
     if (todo.isEmpty()) {
+        // Show detailed extraction status instead of a generic message.
         try {
-            statusBar()->showMessage(getExtractionStatusString(), 5000);
+            QString statusMsg = getExtractionStatusString();
+            statusBar()->showMessage(statusMsg, 5000);
         } catch (...) {
             statusBar()->showMessage("All files extracted.", 3000);
         }
         return;
     }
 
-    // ── Set up the worker + thread ────────────────────────────────
     contentExtractionRunning_ = true;
-    if (searchBar_) searchBar_->setExtracting(true);
-
+    extractCancelFlag_.store(false);
+    if (searchBar_) searchBar_->setExtracting(true);  // Phase 1.4: button shows "Cancel"
     const int total = todo.size();
+    // Task 1: No 30-file session limit — process ALL pending files.
     statusBar()->showMessage(
         QString("Extracting %1 files... (click Extract again to cancel)").arg(total));
 
+    // Show progress bar
     if (extractionProgressBar_) {
         extractionProgressBar_->setRange(0, total);
         extractionProgressBar_->setValue(0);
         extractionProgressBar_->setVisible(true);
     }
 
-    // Tear down any previous worker/thread.
-    if (extractionThread_) {
-        extractionThread_->quit();
-        extractionThread_->wait(2000);
-        delete extractionThread_;
-        extractionThread_ = nullptr;
-    }
+    struct ExtractState {
+        QList<TodoItem> todo;
+        int idx = 0;
+        int done = 0;
+        int failed = 0;
+    };
+    auto state = QSharedPointer<ExtractState>::create();
+    state->todo = std::move(todo);
 
-    extractionThread_ = new QThread(this);
-    extractionWorker_ = new ExtractionWorker();  // no parent — moved to thread
+    // Task 1: Use 10ms timer instead of 200ms. Adaptive CPU throttle
+    // (see below) handles pacing — no fixed delay needed.
+    auto* timer = new QTimer(this);
+    timer->setInterval(10);
+    timer->setSingleShot(false);
 
-    // Configure the worker.
-    // Note: BGE embedding generation during extraction was disabled earlier
-    // (caused main-thread freezes). Embeddings are generated on-demand via
-    // the Settings → Semantic Search → "Generate embeddings" button.
-    extractionWorker_->setTodo(todo, db_->path(), /*generateEmbeddings=*/false);
+    connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
+      try {
+        // Check cancel flag.
+        if (extractCancelFlag_.load()) {
+            timer->stop();
+            timer->deleteLater();
+            contentExtractionRunning_ = false;
+            extractCancelFlag_.store(false);
+            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4: button shows "Extract"
+            updateIndexStats();
+            refreshPreviewForSelectedFile();
+            statusBar()->showMessage(
+                QString("Extraction cancelled (%1/%2 completed).")
+                    .arg(state->done + state->failed).arg(total), 8000);
+            return;
+        }
 
-    extractionWorker_->moveToThread(extractionThread_);
+        auto& registry = DocumentExtractorRegistry::instance();
+        sqlite3* raw = db_->raw();
 
-    // Wire signals (queued automatically because worker lives on another thread).
-    connect(extractionThread_, &QThread::started,
-            extractionWorker_, &ExtractionWorker::run);
-    connect(extractionWorker_, &ExtractionWorker::fileExtracted,
-            this, &MainWindow::onExtractionFileDone, Qt::QueuedConnection);
-    connect(extractionWorker_, &ExtractionWorker::progress,
-            this, &MainWindow::onExtractionProgress, Qt::QueuedConnection);
-    connect(extractionWorker_, &ExtractionWorker::finished,
-            this, &MainWindow::onExtractionFinished, Qt::QueuedConnection);
+        if (state->idx >= total) {
+            timer->stop();
+            timer->deleteLater();
+            contentExtractionRunning_ = false;
+            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4
+            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
+            updateIndexStats();
+            refreshPreviewForSelectedFile();
+            statusBar()->showMessage(
+                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+                    .arg(state->done).arg(state->failed).arg(total), 8000);
+            return;
+        }
 
-    // Auto-cleanup when done.
-    connect(extractionWorker_, &ExtractionWorker::finished,
-            extractionThread_, &QThread::quit);
-    connect(extractionWorker_, &ExtractionWorker::finished,
-            extractionWorker_, &QObject::deleteLater);
-    connect(extractionThread_, &QThread::finished,
-            extractionThread_, &QObject::deleteLater);
-    connect(extractionThread_, &QThread::finished,
-            this, [this]() { extractionThread_ = nullptr; extractionWorker_ = nullptr; });
-
-    extractionThread_->start();
-}
-
-void MainWindow::onExtractionFileDone(const ExtractionProgress& result) {
-    // Optional: log failures to the status bar.
-    if (!result.ok && !result.missingFile && !result.skippedTooLarge) {
-        DS_DEBUG("Extract", QString("File %1 failed: %2")
-                 .arg(result.filename).arg(result.errorMessage));
-    }
-}
-
-void MainWindow::onExtractionProgress(int done, int total) {
-    if (extractionProgressBar_) {
-        extractionProgressBar_->setValue(done);
-    }
-    if (done % 5 == 0 || done == total) {
+        const auto& item = state->todo[state->idx];
+        QFileInfo fi(item.path);
         statusBar()->showMessage(
-            QString("Extracting: %1/%2...").arg(done).arg(total));
-    }
+            QString("Extracting: %1 (%2/%3)...")
+                .arg(fi.fileName()).arg(state->idx + 1).arg(total));
+        if (extractionProgressBar_) extractionProgressBar_->setValue(state->idx + 1);
+
+        if (!QFileInfo::exists(item.path)) {
+            if (raw) {
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+            }
+            ++state->failed;
+        } else {
+            // Skip files that are too large (protects low-end systems).
+            if (fi.size() > Constants::kMaxFilesizeToExtract) {
+                if (raw) {
+                    sqlite3_exec(raw,
+                        QString("UPDATE Files SET indexing_status='skipped' WHERE id=%1;")
+                            .arg(item.fileId).toUtf8().constData(),
+                        nullptr, nullptr, nullptr);
+                }
+                ++state->failed;
+            } else {
+
+            QString extractedText;
+            QString source = "native";
+            bool ok = false;
+
+            try {
+                auto result = registry.extractByExtension(item.path, item.ext);
+                extractedText = result.text;
+                source = result.source.isEmpty() ? "native" : result.source;
+                ok = true;
+
+                if (result.needsOcr && extractedText.isEmpty()) {
+                    if (raw) {
+                        sqlite3_exec(raw,
+                            QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
+                                .arg(item.fileId).toUtf8().constData(),
+                            nullptr, nullptr, nullptr);
+                    }
+                    ++state->done;
+                    ok = false;
+                }
+            } catch (const std::exception& e) {
+                DS_WARN("Extract", QString("Failed: %1 — %2").arg(item.path).arg(e.what()));
+                ok = false;
+            } catch (...) {
+                ok = false;
+            }
+
+            if (ok && extractedText.size() > Constants::kMaxExtractTextChars) {
+                extractedText = extractedText.left(Constants::kMaxExtractTextChars) + "\n\n[... text truncated for memory ...]";
+            }
+
+            if (ok && !extractedText.isEmpty() && raw) {
+                QByteArray textBytes = extractedText.toUtf8();
+                QByteArray srcBytes = source.toUtf8();
+                qint64 charCount = extractedText.size();
+                qint64 now = QDateTime::currentSecsSinceEpoch();
+
+                sqlite3_stmt* upd = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5) "
+                    "ON CONFLICT(file_id) DO UPDATE SET "
+                    "  extracted_text=excluded.extracted_text, "
+                    "  text_source=excluded.text_source, "
+                    "  char_count=excluded.char_count, "
+                    "  updated_at=excluded.updated_at;",
+                    -1, &upd, nullptr);
+                if (upd) {
+                    sqlite3_bind_int64(upd, 1, item.fileId);
+                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 4, charCount);
+                    sqlite3_bind_int64(upd, 5, now);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
+                }
+
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+
+                sqlite3_stmt* del = nullptr;
+                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
+                                   -1, &del, nullptr);
+                if (del) {
+                    sqlite3_bind_int64(del, 1, item.fileId);
+                    sqlite3_step(del);
+                    sqlite3_finalize(del);
+                }
+
+                QByteArray fn = fi.fileName().toUtf8();
+                QByteArray pth = item.path.toUtf8();
+                QByteArray ext = item.ext.toUtf8();
+                sqlite3_stmt* ins = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5);",
+                    -1, &ins, nullptr);
+                if (ins) {
+                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(ins, 5, item.fileId);
+                    sqlite3_step(ins);
+                    sqlite3_finalize(ins);
+                }
+
+                // Generate BGE embedding for this document.
+                // Use simple embedDocument (single embedding) during extraction
+                // for speed. Chunked embeddings can be generated later via
+                // the "Generate AI Embeddings" button in Settings.
+                // embedDocumentChunked was crashing because it does up to 50
+                // ONNX inference calls (50 × 20ms = 1s) on the main thread,
+                // blocking the UI and causing apparent crashes.
+                if (bgeService_ && bgeService_->isReady()) {
+                    try {
+                        bgeService_->embedDocument(item.fileId, extractedText);
+                    } catch (...) {}
+                }
+
+                ++state->done;
+            } else if (raw) {
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
+                        .arg(item.fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+                ++state->failed;
+            } else {
+                ++state->failed;
+            }
+            }  // close the else (file not too large)
+        }
+
+        // Task 1: Adaptive CPU throttle via GetSystemTimes().
+        // If CPU usage > 85%, sleep 100ms to let the system cool down.
+        // If <= 85%, proceed immediately (no fixed delay).
+#ifdef _WIN32
+        {
+            static FILETIME prevIdle = {}, prevKernel = {}, prevUser = {};
+            FILETIME idle, kernel, user;
+            if (GetSystemTimes(&idle, &kernel, &user)) {
+                ULARGE_INTEGER idleDiff, kernelDiff, userDiff;
+                ULARGE_INTEGER prevIdleLi, prevKernelLi, prevUserLi;
+                prevIdleLi.QuadPart = (static_cast<ULONGLONG>(prevIdle.dwHighDateTime) << 32) | prevIdle.dwLowDateTime;
+                prevKernelLi.QuadPart = (static_cast<ULONGLONG>(prevKernel.dwHighDateTime) << 32) | prevKernel.dwLowDateTime;
+                prevUserLi.QuadPart = (static_cast<ULONGLONG>(prevUser.dwHighDateTime) << 32) | prevUser.dwLowDateTime;
+                idleDiff.QuadPart = (static_cast<ULONGLONG>(idle.dwHighDateTime) << 32) | idle.dwLowDateTime;
+                kernelDiff.QuadPart = (static_cast<ULONGLONG>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
+                userDiff.QuadPart = (static_cast<ULONGLONG>(user.dwHighDateTime) << 32) | user.dwLowDateTime;
+
+                ULONGLONG totalDiff = (kernelDiff.QuadPart - prevKernelLi.QuadPart) +
+                                      (userDiff.QuadPart - prevUserLi.QuadPart);
+                ULONGLONG idleDiffVal = idleDiff.QuadPart - prevIdleLi.QuadPart;
+                if (totalDiff > 0) {
+                    double cpuUsage = 1.0 - static_cast<double>(idleDiffVal) / totalDiff;
+                    if (cpuUsage > 0.85) {
+                        Sleep(100);  // throttle: CPU > 85%
+                    }
+                }
+                prevIdle = idle;
+                prevKernel = kernel;
+                prevUser = user;
+            }
+        }
+#endif
+
+        ++state->idx;
+      } catch (const std::exception& e) {
+          statusBar()->showMessage(QString("Extraction error: %1").arg(e.what()), 5000);
+          ++state->idx;
+      } catch (...) {
+          statusBar()->showMessage("Extraction error — skipping file.", 3000);
+          ++state->idx;
+      }
+    });
+
+    timer->start();
 }
-
-void MainWindow::onExtractionFinished(int succeeded, int failed, int total) {
-    contentExtractionRunning_ = false;
-    if (searchBar_) searchBar_->setExtracting(false);
-    if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
-    updateIndexStats();
-    refreshPreviewForSelectedFile();
-
-    statusBar()->showMessage(
-        QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-            .arg(succeeded).arg(failed).arg(total), 8000);
-}
-
 
 void MainWindow::autoScanIndexedFolders() {
     if (!repo_ || !db_) return;

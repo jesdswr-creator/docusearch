@@ -19,9 +19,6 @@
 #include <QIcon>
 #include <QThread>
 #include <QThreadPool>
-#include <QMetaType>
-
-#include "indexer/ExtractionWorker.h"
 
 using namespace DocuSearch;
 
@@ -54,11 +51,6 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
-
-    // Register ExtractionProgress for queued signal/slot connections
-    // (ExtractionWorker → MainWindow runs across threads).
-    qRegisterMetaType<DocuSearch::ExtractionProgress>("DocuSearch::ExtractionProgress");
-    qRegisterMetaType<DocuSearch::ExtractionProgress>("ExtractionProgress");
 
     // Set the application window icon. This makes the icon appear in:
     //   * The title bar of the main window

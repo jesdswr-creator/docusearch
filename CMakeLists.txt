@@ -218,7 +218,6 @@ set(APP_SOURCES
     src/indexer/MetadataIndexer.cpp
     src/indexer/ContentIndexer.cpp
     src/indexer/PriorityScheduler.cpp
-    src/indexer/ExtractionWorker.cpp
     src/indexer/Indexer.cpp
     # search
     src/search/QueryParser.cpp
@@ -282,7 +281,6 @@ set(APP_HEADERS
     src/indexer/MetadataIndexer.h
     src/indexer/ContentIndexer.h
     src/indexer/PriorityScheduler.h
-    src/indexer/ExtractionWorker.h
     src/indexer/Indexer.h
     src/search/QueryParser.h
     src/search/SearchEngine.h
