@@ -1494,13 +1494,19 @@ void MainWindow::onExtract() {
     extractCancelFlag_.store(false);
     if (searchBar_) searchBar_->setExtracting(true);  // Phase 1.4: button shows "Cancel"
     const int total = todo.size();
-    // Task 1: No 30-file session limit — process ALL pending files.
+    // Restore the 30-file batch limit. Processing all pending files in one
+    // go was unstable (large batches + 10ms timer interval → memory pressure
+    // + UI event starvation → crashes). The 30-file batch + 200ms interval
+    // was the original stable behavior. User clicks Extract again to
+    // continue with the next 30.
+    const int maxFilesThisSession = qMin(total, 30);
     statusBar()->showMessage(
-        QString("Extracting %1 files... (click Extract again to cancel)").arg(total));
+        QString("Extracting %1 of %2 files... (click Extract again to cancel)")
+            .arg(maxFilesThisSession).arg(total));
 
     // Show progress bar
     if (extractionProgressBar_) {
-        extractionProgressBar_->setRange(0, total);
+        extractionProgressBar_->setRange(0, maxFilesThisSession);
         extractionProgressBar_->setValue(0);
         extractionProgressBar_->setVisible(true);
     }
@@ -1514,13 +1520,14 @@ void MainWindow::onExtract() {
     auto state = QSharedPointer<ExtractState>::create();
     state->todo = std::move(todo);
 
-    // Task 1: Use 10ms timer instead of 200ms. Adaptive CPU throttle
-    // (see below) handles pacing — no fixed delay needed.
+    // 200ms between files — gives the UI time to process events between
+    // heavy extractions. The 10ms interval was too aggressive and caused
+    // event starvation on large batches.
     auto* timer = new QTimer(this);
-    timer->setInterval(10);
+    timer->setInterval(200);
     timer->setSingleShot(false);
 
-    connect(timer, &QTimer::timeout, this, [this, timer, total, state]() {
+    connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
       try {
         // Check cancel flag.
         if (extractCancelFlag_.load()) {
@@ -1540,7 +1547,7 @@ void MainWindow::onExtract() {
         auto& registry = DocumentExtractorRegistry::instance();
         sqlite3* raw = db_->raw();
 
-        if (state->idx >= total) {
+        if (state->idx >= total || state->idx >= maxFilesThisSession) {
             timer->stop();
             timer->deleteLater();
             contentExtractionRunning_ = false;
@@ -1548,9 +1555,15 @@ void MainWindow::onExtract() {
             if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
             updateIndexStats();
             refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                    .arg(state->done).arg(state->failed).arg(total), 8000);
+            if (state->idx >= total) {
+                statusBar()->showMessage(
+                    QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
+                        .arg(state->done).arg(state->failed).arg(total), 8000);
+            } else {
+                statusBar()->showMessage(
+                    QString("Extracted %1 of %2 files. Click Extract again to continue.")
+                        .arg(state->done + state->failed).arg(total), 8000);
+            }
             return;
         }
 
@@ -1558,7 +1571,7 @@ void MainWindow::onExtract() {
         QFileInfo fi(item.path);
         statusBar()->showMessage(
             QString("Extracting: %1 (%2/%3)...")
-                .arg(fi.fileName()).arg(state->idx + 1).arg(total));
+                .arg(fi.fileName()).arg(state->idx + 1).arg(maxFilesThisSession));
         if (extractionProgressBar_) extractionProgressBar_->setValue(state->idx + 1);
 
         if (!QFileInfo::exists(item.path)) {
@@ -1699,38 +1712,11 @@ void MainWindow::onExtract() {
             }  // close the else (file not too large)
         }
 
-        // Task 1: Adaptive CPU throttle via GetSystemTimes().
-        // If CPU usage > 85%, sleep 100ms to let the system cool down.
-        // If <= 85%, proceed immediately (no fixed delay).
-#ifdef _WIN32
-        {
-            static FILETIME prevIdle = {}, prevKernel = {}, prevUser = {};
-            FILETIME idle, kernel, user;
-            if (GetSystemTimes(&idle, &kernel, &user)) {
-                ULARGE_INTEGER idleDiff, kernelDiff, userDiff;
-                ULARGE_INTEGER prevIdleLi, prevKernelLi, prevUserLi;
-                prevIdleLi.QuadPart = (static_cast<ULONGLONG>(prevIdle.dwHighDateTime) << 32) | prevIdle.dwLowDateTime;
-                prevKernelLi.QuadPart = (static_cast<ULONGLONG>(prevKernel.dwHighDateTime) << 32) | prevKernel.dwLowDateTime;
-                prevUserLi.QuadPart = (static_cast<ULONGLONG>(prevUser.dwHighDateTime) << 32) | prevUser.dwLowDateTime;
-                idleDiff.QuadPart = (static_cast<ULONGLONG>(idle.dwHighDateTime) << 32) | idle.dwLowDateTime;
-                kernelDiff.QuadPart = (static_cast<ULONGLONG>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
-                userDiff.QuadPart = (static_cast<ULONGLONG>(user.dwHighDateTime) << 32) | user.dwLowDateTime;
-
-                ULONGLONG totalDiff = (kernelDiff.QuadPart - prevKernelLi.QuadPart) +
-                                      (userDiff.QuadPart - prevUserLi.QuadPart);
-                ULONGLONG idleDiffVal = idleDiff.QuadPart - prevIdleLi.QuadPart;
-                if (totalDiff > 0) {
-                    double cpuUsage = 1.0 - static_cast<double>(idleDiffVal) / totalDiff;
-                    if (cpuUsage > 0.85) {
-                        Sleep(100);  // throttle: CPU > 85%
-                    }
-                }
-                prevIdle = idle;
-                prevKernel = kernel;
-                prevUser = user;
-            }
-        }
-#endif
+        // The 200ms timer interval already provides CPU relief between
+        // extractions. The previous adaptive CPU throttle (GetSystemTimes +
+        // Sleep(100) on the main thread) was removed — it blocked the UI
+        // for an extra 100ms per file and wasn't necessary with the 30-file
+        // batch limit.
 
         ++state->idx;
       } catch (const std::exception& e) {
@@ -2205,6 +2191,16 @@ void MainWindow::onResumeIndexing() {
 void MainWindow::onIndexingProgress(const DocuSearch::IndexingProgress& p) {
     try {
         if (indexingWidget_) indexingWidget_->update(p);
+
+        // Refresh the indexed-file counter in the top-right badge + status
+        // bar. Throttle to every 5th file to avoid DB hammering.
+        // (p.filesScanned is the running count from the Indexer.)
+        static qint64 lastRefreshAt = -1;
+        const qint64 current = p.filesScanned.load();
+        if (current == 0 || current - lastRefreshAt >= 5) {
+            updateIndexStats();
+            lastRefreshAt = current;
+        }
     } catch (...) {}
 }
 
@@ -2220,7 +2216,11 @@ void MainWindow::onIndexingStarted() {
 }
 
 void MainWindow::onIndexingFinished() {
-    try { statusBar()->showMessage("Indexing finished.", 5000); } catch (...) {}
+    try {
+        statusBar()->showMessage("Indexing finished.", 5000);
+        // Final refresh so the badge shows the actual end count.
+        updateIndexStats();
+    } catch (...) {}
 }
 
 // ============================================================
