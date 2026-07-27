@@ -51,6 +51,12 @@ class OcrWorkerPool;
 class ExtractionWorker;
 class FileWatcher;
 
+// Forward declaration of the struct used in the onExtractionFileDone slot.
+// Full definition lives in src/indexer/ExtractionWorker.h (included by
+// MainWindow.cpp). Forward-declaring here avoids pulling the header into
+// every consumer of MainWindow.h.
+struct ExtractionProgress;
+
 class SearchBar;
 class ResultsPane;
 class PreviewPane;
