@@ -400,6 +400,28 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() {
     if (autoScanTimer_) autoScanTimer_->stop();
+
+    // CRITICAL: Cancel + wait for the extraction worker BEFORE closing the DB.
+    // Otherwise the worker thread keeps writing to a closed SQLite handle
+    // after db_->close() returns — guaranteed crash.
+    if (extractionWorker_) {
+        extractionWorker_->cancelExtraction();
+    }
+    if (extractionThread_) {
+        extractionThread_->quit();
+        // Give the worker up to 5 seconds to finish the current file
+        // and emit its finished() signal. If it doesn't, force-terminate.
+        if (!extractionThread_->wait(5000)) {
+            extractionThread_->terminate();
+            extractionThread_->wait(2000);
+        }
+        // The thread is parented to `this` so it would be deleted by Qt's
+        // parent-child mechanism anyway, but delete now to be explicit.
+        delete extractionThread_;
+        extractionThread_   = nullptr;
+        extractionWorker_   = nullptr;  // deleted via deleteLater() in finished()
+    }
+
     if (indexer_) indexer_->stopIndexing();
     if (ocrPool_) ocrPool_->shutdown();
     if (watcher_) watcher_->stop();
@@ -416,6 +438,19 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 
     saveSettings();
     if (autoScanTimer_) autoScanTimer_->stop();
+
+    // If extraction is still running, ask the user before quitting.
+    // The destructor will cancel + wait, but better to confirm here so the
+    // user knows their extraction was interrupted.
+    if (contentExtractionRunning_) {
+        const auto rc = QMessageBox::question(
+            this, "Extraction in progress",
+            "Text extraction is still running. Quit anyway?\n"
+            "Already-extracted files will be saved.",
+            QMessageBox::Yes | QMessageBox::No);
+        if (rc != QMessageBox::Yes) { e->ignore(); return; }
+    }
+
     if (indexer_ && indexer_->isRunning()) {
         const auto rc = QMessageBox::question(
             this, "Indexing in progress",
