@@ -22,6 +22,11 @@
 //
 // The main thread NEVER blocks on extraction — only on the
 // (microsecond) signal/slot dispatch.
+//
+// NOTE: This struct is named `ExtractionProgress` (not `ExtractionResult`)
+// to avoid a name collision with the existing `DocuSearch::ExtractionResult`
+// defined in src/documents/IDocumentExtractor.h (which is the value
+// returned by extractByExtension).
 // ============================================================
 
 #include <QObject>
@@ -38,8 +43,10 @@ struct ExtractionTodoItem {
     QString ext;
 };
 
-// Result of a single file extraction — emitted via fileExtracted().
-struct ExtractionResult {
+// Progress update for a single file — emitted via fileExtracted().
+// Distinct from ExtractionResult (the return type of extractByExtension)
+// — this struct carries file metadata + status flags for the UI.
+struct ExtractionProgress {
     qint64   fileId        = 0;
     QString  path;
     QString  filename;
@@ -66,7 +73,7 @@ public:
     // Cooperative cancel flag — checked between files. Main thread
     // calls cancelExtraction() (thread-safe).
     void cancelExtraction();
-    bool isCancelled() const { return cancelFlag_.load(); }
+    bool isCancelled() const { return cancelFlag_.loadRelaxed() != 0; }
 
 public slots:
     // Entry point — runs on the worker thread. Emits signals as it goes.
@@ -74,7 +81,7 @@ public slots:
 
 signals:
     // Emitted after each file is processed (queued connection → main thread).
-    void fileExtracted(const DocuSearch::ExtractionResult& result);
+    void fileExtracted(const DocuSearch::ExtractionProgress& result);
 
     // Emitted periodically with (done, total).
     void progress(int done, int total);
@@ -93,5 +100,5 @@ private:
 
 // Required for Qt's queued signal/slot connections across threads.
 // Without this, the fileExtracted() signal will fail to deliver
-// ExtractionResult from the worker thread to the main thread at runtime.
-Q_DECLARE_METATYPE(DocuSearch::ExtractionResult)
+// ExtractionProgress from the worker thread to the main thread at runtime.
+Q_DECLARE_METATYPE(DocuSearch::ExtractionProgress)

@@ -29,7 +29,7 @@ void ExtractionWorker::setTodo(const QList<ExtractionTodoItem>& todo,
 }
 
 void ExtractionWorker::cancelExtraction() {
-    cancelFlag_.store(1);
+    cancelFlag_.storeRelaxed(1);
 }
 
 // ── Main loop ────────────────────────────────────────────────
@@ -69,11 +69,11 @@ void ExtractionWorker::run() {
     int failed    = 0;
 
     for (int i = 0; i < total; ++i) {
-        if (cancelFlag_.load()) break;
+        if (cancelFlag_.loadRelaxed()) break;
 
         const auto& item = todo_[i];
         QFileInfo fi(item.path);
-        ExtractionResult result;
+        ExtractionProgress result;
         result.fileId   = item.fileId;
         result.path     = item.path;
         result.filename = fi.fileName();

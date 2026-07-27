@@ -108,7 +108,7 @@ private slots:
     void onAddFolder();
     void onExtract();
     // Extraction worker slots (called via queued connections from the worker thread).
-    void onExtractionFileDone(const ExtractionResult& result);
+    void onExtractionFileDone(const ExtractionProgress& result);
     void onExtractionProgress(int done, int total);
     void onExtractionFinished(int succeeded, int failed, int total);
     void onRefresh();

@@ -1577,7 +1577,7 @@ void MainWindow::onExtract() {
     extractionThread_->start();
 }
 
-void MainWindow::onExtractionFileDone(const ExtractionResult& result) {
+void MainWindow::onExtractionFileDone(const ExtractionProgress& result) {
     // Optional: log failures to the status bar.
     if (!result.ok && !result.missingFile && !result.skippedTooLarge) {
         DS_DEBUG("Extract", QString("File %1 failed: %2")

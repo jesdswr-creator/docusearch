@@ -55,10 +55,10 @@ int main(int argc, char* argv[]) {
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
 
-    // Register ExtractionResult for queued signal/slot connections
+    // Register ExtractionProgress for queued signal/slot connections
     // (ExtractionWorker → MainWindow runs across threads).
-    qRegisterMetaType<DocuSearch::ExtractionResult>("DocuSearch::ExtractionResult");
-    qRegisterMetaType<DocuSearch::ExtractionResult>("ExtractionResult");
+    qRegisterMetaType<DocuSearch::ExtractionProgress>("DocuSearch::ExtractionProgress");
+    qRegisterMetaType<DocuSearch::ExtractionProgress>("ExtractionProgress");
 
     // Set the application window icon. This makes the icon appear in:
     //   * The title bar of the main window
