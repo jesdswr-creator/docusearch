@@ -69,6 +69,26 @@ void Logger::shutdown() {
 
 void Logger::setMinLevel(LogLevel level) { minLevel_.store(level); }
 
+void Logger::flush() {
+    // Wake the worker thread so it processes the queue.
+    {
+        QMutexLocker lk(&queueMutex_);
+        queueCond_.wakeAll();
+    }
+    // Wait for the queue to drain (up to 2 seconds).
+    for (int i = 0; i < 200; ++i) {
+        bool empty;
+        {
+            QMutexLocker lk(&queueMutex_);
+            empty = queue_.isEmpty();
+        }
+        if (empty) break;
+        QThread::msleep(10);
+    }
+    // Final stream flush.
+    if (stream_) stream_->flush();
+}
+
 void Logger::log(LogLevel level, const QString& category, const QString& message) {
     if (static_cast<int>(level) < static_cast<int>(minLevel_.load())) return;
 

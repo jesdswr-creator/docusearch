@@ -4,6 +4,7 @@
 
 #include "BgeService.h"
 #include "../core/Logger.h"
+#include "../core/SehTranslator.h"
 
 #include <QtConcurrent>
 #include <QFutureWatcher>
@@ -229,6 +230,12 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
     auto* watcher = new QFutureWatcher<void>(this);
     auto future = QtConcurrent::run([this, watcher, engine, database,
                                      fileIds, texts, total]() {
+        // CRITICAL: install the SEH translator ON THIS THREAD.
+        // _set_se_translator() is per-thread; without this, an access
+        // violation inside ONNX Runtime would crash the process instead
+        // of being caught by the catch(...) below.
+        installSehTranslator();
+
         int success = 0, fail = 0;
         for (int i = 0; i < total; ++i) {
             try {

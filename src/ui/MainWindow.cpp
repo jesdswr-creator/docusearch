@@ -1599,10 +1599,25 @@ void MainWindow::onExtract() {
             bool ok = false;
 
             try {
+                // ── BEFORE log: filename + type + size ──────────────────
+                // If the app crashes during extraction, this is the LAST
+                // line in the log — it tells us exactly which file killed it.
+                DS_INFO("Extract",
+                    QString("START file %1/%2: %3 [%4, %5 bytes]")
+                        .arg(state->idx + 1).arg(maxFilesThisSession)
+                        .arg(item.path).arg(item.ext).arg(fi.size()));
+
                 auto result = registry.extractByExtension(item.path, item.ext);
                 extractedText = result.text;
                 source = result.source.isEmpty() ? "native" : result.source;
                 ok = true;
+
+                // ── AFTER log: success + text length ───────────────────
+                DS_INFO("Extract",
+                    QString("DONE  file %1/%2: %3 — %4 chars, source=%5%6")
+                        .arg(state->idx + 1).arg(maxFilesThisSession)
+                        .arg(item.path).arg(extractedText.size()).arg(source)
+                        .arg(result.needsOcr ? " (needs OCR)" : ""));
 
                 if (result.needsOcr && extractedText.isEmpty()) {
                     if (raw) {
@@ -1615,9 +1630,13 @@ void MainWindow::onExtract() {
                     ok = false;
                 }
             } catch (const std::exception& e) {
-                DS_WARN("Extract", QString("Failed: %1 — %2").arg(item.path).arg(e.what()));
+                DS_WARN("Extract", QString("Failed (exception): %1 — %2").arg(item.path).arg(e.what()));
                 ok = false;
             } catch (...) {
+                // Caught SEH-translated or unknown exception. If this was
+                // an SEH (access violation), the sehTranslator already
+                // logged the exception code. Log the file context here.
+                DS_ERROR("Extract", QString("Failed (unknown/SEH): %1").arg(item.path));
                 ok = false;
             }
 

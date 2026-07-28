@@ -66,6 +66,11 @@ public:
     void setMinLevel(LogLevel level);
     LogLevel minLevel() const { return minLevel_.load(); }
 
+    // Synchronously flush all queued log entries to the file.
+    // Called from the crash handler before the process terminates,
+    // so the log file contains the last few entries before the crash.
+    void flush();
+
 signals:
     // UI can connect to render logs in a panel
     void logEntry(const LogEntry& entry);

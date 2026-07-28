@@ -200,6 +200,7 @@ set(APP_SOURCES
     src/core/StringUtils.cpp
     src/core/FileUtils.cpp
     src/core/SehTranslator.cpp
+    src/core/CrashHandler.cpp
     # database
     src/database/Database.cpp
     src/database/Schema.cpp
@@ -266,6 +267,7 @@ set(APP_HEADERS
     src/core/StringUtils.h
     src/core/FileUtils.h
     src/core/SehTranslator.h
+    src/core/CrashHandler.h
     src/database/Database.h
     src/database/Schema.h
     src/database/FileRepository.h
@@ -357,6 +359,7 @@ target_link_libraries(DocuSearch PRIVATE
     Qt6::PrintSupport
     SQLite::SQLite3
     ZLIB::ZLIB
+    dbghelp        # MiniDumpWriteDump for crash handler
 )
 
 # OCR: No RapidOcr link needed — uses Windows OCR via PowerShell

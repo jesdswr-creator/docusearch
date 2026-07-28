@@ -10,6 +10,7 @@
 #include "../core/Constants.h"
 #include "../core/Logger.h"
 #include "../core/SehTranslator.h"
+#include "../core/CrashHandler.h"
 #include "ui/MainWindow.h"
 
 #include <QApplication>
@@ -23,9 +24,22 @@
 using namespace DocuSearch;
 
 int main(int argc, char* argv[]) {
-    // Install the SEH translator FIRST, before any library that might
-    // raise a structured exception (Poppler, zlib, minizip, oneocr).
+    // Install the crash handler FIRST — before anything that might crash.
+    // Writes a minidump to %APPDATA%/DocuSearch/crash.dmp on any
+    // unhandled exception. One crash dump replaces 4+ build cycles of
+    // guessing at extraction crashes.
+    DocuSearch::installCrashHandler();
+
+    // Install the SEH translator next — converts SEH exceptions (access
+    // violations etc.) into catchable C++ exceptions via _set_se_translator.
+    // Note: this is per-thread, so worker threads must install it themselves.
     DocuSearch::installSehTranslator();
+
+    // Initialize the logger so the crash handler can write to it.
+    DocuSearch::Logger::instance().init(
+        DocuSearch::Config::instance().logDir(),
+        DocuSearch::LogLevel::Debug,  // include debug-level for crash diagnosis
+        /*mirrorToStderr=*/false);
 
     // Phase 12: Limit thread pool for 4GB RAM systems.
     // On 4GB machines, running too many threads causes memory pressure
@@ -94,9 +108,8 @@ int main(int argc, char* argv[]) {
     QApplication::setPalette(pal);
 
     // Don't apply any QSS theme for now — use native Windows styling.
-    // We can re-enable themes once the basic window works.
-    // auto& log = DocuSearch::Logger::instance();
-    // log.init(DocuSearch::Config::instance().logDir(), DocuSearch::LogLevel::Info);
+    // (Logger was already initialized above, before QApplication, so the
+    // crash handler can write to it.)
 
     DocuSearch::MainWindow w;
     w.show();
