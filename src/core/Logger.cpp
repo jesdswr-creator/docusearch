@@ -47,9 +47,26 @@ void Logger::init(const QString& logDir, LogLevel minLevel, bool mirrorToStderr)
     }
 
     running_.store(true);
-    // Move ownership of the workerLoop into a dedicated QThread
+    // CRITICAL: workerLoop() is an infinite for(;;) loop. It must run on
+    // the workerThread_, NOT the main thread. The previous code used
+    // QMetaObject::invokeMethod(this, ..., QueuedConnection) which queued
+    // the call to `this`'s thread (the main thread) — blocking the main
+    // thread's event loop forever, causing a black window.
+    //
+    // Correct pattern: connect QThread::started → workerLoop. When the
+    // thread starts, it invokes workerLoop directly on the worker thread
+    // (not via the main thread's event loop). workerLoop blocks on the
+    // queue condition variable, releasing the worker thread's CPU until
+    // a log entry arrives.
+    //
+    // We use a DirectConnection because the connection is established
+    // while `this` still lives on the main thread, but the signal fires
+    // from the worker thread — DirectConnection runs the slot on the
+    // thread that emits the signal (the worker thread). This is what we
+    // want.
+    connect(&workerThread_, &QThread::started, this, &Logger::workerLoop,
+            Qt::DirectConnection);
     workerThread_.start();
-    QMetaObject::invokeMethod(this, [this]{ this->workerLoop(); }, Qt::QueuedConnection);
 
     info("Logger", QString("Logging started - file: %1").arg(fileName));
 }
