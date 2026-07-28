@@ -108,8 +108,10 @@ LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS* ep) {
 
 void installCrashHandler() {
     SetUnhandledExceptionFilter(unhandledExceptionFilter);
-    DS_INFO("Core", "Crash handler installed — dumps will be written to "
-                     + crashDumpPath());
+    // Don't call crashDumpPath() or DS_INFO here — both need QApplication
+    // (QStandardPaths + Logger::init), which hasn't been constructed yet
+    // when installCrashHandler() is called at the start of main().
+    // The filter itself will compute the path when it actually fires.
 }
 
 } // namespace DocuSearch

@@ -28,18 +28,14 @@ int main(int argc, char* argv[]) {
     // Writes a minidump to %APPDATA%/DocuSearch/crash.dmp on any
     // unhandled exception. One crash dump replaces 4+ build cycles of
     // guessing at extraction crashes.
+    // OK to call before QApplication — uses only Win32 APIs, no Qt.
     DocuSearch::installCrashHandler();
 
     // Install the SEH translator next — converts SEH exceptions (access
     // violations etc.) into catchable C++ exceptions via _set_se_translator.
     // Note: this is per-thread, so worker threads must install it themselves.
+    // OK to call before QApplication — pure MSVC runtime, no Qt.
     DocuSearch::installSehTranslator();
-
-    // Initialize the logger so the crash handler can write to it.
-    DocuSearch::Logger::instance().init(
-        DocuSearch::Config::instance().logDir(),
-        DocuSearch::LogLevel::Debug,  // include debug-level for crash diagnosis
-        /*mirrorToStderr=*/false);
 
     // Phase 12: Limit thread pool for 4GB RAM systems.
     // On 4GB machines, running too many threads causes memory pressure
@@ -65,6 +61,19 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
+
+    // Initialize the logger AFTER QApplication is constructed.
+    // Logger::init() calls QMetaObject::invokeMethod() with a queued
+    // connection, which requires QCoreApplication's event dispatcher to
+    // exist. Calling it before QApplication leaves the dispatcher null
+    // and the worker thread's invokeMethod never dispatches — leading to
+    // a window that never paints (black screen).
+    // Config::instance().logDir() also needs QApplication for QSettings
+    // (which uses org/app name to determine the data location).
+    DocuSearch::Logger::instance().init(
+        DocuSearch::Config::instance().logDir(),
+        DocuSearch::LogLevel::Debug,  // include debug-level for crash diagnosis
+        /*mirrorToStderr=*/false);
 
     // Set the application window icon. This makes the icon appear in:
     //   * The title bar of the main window
