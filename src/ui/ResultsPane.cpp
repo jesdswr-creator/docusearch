@@ -156,9 +156,11 @@ void ResultsPane::populateItem(int row, const SearchHit& h) {
     const QString color = colorForExtension(h.extension);
     const QString label = labelForExtension(h.extension);
     badge->setFixedSize(36, 36);
-    badge->setStyleSheet(QString(
-        "background-color: %1; color: #ffffff; border-radius: 8px; "
-        "font-size: 10px; font-weight: 700;").arg(color));
+    // Only set the dynamic background-color here — other styling (text color,
+    // border-radius, font) comes from the global QSS via #fileIconBadge.
+    // Use a dynamic property so the QSS can pick it up.
+    badge->setProperty("bgColor", color);
+    badge->setStyleSheet(QString("background-color: %1;").arg(color));
     badge->setAlignment(Qt::AlignCenter);
     badge->setText(label);
     hLay->addWidget(badge);

@@ -18,9 +18,7 @@ TextPreview::TextPreview(QWidget* parent)
     lay->setSpacing(0);
 
     m_infoLabel = new QLabel(this);
-    m_infoLabel->setStyleSheet(
-        "color: #666; font-size: 10pt; padding: 4px 8px; "
-        "background: #f5f5f5; border-bottom: 1px solid #ddd;");
+    m_infoLabel->setObjectName("previewInfo");
     lay->addWidget(m_infoLabel);
 
     m_textEdit = new QPlainTextEdit(this);

@@ -27,27 +27,24 @@ OfficePreview::OfficePreview(QWidget* parent)
     mainLay->setSpacing(4);
 
     m_headerLabel = new QLabel("Office Document Preview", this);
-    m_headerLabel->setStyleSheet(
-        "font-weight: bold; font-size: 11pt; "
-        "background: #f5f5f5; padding: 8px; border-radius: 4px;");
+    m_headerLabel->setObjectName("previewHeader");
     mainLay->addWidget(m_headerLabel);
 
     m_fileInfoLabel = new QLabel(this);
-    m_fileInfoLabel->setStyleSheet(
-        "color: #666; font-size: 10pt; padding: 4px;");
+    m_fileInfoLabel->setObjectName("previewInfo");
     m_fileInfoLabel->setWordWrap(true);
     mainLay->addWidget(m_fileInfoLabel);
 
     auto* sep = new QFrame(this);
     sep->setFrameShape(QFrame::HLine);
-    sep->setStyleSheet("color: #ccc;");
+    // No setStyleSheet — QFrame::HLine draws its own line via palette.
     mainLay->addWidget(sep);
 
     auto* note = new QLabel(
         "Showing extracted text content.\n"
         "For full visual preview, open the file externally.",
         this);
-    note->setStyleSheet("color: #888; font-style: italic; font-size: 9pt; padding: 4px;");
+    note->setObjectName("previewNote");
     mainLay->addWidget(note);
 
     m_textEdit = new QPlainTextEdit(this);

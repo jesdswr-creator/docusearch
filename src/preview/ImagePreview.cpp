@@ -18,23 +18,9 @@ ImagePreview::ImagePreview(QWidget* parent)
     mainLay->setContentsMargins(0, 0, 0, 0);
     mainLay->setSpacing(0);
 
-    // Toolbar with zoom buttons
+    // Toolbar with zoom buttons — styling via global QSS (#previewToolbar)
     auto* toolbar = new QWidget(this);
-    toolbar->setStyleSheet(
-        "QWidget { background: #e0e0e0; border-bottom: 1px solid #ccc; }"
-        "QPushButton { "
-        "  background: #ffffff; "
-        "  border: 1px solid #bbb; "
-        "  border-radius: 3px; "
-        "  padding: 4px 10px; "
-        "  font-size: 10pt; "
-        "  font-weight: bold; "
-        "  color: #333; "
-        "  min-height: 24px; "
-        "} "
-        "QPushButton:hover { background: #f0f7ff; border-color: #0066cc; } "
-        "QPushButton:pressed { background: #cce0ff; } "
-        "QLabel { background: transparent; border: none; }");
+    toolbar->setObjectName("previewToolbar");
     auto* tbLay = new QHBoxLayout(toolbar);
     tbLay->setContentsMargins(4, 4, 4, 4);
     tbLay->setSpacing(4);
@@ -55,21 +41,19 @@ ImagePreview::ImagePreview(QWidget* parent)
     mainLay->addWidget(toolbar);
 
     m_infoLabel = new QLabel(this);
-    m_infoLabel->setStyleSheet(
-        "color: #666; font-size: 10pt; padding: 4px 8px; "
-        "background: #f5f5f5; border-bottom: 1px solid #ddd;");
+    m_infoLabel->setObjectName("previewInfo");
     mainLay->addWidget(m_infoLabel);
 
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setAlignment(Qt::AlignCenter);
     m_scrollArea->setBackgroundRole(QPalette::Light);
     m_scrollArea->setWidgetResizable(false);
-    m_scrollArea->setStyleSheet("QScrollArea { background: #f0f0f0; }");
+    m_scrollArea->setObjectName("previewScroll");
 
     m_imageLabel = new QLabel(m_scrollArea);
     m_imageLabel->setAlignment(Qt::AlignCenter);
     m_imageLabel->setText("No image loaded");
-    m_imageLabel->setStyleSheet("color: #999; font-size: 14pt;");
+    m_imageLabel->setObjectName("previewEmpty");
     m_scrollArea->setWidget(m_imageLabel);
 
     mainLay->addWidget(m_scrollArea, 1);
@@ -133,7 +117,7 @@ void ImagePreview::displayImage() {
         newSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     m_imageLabel->setPixmap(QPixmap::fromImage(scaled));
     m_imageLabel->resize(scaled.size());
-    m_imageLabel->setStyleSheet("");
+    // No setStyleSheet — global QSS handles styling via #previewEmpty / #previewImageLabel.
 }
 
 void ImagePreview::onZoomIn() {
@@ -158,7 +142,7 @@ void ImagePreview::clear() {
     m_originalImage = QImage();
     m_imageLabel->clear();
     m_imageLabel->setText("No image loaded");
-    m_imageLabel->setStyleSheet("color: #999; font-size: 14pt;");
+    // No setStyleSheet — global QSS handles #previewEmpty styling.
     m_infoLabel->setText("");
     m_zoomLevel = 1.0;
 }

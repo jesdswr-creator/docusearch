@@ -28,24 +28,9 @@ PdfPreview::PdfPreview(QWidget* parent)
     mainLay->setContentsMargins(0, 0, 0, 0);
     mainLay->setSpacing(0);
 
-    // Toolbar
+    // Toolbar — styling via global QSS (#previewToolbar)
     auto* toolbar = new QWidget(this);
-    toolbar->setStyleSheet(
-        "QWidget { background: #e0e0e0; border-bottom: 1px solid #ccc; }"
-        "QPushButton { "
-        "  background: #ffffff; "
-        "  border: 1px solid #bbb; "
-        "  border-radius: 3px; "
-        "  padding: 4px 10px; "
-        "  font-size: 10pt; "
-        "  font-weight: bold; "
-        "  color: #333; "
-        "  min-height: 24px; "
-        "} "
-        "QPushButton:hover { background: #f0f7ff; border-color: #0066cc; } "
-        "QPushButton:pressed { background: #cce0ff; } "
-        "QPushButton:disabled { color: #aaa; background: #f0f0f0; }"
-        "QLabel { background: transparent; border: none; }");
+    toolbar->setObjectName("previewToolbar");
     auto* tbLay = new QHBoxLayout(toolbar);
     tbLay->setContentsMargins(4, 4, 4, 4);
     tbLay->setSpacing(4);
@@ -64,7 +49,7 @@ PdfPreview::PdfPreview(QWidget* parent)
     m_fitButton->setToolTip("Fit page to window");
 
     m_pageLabel = new QLabel("No document loaded", toolbar);
-    m_pageLabel->setStyleSheet("color: #666; padding: 0 8px;");
+    m_pageLabel->setObjectName("previewPageLabel");
 
     tbLay->addWidget(m_prevButton);
     tbLay->addWidget(m_nextButton);
@@ -80,13 +65,12 @@ PdfPreview::PdfPreview(QWidget* parent)
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setAlignment(Qt::AlignCenter);
     m_scrollArea->setWidgetResizable(true);
-    m_scrollArea->setStyleSheet("QScrollArea { background: #606060; }");
+    m_scrollArea->setObjectName("previewScrollDark");
 
     m_pageCanvas = new QLabel(m_scrollArea);
     m_pageCanvas->setAlignment(Qt::AlignCenter);
     m_pageCanvas->setText("No document loaded");
-    m_pageCanvas->setStyleSheet("color: #ddd; font-size: 14pt; "
-                                "background: #606060;");
+    m_pageCanvas->setObjectName("previewEmptyDark");
     m_scrollArea->setWidget(m_pageCanvas);
     m_scrollArea->setWidgetResizable(false);
 
@@ -243,7 +227,7 @@ void PdfPreview::renderPage(int pageNumber) {
         }
 
         m_pageCanvas->setPixmap(QPixmap::fromImage(qimg.copy()));
-        m_pageCanvas->setStyleSheet("");
+        // No setStyleSheet — global QSS handles #previewEmptyDark styling.
         m_pageCanvas->resize(qimg.size());
 
         m_currentPage = pageNumber;
@@ -321,7 +305,7 @@ void PdfPreview::clear() {
     m_document.reset();
     m_pageCanvas->clear();
     m_pageCanvas->setText("No document loaded");
-    m_pageCanvas->setStyleSheet("color: #ddd; font-size: 14pt; background: #606060;");
+    // No setStyleSheet — global QSS handles #previewEmptyDark styling.
     m_currentPage = 0;
     m_totalPages  = 0;
     m_zoomLevel   = 1.0;

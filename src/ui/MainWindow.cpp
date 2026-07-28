@@ -756,7 +756,7 @@ void MainWindow::buildStatusBar() {
     ocrLay->setSpacing(6);
     ocrDotLbl_ = new QLabel(ocrStatusWidget_);
     ocrDotLbl_->setFixedSize(8, 8);
-    ocrDotLbl_->setStyleSheet("background: #888; border-radius: 4px;");
+    ocrDotLbl_->setObjectName("ocrDot");
     ocrStatusLbl_ = new QLabel("OCR: ?", ocrStatusWidget_);
     ocrStatusLbl_->setObjectName("ocrStatus");
     ocrLay->addWidget(ocrDotLbl_);
@@ -860,48 +860,43 @@ void MainWindow::applyTheme() {
 
     // ── Full QSS — ported from theme.txt (src/theme.cpp) ───────────────
     // The mockup uses @token@ placeholders that we substitute at the end.
+    // NOTE: Do NOT use the `*` universal selector — Qt's QSS parser can
+    // cause a black window when `*` sets font-family or other inherited
+    // properties. Apply font-family to QWidget instead.
     QString s = QStringLiteral(R"(
-* { font-family: "IBM Plex Sans","Segoe UI",sans-serif; }
-QWidget { color: @ink@; }
+QWidget { color: @ink@; font-family: "IBM Plex Sans","Segoe UI",sans-serif; }
 QToolTip { background:@panel3@; color:@ink@; border:1px solid @line2@; padding:5px 8px; border-radius:6px; font-size:11px; }
 
-/* ---------- window + title bar ---------- */
 QMainWindow { background: @chrome@; }
 QWidget#topMenuBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @panel2@, stop:1 @chrome@);
                      border-bottom:1px solid @line@; }
 QLabel#titleBarText { font-family:"Space Grotesk","Segoe UI"; font-size:15px; font-weight:700; color:@ink@; }
 
-/* ---------- menu bar (topMenuList) ---------- */
 QListWidget#topMenuList { background:transparent; border:none; outline:none; }
 QListWidget#topMenuList::item { padding:6px 14px; border-radius:6px; margin:2px; font-size:10pt; color:@dim@; }
 QListWidget#topMenuList::item:selected { background:@panel2@; color:@amber@; font-weight:bold; }
 QListWidget#topMenuList::item:hover { background:@panel2@; color:@ink@; }
 
-/* indexed-status badge in the menu bar */
 QLabel#indexedInfo { font-family:"IBM Plex Mono",monospace; font-size:10px; color:@ink@; font-weight:500; }
 QProgressBar#indexedBar { background:@panel3@; border:none; border-radius:2px; }
 QProgressBar#indexedBar::chunk { background:@amber@; border-radius:2px; }
 
-/* ---------- search row ---------- */
 QLineEdit { background:@panel@; border:1px solid @line2@; border-radius:10px; font-size:13px;
             padding:8px 12px; selection-background-color: rgba(244,168,58,0.35); }
 QLineEdit:focus { border-color:@amber@; }
 
-/* Extract button — amber gradient, the main CTA */
 QPushButton { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:8px;
               padding:6px 14px; font-size:10pt; }
 QPushButton:hover { background:@panel3@; border-color:@line2@; color:@ink@; }
 QPushButton:pressed { background:@panel3@; }
 QPushButton:disabled { background:@panel@; color:@faint@; border-color:@line@; }
 
-/* ---------- results pane ---------- */
 QListWidget#resultsPane { background:@panel@; border:1px solid @line@; border-radius:10px; }
 QListWidget#resultsPane::item { padding:10px; border-bottom:1px solid @line@; }
 QListWidget#resultsPane::item:selected { background: rgba(244,168,58,0.09);
                                          border-left:3px solid @amber@; color:@ink@; }
 QListWidget#resultsPane::item:hover { background:@panel2@; }
 
-/* ---------- preview pane ---------- */
 QTabWidget::pane { border:1px solid @line@; border-radius:8px; background:@panel@; }
 QTabBar::tab { background:@panel2@; padding:8px 14px; border:1px solid @line@; border-bottom:none;
                border-top-left-radius:8px; border-top-right-radius:8px; color:@dim@; font-size:10pt; }
@@ -912,19 +907,16 @@ QTextEdit, QPlainTextEdit, QTextBrowser { background:@panel@; color:@dim@; borde
                                           border-radius:8px; padding:8px; font-size:12px;
                                           selection-background-color: rgba(244,168,58,0.35); }
 
-/* ---------- metadata / tags / notes ---------- */
 QGroupBox { border:1px solid @line@; border-radius:10px; margin-top:12px; padding:10px;
             padding-top:18px; font-weight:600; color:@faint@;
             font-family:"Space Grotesk","Segoe UI"; font-size:11px; }
 QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 6px;
                    color:@faint@; letter-spacing:1px; }
 
-/* ---------- progress bars ---------- */
 QProgressBar { border:1px solid @line@; border-radius:6px; background:@panel2@; }
 QProgressBar::chunk { background:@amber@; border-radius:6px; }
 QProgressBar::text { color:@dim@; }
 
-/* ---------- scrollbars ---------- */
 QScrollBar:vertical { background:transparent; width:11px; margin:0; }
 QScrollBar::handle:vertical { background:@line2@; border-radius:6px; border:3px solid transparent;
                               background-clip:padding-box; min-height:32px; }
@@ -936,7 +928,6 @@ QScrollBar::handle:horizontal { background:@line2@; border-radius:6px; border:3p
                                 background-clip:padding-box; min-width:32px; }
 QScrollBar::handle:horizontal:hover { background:@faint@; background-clip:padding-box; }
 
-/* ---------- inputs ---------- */
 QSpinBox, QDoubleSpinBox, QComboBox { background:@panel@; color:@ink@; border:1px solid @line2@;
                                        border-radius:7px; padding:6px 10px; font-size:12px; }
 QComboBox:hover { border-color:@amber@; }
@@ -950,13 +941,11 @@ QSlider::groove:horizontal { height:4px; background:@panel3@; border-radius:2px;
 QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; background:@amber@; border-radius:7px; }
 QSlider::sub-page:horizontal { background:@amber@; border-radius:2px; }
 
-/* ---------- menus ---------- */
 QMenu { background:@panel@; border:1px solid @line2@; border-radius:9px; padding:6px; }
 QMenu::item { padding:7px 22px 7px 10px; border-radius:6px; font-size:12px; color:@ink@; }
 QMenu::item:selected { background:@panel2@; }
 QMenu::separator { height:1px; background:@line@; margin:4px 8px; }
 
-/* ---------- status bar ---------- */
 QStatusBar { background:@chrome@; border-top:1px solid @line@; }
 QStatusBar::item { border:none; }
 QStatusBar QLabel { color:@dim@; padding:0 4px; }
@@ -964,7 +953,6 @@ QLabel#statusReady { color:@green@; font-weight:bold; }
 QLabel#statusInfo { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 QLabel#ocrStatus { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 
-/* ---------- buttons with object names ---------- */
 QPushButton#openLocationBtn { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:7px; }
 QPushButton#openLocationBtn:hover { background:@panel3@; border-color:@line2@; }
 QPushButton#semanticToggleBtn { background:@panel2@; color:@dim@; border:1px solid @line@; border-radius:7px;
@@ -974,11 +962,31 @@ QPushButton#semanticToggleBtn:checked { background: rgba(244,168,58,0.12); color
 QPushButton#themeToggleBtn { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:7px;
                              font-size:12pt; padding:4px 8px; }
 
-/* ---------- splitters ---------- */
 QSplitter::handle { background:transparent; }
 QSplitter::handle:horizontal { width:6px; }
 QSplitter::handle:vertical { height:6px; }
 QSplitter::handle:hover { background:@amber@; }
+
+/* ---------- OCR status indicator (property-based) ---------- */
+QLabel#ocrDot { border-radius:4px; background:@faint@; }
+QLabel#ocrDot[status="ready"] { background:@green@; }
+QLabel#ocrDot[status="setup"] { background:@amber@; }
+QLabel#ocrStatus[status="ready"] { color:@green@; }
+QLabel#ocrStatus[status="setup"] { color:@amber@; }
+
+/* ---------- preview panes (objectName-based, no inline styles) ---------- */
+QLabel#previewHeader { font-weight:bold; font-size:10pt; padding:4px 8px;
+                       background:@panel2@; border-bottom:1px solid @line@; color:@ink@; }
+QLabel#previewInfo { font-family:"IBM Plex Mono",monospace; font-size:10px; padding:4px 8px;
+                     background:@panel2@; border-bottom:1px solid @line@; color:@dim@; }
+QLabel#previewNote { color:@faint@; font-style:italic; font-size:9pt; padding:4px; }
+QLabel#previewEmpty { color:@faint@; font-size:14pt; }
+QLabel#previewEmptyDark { color:@dim@; font-size:14pt; background:@panel2@; }
+QLabel#previewPageLabel { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; padding:0 8px; }
+QWidget#previewToolbar { background:@panel2@; border-bottom:1px solid @line@; }
+QScrollArea#previewScroll { background:@panel2@; }
+QScrollArea#previewScrollDark { background:@panel2@; }
+QLabel#fileIconBadge { color:#ffffff; border-radius:8px; font-size:10px; font-weight:700; }
 )");
 
     // Token substitution — same as theme.cpp's apply()
@@ -1958,19 +1966,27 @@ QString MainWindow::getExtractionStatusString() {
 void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
-    // oneocr.dll — local OCR engine. Setup via scripts/get_oneocr.ps1.
+    // Use dynamic properties + QSS selectors instead of inline setStyleSheet.
+    // The global QSS has:
+    //   QLabel#ocrDot[status="ready"]   { background: @green@; ... }
+    //   QLabel#ocrDot[status="setup"]   { background: @amber@; ... }
+    //   QLabel#ocrStatus[status="ready"] { color: @green@; ... }
+    //   QLabel#ocrStatus[status="setup"] { color: @amber@; ... }
     auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
     if (oneocr.isOneocrAvailable()) {
-        ocrDotLbl_->setStyleSheet("background: #10b981; border-radius: 4px;");
+        ocrDotLbl_->setProperty("status", "ready");
+        ocrStatusLbl_->setProperty("status", "ready");
         ocrStatusLbl_->setText("OCR: Ready");
-        ocrStatusLbl_->setStyleSheet("color: #10b981;");
-        return;
+    } else {
+        ocrDotLbl_->setProperty("status", "setup");
+        ocrStatusLbl_->setProperty("status", "setup");
+        ocrStatusLbl_->setText("OCR: Setup Required");
     }
-
-    // oneocr.dll not installed.
-    ocrDotLbl_->setStyleSheet("background: #f59e0b; border-radius: 4px;");
-    ocrStatusLbl_->setText("OCR: Setup Required");
-    ocrStatusLbl_->setStyleSheet("color: #f59e0b;");
+    // Force QSS re-evaluation.
+    ocrDotLbl_->style()->unpolish(ocrDotLbl_);
+    ocrDotLbl_->style()->polish(ocrDotLbl_);
+    ocrStatusLbl_->style()->unpolish(ocrStatusLbl_);
+    ocrStatusLbl_->style()->polish(ocrStatusLbl_);
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {

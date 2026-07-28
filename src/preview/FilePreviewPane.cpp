@@ -18,9 +18,7 @@ FilePreviewPane::FilePreviewPane(QWidget* parent)
     mainLay->setSpacing(0);
 
     m_headerLabel = new QLabel("", this);
-    m_headerLabel->setStyleSheet(
-        "font-weight: bold; font-size: 10pt; background: #e8e8e8; "
-        "padding: 4px 8px; border-bottom: 1px solid #ccc;");
+    m_headerLabel->setObjectName("previewHeader");
     mainLay->addWidget(m_headerLabel);
 
     m_stack = new QStackedWidget(this);
@@ -41,7 +39,7 @@ FilePreviewPane::FilePreviewPane(QWidget* parent)
     unLay->addStretch();
     m_unavailableLabel = new QLabel("Select a file to preview", m_unavailableWidget);
     m_unavailableLabel->setAlignment(Qt::AlignCenter);
-    m_unavailableLabel->setStyleSheet("color: #999; font-size: 14pt;");
+    m_unavailableLabel->setObjectName("previewEmpty");
     unLay->addWidget(m_unavailableLabel);
     unLay->addStretch();
     m_stack->addWidget(m_unavailableWidget);
