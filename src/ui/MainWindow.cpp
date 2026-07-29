@@ -3017,30 +3017,71 @@ void MainWindow::onExportCsv() {
 void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
     try {
-        auto groups = repo_->duplicatesByHash();
-        if (groups.isEmpty()) {
-            QMessageBox::information(this, "Duplicates", "No duplicates found by hash.");
-            return;
-        }
+        // ── Batch query: get ALL duplicate file records in ONE SQL query ──
+        // The old code called repo_->getById(id) for each duplicate file ID
+        // (N+1 query problem). With thousands of duplicates, that froze the
+        // UI for seconds. This single query replaces all the individual
+        // lookups.
+        sqlite3* raw = db_->raw();
+        if (!raw) return;
+
+        sqlite3_stmt* s = nullptr;
+        // Find all files that share a hash with at least one other file.
+        // Ordered by hash so duplicates appear grouped in the results list.
+        sqlite3_prepare_v2(raw,
+            "SELECT f.id, f.path, f.filename, f.extension, f.size, f.modified_date, f.hash "
+            "FROM Files f "
+            "WHERE f.hash != '' AND f.hash IN ("
+            "  SELECT hash FROM Files WHERE hash != '' "
+            "  GROUP BY hash HAVING COUNT(*) > 1"
+            ") ORDER BY f.hash, f.filename;",
+            -1, &s, nullptr);
+
         QList<SearchHit> hits;
-        for (const auto& g : groups) {
-            for (const auto id : g) {
-                FileRecord r;
-                if (repo_->getById(id, r)) {
-                    SearchHit h;
-                    h.fileId      = r.id;
-                    h.path        = r.path;
-                    h.filename    = r.filename;
-                    h.extension   = r.extension;
-                    h.size        = r.size;
-                    h.modifiedDate= r.modifiedDate;
-                    hits.append(h);
-                }
+        int groupCount = 0;
+        QString lastHash;
+        while (sqlite3_step(s) == SQLITE_ROW) {
+            SearchHit h;
+            h.fileId       = sqlite3_column_int64(s, 0);
+            const unsigned char* p = sqlite3_column_text(s, 1);
+            const unsigned char* fn = sqlite3_column_text(s, 2);
+            const unsigned char* e = sqlite3_column_text(s, 3);
+            h.path         = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
+            h.filename     = fn ? QString::fromUtf8(reinterpret_cast<const char*>(fn)) : QString();
+            h.extension    = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
+            h.size         = sqlite3_column_int64(s, 4);
+            h.modifiedDate = sqlite3_column_int64(s, 5);
+            const unsigned char* hash = sqlite3_column_text(s, 6);
+            QString currentHash = hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
+            if (currentHash != lastHash) {
+                ++groupCount;
+                lastHash = currentHash;
+            }
+            hits.append(h);
+
+            // Process events every 500 files so the UI doesn't freeze
+            // during large duplicate sets.
+            if (hits.size() % 500 == 0) {
+                QApplication::processEvents();
             }
         }
+        sqlite3_finalize(s);
+
+        if (hits.isEmpty()) {
+            QMessageBox::information(this, "Duplicates",
+                "No duplicates found.\n\n"
+                "Make sure 'Compute file hashes' is enabled in Settings → "
+                "Performance, then re-scan your folders.");
+            return;
+        }
+
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)").arg(groups.size()).arg(hits.size()));
+            QString("Found %1 duplicate groups (%2 files)")
+                .arg(groupCount).arg(hits.size()), 8000);
+    } catch (const std::exception& e) {
+        DS_ERROR("Duplicates", QString("Failed: %1").arg(e.what()));
+        statusBar()->showMessage("Duplicate detection failed.", 3000);
     } catch (...) {
         statusBar()->showMessage("Duplicate detection failed.", 3000);
     }
