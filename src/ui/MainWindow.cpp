@@ -787,10 +787,13 @@ void MainWindow::buildStatusBar() {
     themeToggleBtn_->setObjectName("themeToggleBtn");
     themeToggleBtn_->setCheckable(true);
     themeToggleBtn_->setChecked(darkMode_);
-    themeToggleBtn_->setText(darkMode_ ? "🌙" : "☀");
+    // Use text labels instead of emoji — emoji renders poorly on Windows
+    // (low-res bitmaps or boxes). Monospace "Dark"/"Light" matches the
+    // mockup's IBM Plex Mono aesthetic.
+    themeToggleBtn_->setText(darkMode_ ? "Dark" : "Light");
     themeToggleBtn_->setToolTip("Toggle light/dark theme");
     themeToggleBtn_->setCursor(Qt::PointingHandCursor);
-    themeToggleBtn_->setFixedSize(36, 28);
+    themeToggleBtn_->setFixedHeight(28);
     connect(themeToggleBtn_, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
     sb->addPermanentWidget(themeToggleBtn_);
 
@@ -885,11 +888,11 @@ QLineEdit { background:@panel@; border:1px solid @line2@; border-radius:10px; fo
             padding:8px 12px; selection-background-color: rgba(244,168,58,0.35); }
 QLineEdit:focus { border-color:@amber@; }
 
-QPushButton { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:8px;
+QPushButton { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:8px;
               padding:6px 14px; font-size:10pt; }
-QPushButton:hover { background:@panel3@; border-color:@line2@; color:@ink@; }
-QPushButton:pressed { background:@panel3@; }
-QPushButton:disabled { background:@panel@; color:@faint@; border-color:@line@; }
+QPushButton:hover { background:@panel2@; border-color:@amber@; color:@ink@; }
+QPushButton:pressed { background:@panel3@; border-color:@amber@; }
+QPushButton:disabled { background:@panel2@; color:@faint@; border-color:@line@; }
 
 QListWidget#resultsPane { background:@panel@; border:1px solid @line@; border-radius:10px; }
 QListWidget#resultsPane::item { padding:10px; border-bottom:1px solid @line@; }
@@ -953,14 +956,17 @@ QLabel#statusReady { color:@green@; font-weight:bold; }
 QLabel#statusInfo { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 QLabel#ocrStatus { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 
-QPushButton#openLocationBtn { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:7px; }
-QPushButton#openLocationBtn:hover { background:@panel3@; border-color:@line2@; }
-QPushButton#semanticToggleBtn { background:@panel2@; color:@dim@; border:1px solid @line@; border-radius:7px;
+QPushButton#openLocationBtn { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:7px; }
+QPushButton#openLocationBtn:hover { background:@panel2@; border-color:@amber@; }
+QPushButton#semanticToggleBtn { background:@panel3@; color:@dim@; border:1px solid @line2@; border-radius:7px;
                                 font-family:"IBM Plex Mono",monospace; font-size:11px; }
+QPushButton#semanticToggleBtn:hover { background:@panel2@; border-color:@amber@; color:@ink@; }
 QPushButton#semanticToggleBtn:checked { background: rgba(244,168,58,0.12); color:@amber@;
                                          border-color: rgba(244,168,58,0.55); }
-QPushButton#themeToggleBtn { background:@panel2@; color:@ink@; border:1px solid @line@; border-radius:7px;
-                             font-size:12pt; padding:4px 8px; }
+QPushButton#themeToggleBtn { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:7px;
+                             font-family:"IBM Plex Mono",monospace; font-size:11px;
+                             padding:4px 10px; min-width:50px; }
+QPushButton#themeToggleBtn:hover { background:@panel2@; border-color:@amber@; }
 
 QSplitter::handle { background:transparent; }
 QSplitter::handle:horizontal { width:6px; }
@@ -2891,7 +2897,7 @@ void MainWindow::onToggleTheme() {
         settings_.darkMode = darkMode_;
         saveSettings();
         if (themeToggleBtn_) {
-            themeToggleBtn_->setText(darkMode_ ? "🌙" : "☀");
+            themeToggleBtn_->setText(darkMode_ ? "Dark" : "Light");
             themeToggleBtn_->setChecked(darkMode_);
         }
         applyTheme();
