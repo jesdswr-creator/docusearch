@@ -891,13 +891,19 @@ QLineEdit { background:@panel@; border:1px solid @line2@; border-radius:10px; fo
             padding:8px 12px; selection-background-color: rgba(244,168,58,0.35); }
 QLineEdit:focus { border-color:@amber@; }
 
-QPushButton { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:8px;
-              padding:6px 14px; font-size:10pt; }
-QPushButton:hover { background:@panel2@; border-color:@amber@; color:@ink@; }
-QPushButton:pressed { background:@panel3@; border-color:@amber@; }
-QPushButton:disabled { background:@panel2@; color:@faint@; border-color:@line@; }
+/* Global QPushButton — golden gradient for ALL buttons (per user request) */
+QPushButton {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
+    color: @amberInk@; font-weight:600; font-size:10pt; border:none; border-radius:8px;
+    padding:6px 14px;
+}
+QPushButton:hover {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
+}
+QPushButton:pressed { background:@amber@; }
+QPushButton:disabled { background:@panel3@; color:@faint@; border:none; }
 
-/* Extract button — golden primary CTA (matches theme.txt mockup #extractBtn) */
+/* Extract button — larger, the primary CTA */
 QPushButton#extractBtn {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
     color: @amberInk@; font-weight:600; font-size:13px; border:none; border-radius:9px;
@@ -909,7 +915,7 @@ QPushButton#extractBtn:hover {
 QPushButton#extractBtn:pressed { background:@amber@; }
 QPushButton#extractBtn:disabled { background:@panel3@; color:@faint@; border:none; }
 
-/* Search button — also golden (secondary CTA) */
+/* Search button — same golden style */
 QPushButton#searchBtn {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
     color: @amberInk@; font-weight:600; font-size:12px; border:none; border-radius:8px;
@@ -983,17 +989,12 @@ QLabel#statusReady { color:@green@; font-weight:bold; }
 QLabel#statusInfo { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 QLabel#ocrStatus { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
 
-QPushButton#openLocationBtn { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:7px; }
-QPushButton#openLocationBtn:hover { background:@panel2@; border-color:@amber@; }
-QPushButton#semanticToggleBtn { background:@panel3@; color:@dim@; border:1px solid @line2@; border-radius:7px;
-                                font-family:"IBM Plex Mono",monospace; font-size:11px; }
-QPushButton#semanticToggleBtn:hover { background:@panel2@; border-color:@amber@; color:@ink@; }
-QPushButton#semanticToggleBtn:checked { background: rgba(244,168,58,0.12); color:@amber@;
-                                         border-color: rgba(244,168,58,0.55); }
-QPushButton#themeToggleBtn { background:@panel3@; color:@ink@; border:1px solid @line2@; border-radius:7px;
-                             font-family:"IBM Plex Mono",monospace; font-size:11px;
-                             padding:4px 10px; min-width:50px; }
-QPushButton#themeToggleBtn:hover { background:@panel2@; border-color:@amber@; }
+/* Named buttons inherit the golden global style.
+ * These rules only override shape/size-specific properties. */
+QPushButton#openLocationBtn { border-radius:7px; }
+QPushButton#semanticToggleBtn { font-family:"IBM Plex Mono",monospace; font-size:11px; border-radius:7px; }
+QPushButton#semanticToggleBtn:checked { background: rgba(244,168,58,0.12); color:@amber@; border:1px solid rgba(244,168,58,0.55); }
+QPushButton#themeToggleBtn { font-family:"IBM Plex Mono",monospace; font-size:11px; border-radius:7px; padding:4px 10px; min-width:50px; }
 
 QSplitter::handle { background:transparent; }
 QSplitter::handle:horizontal { width:6px; }
@@ -1692,13 +1693,20 @@ void MainWindow::onExtract() {
                 //
                 // The call is SYNCHRONOUS (we block on .waitForFinished())
                 // because the timer-based extraction loop expects the result
-                // inline. The timer interval (200ms) gives the UI time to
-                // process events between files.
+                // inline. But instead of waitForFinished() (which blocks the
+                // main thread → UI freeze if user clicks Duplicates/etc.),
+                // we use a non-blocking wait with processEvents() so the UI
+                // stays responsive while the extraction runs on the pool thread.
                 QFuture<ExtractionResult> future = QtConcurrent::run([&registry, &item]() -> ExtractionResult {
                     installSehTranslator();
                     return registry.extractByExtension(item.path, item.ext);
                 });
-                future.waitForFinished();
+                // Non-blocking wait — process UI events every 50ms so clicks,
+                // paints, and other interactions work during extraction.
+                while (!future.isFinished()) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                    QThread::msleep(10);
+                }
                 auto result = future.result();
                 extractedText = result.text;
                 source = result.source.isEmpty() ? "native" : result.source;
