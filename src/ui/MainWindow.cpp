@@ -894,6 +894,30 @@ QPushButton:hover { background:@panel2@; border-color:@amber@; color:@ink@; }
 QPushButton:pressed { background:@panel3@; border-color:@amber@; }
 QPushButton:disabled { background:@panel2@; color:@faint@; border-color:@line@; }
 
+/* Extract button — golden primary CTA (matches theme.txt mockup #extractBtn) */
+QPushButton#extractBtn {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
+    color: @amberInk@; font-weight:600; font-size:13px; border:none; border-radius:9px;
+    padding:0 18px; min-height:36px;
+}
+QPushButton#extractBtn:hover {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
+}
+QPushButton#extractBtn:pressed { background:@amber@; }
+QPushButton#extractBtn:disabled { background:@panel3@; color:@faint@; border:none; }
+
+/* Search button — also golden (secondary CTA) */
+QPushButton#searchBtn {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
+    color: @amberInk@; font-weight:600; font-size:12px; border:none; border-radius:8px;
+    padding:6px 16px;
+}
+QPushButton#searchBtn:hover {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
+}
+QPushButton#searchBtn:pressed { background:@amber@; }
+QPushButton#searchBtn:disabled { background:@panel3@; color:@faint@; border:none; }
+
 QListWidget#resultsPane { background:@panel@; border:1px solid @line@; border-radius:10px; }
 QListWidget#resultsPane::item { padding:10px; border-bottom:1px solid @line@; }
 QListWidget#resultsPane::item:selected { background: rgba(244,168,58,0.09);
