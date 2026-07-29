@@ -3050,7 +3050,7 @@ void MainWindow::onDetectDuplicates() {
             h.filename     = fn ? QString::fromUtf8(reinterpret_cast<const char*>(fn)) : QString();
             h.extension    = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
             h.size         = sqlite3_column_int64(s, 4);
-            h.modifiedDate = sqlite3_column_int64(s, 5);
+            h.modifiedDate = QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
             const unsigned char* hash = sqlite3_column_text(s, 6);
             QString currentHash = hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
             if (currentHash != lastHash) {
