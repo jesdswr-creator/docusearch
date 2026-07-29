@@ -16,6 +16,7 @@
 #include "../core/Config.h"
 #include "../core/Constants.h"
 #include "../core/Logger.h"
+#include "../core/SehTranslator.h"
 #include "../core/FileUtils.h"
 #include "../core/StringUtils.h"
 #include "../database/Database.h"
@@ -60,6 +61,8 @@
 #include <QTextStream>
 #include <QProgressDialog>
 #include <QThread>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QLabel>
@@ -1675,7 +1678,28 @@ void MainWindow::onExtract() {
                         .arg(state->idx + 1).arg(maxFilesThisSession)
                         .arg(item.path).arg(item.ext).arg(fi.size()));
 
-                auto result = registry.extractByExtension(item.path, item.ext);
+                // CRITICAL: Run extractByExtension() on a thread with a LARGE
+                // STACK (16MB). The main thread's 1MB stack overflows on
+                // deeply-nested PDFs — Poppler's recursive parser blows the
+                // stack and raises STACK_OVERFLOW (0xC00000FD).
+                //
+                // The stack size is set on the global QThreadPool in main.cpp
+                // (16MB). QtConcurrent::run uses that pool.
+                //
+                // We also install the SEH translator on this worker thread
+                // so any SEH exception (including stack overflow that exceeds
+                // even 16MB) is caught by catch(...) instead of crashing.
+                //
+                // The call is SYNCHRONOUS (we block on .waitForFinished())
+                // because the timer-based extraction loop expects the result
+                // inline. The timer interval (200ms) gives the UI time to
+                // process events between files.
+                QFuture<ExtractionResult> future = QtConcurrent::run([&registry, &item]() -> ExtractionResult {
+                    installSehTranslator();
+                    return registry.extractByExtension(item.path, item.ext);
+                });
+                future.waitForFinished();
+                auto result = future.result();
                 extractedText = result.text;
                 source = result.source.isEmpty() ? "native" : result.source;
                 ok = true;

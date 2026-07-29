@@ -45,6 +45,16 @@ int main(int argc, char* argv[]) {
     const int maxThreads = (cores <= 2) ? 2 : std::min(cores - 1, 4);
     QThreadPool::globalInstance()->setMaxThreadCount(maxThreads);
 
+    // CRITICAL: Set a large stack size (16MB) for thread pool threads.
+    // The default 1MB stack overflows on deeply-nested PDFs — Poppler's
+    // recursive parser blows the stack and raises STACK_OVERFLOW (0xC00000FD).
+    // This was the root cause of the extraction crashes on large PDFs like
+    // "GM(W)-SWR-PLANNING-GSU MYS-MYS-1219-2026-V3-R0-A0-CPDE-SWR-Approve-4.pdf"
+    // (4.8MB, deeply nested structure).
+    // 16MB is generous — only the pages that actually need deep recursion
+    // will touch it, and the OS only commits physical memory on demand.
+    QThreadPool::globalInstance()->setStackSize(16 * 1024 * 1024);
+
     // Round the scale factor to the nearest integer (1x, 2x, 3x) instead
     // of passing fractional scales (1.25x, 1.5x) through. On Windows,
     // fractional scaling causes Qt to rasterize at one DPI and Windows
