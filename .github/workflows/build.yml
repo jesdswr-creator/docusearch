@@ -14,7 +14,11 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.11.1'
+  # Qt 6.11.x is listed by aqtinstall but the mirror doesn't have the
+  # actual packages yet (aqtinstall v3.3.0 mirror sync delay). 6.10.3
+  # is the latest version that actually downloads successfully.
+  # When 6.11.x becomes available on the mirror, bump this to 6.11.1.
+  QT_VERSION: '6.10.3'
   QT_ARCH: 'win64_msvc2022_64'
 
 jobs:
