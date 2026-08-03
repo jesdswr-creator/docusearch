@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.11.0'
+  QT_VERSION: '6.11.1'
   QT_ARCH: 'win64_msvc2022_64'
 
 jobs:
@@ -51,7 +51,21 @@ jobs:
           pip install aqtinstall
           Write-Host "=== Available architectures for Qt $env:QT_VERSION ==="
           python -m aqt list-qt windows desktop --arch $env:QT_VERSION
-          python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
+          # Retry up to 3 times — aqtinstall mirrors can be flaky.
+          $retryCount = 0
+          $maxRetries = 3
+          while ($retryCount -lt $maxRetries) {
+              $retryCount++
+              Write-Host "=== Attempt $retryCount of $maxRetries ==="
+              try {
+                  python -m aqt install-qt windows desktop $env:QT_VERSION $env:QT_ARCH -O C:\Qt
+                  break
+              } catch {
+                  Write-Host "Attempt $retryCount failed: $_"
+                  if ($retryCount -ge $maxRetries) { throw }
+                  Start-Sleep -Seconds 10
+              }
+          }
           # Find the Qt installation directory. aqtinstall creates
           # C:\Qt\<version>\<arch>\ but the arch name may vary.
           $msvcRoot = $null
