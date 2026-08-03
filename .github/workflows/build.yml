@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  QT_VERSION: '6.8.1'
+  QT_VERSION: '6.11.0'
   QT_ARCH: 'win64_msvc2022_64'
 
 jobs:

@@ -248,6 +248,7 @@ set(APP_SOURCES
     src/ui/Theme.cpp
     src/ui/SearchBar.cpp
     src/ui/ResultsPane.cpp
+    src/ui/ResultItemDelegate.cpp
     src/ui/PreviewPane.cpp
     src/ui/MetadataPane.cpp
     src/ui/TagsNotesPane.cpp
@@ -305,6 +306,7 @@ set(APP_HEADERS
     src/ui/IconUtils.h
     src/ui/SearchBar.h
     src/ui/ResultsPane.h
+    src/ui/ResultItemDelegate.h
     src/ui/PreviewPane.h
     src/ui/MetadataPane.h
     src/ui/TagsNotesPane.h

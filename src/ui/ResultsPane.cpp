@@ -3,6 +3,7 @@
 // ============================================================
 
 #include "ResultsPane.h"
+#include "ResultItemDelegate.h"
 #include "IconUtils.h"
 #include "../core/StringUtils.h"
 
@@ -16,9 +17,16 @@
 namespace DocuSearch {
 
 namespace {
-// Each item carries the fileId + path as Qt::UserRole + 1 / + 2.
-const int kRoleFileId = Qt::UserRole + 1;
-const int kRolePath   = Qt::UserRole + 2;
+// Data roles for QListWidgetItem — used by both ResultsPane and
+// ResultItemDelegate to access item data without a widget tree.
+const int kRoleFileId       = Qt::UserRole + 1;
+const int kRolePath         = Qt::UserRole + 2;
+const int kRoleFilename     = Qt::UserRole + 3;
+const int kRoleSnippet      = Qt::UserRole + 4;  // matches delegate's ext lookup
+const int kRoleExtension    = Qt::UserRole + 5;
+const int kRoleSize         = Qt::UserRole + 6;
+const int kRoleModifiedDate = Qt::UserRole + 7;
+const int kRoleScore        = Qt::UserRole + 8;
 
 // Extension -> brand color (matches the HTML design).
 const QHash<QString, QString> kExtColor = {
@@ -106,6 +114,11 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list_->setSpacing(0);
+    list_->setMouseTracking(true);  // required for hover state in delegate
+    // Custom delegate paints each item directly via QPainter — much faster
+    // than setItemWidget (no QWidget tree per row) and gives smooth
+    // hover/selection card styling.
+    list_->setItemDelegate(new ResultItemDelegate(list_));
     v->addWidget(list_, 1);
 
     connect(list_, &QListWidget::currentRowChanged, this, &ResultsPane::onItemClicked);
@@ -141,68 +154,16 @@ void ResultsPane::populateItem(int row, const SearchHit& h) {
     auto* item = new QListWidgetItem(list_);
     item->setData(kRoleFileId, h.fileId);
     item->setData(kRolePath, h.path);
+    item->setData(kRoleFilename, h.filename);
+    item->setData(kRoleSnippet, h.snippet);
+    item->setData(kRoleExtension, h.extension);
+    item->setData(kRoleSize, h.size);
+    item->setData(kRoleModifiedDate, h.modifiedDate.toSecsSinceEpoch());
+    item->setData(kRoleScore, h.score);
     item->setToolTip(h.path);
-    item->setSizeHint(QSize(280, 70));
-
-    // Build the item widget: file icon badge + (title / snippet / meta) + dot
-    auto* w = new QWidget(list_);
-    auto* hLay = new QHBoxLayout(w);
-    hLay->setContentsMargins(12, 10, 12, 10);
-    hLay->setSpacing(10);
-
-    // File-type colored badge (36x36)
-    auto* badge = new QLabel(w);
-    badge->setObjectName("fileIconBadge");
-    const QString color = colorForExtension(h.extension);
-    const QString label = labelForExtension(h.extension);
-    badge->setFixedSize(36, 36);
-    // Only set the dynamic background-color here — other styling (text color,
-    // border-radius, font) comes from the global QSS via #fileIconBadge.
-    // Use a dynamic property so the QSS can pick it up.
-    badge->setProperty("bgColor", color);
-    badge->setStyleSheet(QString("background-color: %1;").arg(color));
-    badge->setAlignment(Qt::AlignCenter);
-    badge->setText(label);
-    hLay->addWidget(badge);
-
-    // Title + snippet + meta (vertical stack)
-    auto* info = new QWidget(w);
-    auto* vLay = new QVBoxLayout(info);
-    vLay->setContentsMargins(0, 0, 0, 0);
-    vLay->setSpacing(2);
-
-    auto* title = new QLabel(info);
-    title->setObjectName("resultTitle");
-    title->setText(h.filename);
-    // Title color changes to dark blue when selected — handled via QSS
-    // using the list-item:selected selector on #resultTitle.
-
-    auto* snippet = new QLabel(info);
-    snippet->setObjectName("resultSnippet");
-    QString snip = stripBoldTags(h.snippet);
-    if (snip.size() > 120) snip = snip.left(120) + "...";
-    snippet->setText(snip.isEmpty() ? "..." : snip);
-    snippet->setWordWrap(false);
-
-    auto* meta = new QLabel(info);
-    meta->setObjectName("resultMeta");
-    const QString dateStr = h.modifiedDate.toString("dd MMM yyyy");
-    meta->setText(QString("%1 • %2").arg(humanizeSize(h.size)).arg(dateStr));
-
-    vLay->addWidget(title);
-    vLay->addWidget(snippet);
-    vLay->addWidget(meta);
-    hLay->addWidget(info, 1);
-
-    // Active dot on the right (visible only for the selected row)
-    auto* dot = new QLabel(w);
-    dot->setFixedSize(10, 10);
-    // dot styled by QSS
-
-    hLay->addWidget(dot, 0, Qt::AlignTop);
-
-    item->setSizeHint(QSize(280, w->sizeHint().height()));
-    list_->setItemWidget(item, w);
+    // Size hint matches ResultItemDelegate::sizeHint (72px fixed height)
+    item->setSizeHint(QSize(280, 72));
+    // No setItemWidget — the delegate paints everything via QPainter.
 }
 
 void ResultsPane::clear() {
