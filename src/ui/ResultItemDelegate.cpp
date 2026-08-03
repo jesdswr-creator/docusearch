@@ -136,7 +136,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     painter->fillPath(badgePath, badgeColor(ext));
 
     // Badge label (e.g. "PDF")
-    QFont badgeFont = option.font();
+    QFont badgeFont = option.font;
     badgeFont.setPixelSize(10);
     badgeFont.setBold(true);
     painter->setFont(badgeFont);
@@ -147,7 +147,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     const int textX = badgeRect.right() + 10;
     const int textRight = rect.right() - 14;
 
-    QFont titleFont = option.font();
+    QFont titleFont = option.font;
     titleFont.setPixelSize(13);
     titleFont.setBold(true);
     painter->setFont(titleFont);
@@ -159,7 +159,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     painter->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, title);
 
     // ── 4. Snippet (muted, single line, elided) ────────────────────
-    QFont snipFont = option.font();
+    QFont snipFont = option.font;
     snipFont.setPixelSize(12);
     painter->setFont(snipFont);
     painter->setPen(pal.color(QPalette::WindowText));
@@ -173,7 +173,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     painter->drawText(snipRect, Qt::AlignLeft | Qt::AlignVCenter, snip);
 
     // ── 5. Meta line (size • date, smaller + more muted) ───────────
-    QFont metaFont = option.font();
+    QFont metaFont = option.font;
     metaFont.setPixelSize(10);
     metaFont.setFamily("IBM Plex Mono");
     painter->setFont(metaFont);
@@ -191,7 +191,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
 
     // ── 6. Score chip (right side, if score > 0) ───────────────────
     if (score > 0.0) {
-        QFont scoreFont = option.font();
+        QFont scoreFont = option.font;
         scoreFont.setPixelSize(11);
         scoreFont.setFamily("IBM Plex Mono");
         painter->setFont(scoreFont);
