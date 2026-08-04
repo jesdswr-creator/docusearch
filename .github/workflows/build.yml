@@ -25,10 +25,13 @@ jobs:
   build-windows:
     name: Build on Windows Server 2022
     runs-on: windows-2022
-    # Need contents:write permission to push the ci-logs branch on failure.
+    # Need contents:write for ci-logs branch, id-token:write + attestations:write
+    # for GitHub build provenance attestation (artifact signing).
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
     # Bumped from 120 to 240 minutes because Poppler is a heavy port
     # that takes ~20-30 min to compile from source on first run
     # (subsequent runs hit the vcpkg binary cache and are much faster).
@@ -838,3 +841,25 @@ jobs:
           path: build/bin/Release/
           if-no-files-found: warn
           retention-days: 7
+
+      # ── GitHub build provenance attestation ──────────────────────────
+      # Uses GitHub's OIDC token to create a signed attestation that the
+      # portable ZIP + MSI were built by this workflow run. This is
+      # GitHub's native "signing facility" — it doesn't require a paid
+      # code signing certificate. Users can verify with:
+      #   gh attestation verify <file> --owner jesdswr-creator
+      # The attestation is stored in GitHub's Rekor (Sigstore) log and
+      # links the artifact to the exact workflow run that built it.
+      - name: Attest build provenance (portable ZIP)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: DocuSearch-portable.zip
+          subject-digest: sha256:$(certutil -hashfile dist/DocuSearch-1.0.0.0-portable.zip SHA256 | findstr /v "SHA256\CertUtil")
+          push-to-registry: false
+
+      - name: Attest build provenance (MSI installer)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: DocuSearch-Setup.msi
+          subject-digest: sha256:$(certutil -hashfile dist/DocuSearch-Setup-1.0.0.0.msi SHA256 | findstr /v "SHA256\CertUtil")
+          push-to-registry: false

@@ -1855,46 +1855,23 @@ void MainWindow::autoScanIndexedFolders() {
     if (contentExtractionRunning_) return;
     if (autoScanRunning_) return;
 
-    autoScanRunning_ = true;
-    statusBar()->showMessage("Auto-scanning for new files...");
-
-    QSet<QString> folders;
-    {
-        sqlite3* raw = db_->raw();
-        if (raw) {
-            sqlite3_stmt* s = nullptr;
-            if (sqlite3_prepare_v2(raw, "SELECT path FROM Files;",
-                                   -1, &s, nullptr) == SQLITE_OK) {
-                while (sqlite3_step(s) == SQLITE_ROW) {
-                    const unsigned char* t = sqlite3_column_text(s, 0);
-                    if (!t) continue;
-                    const QString path = QString::fromUtf8(
-                        reinterpret_cast<const char*>(t));
-                    const QFileInfo fi(path);
-                    const QString absPath = fi.absolutePath();
-                    QStringList parts = absPath.split('/', Qt::SkipEmptyParts);
-                    QString top;
-                    if (parts.size() >= 2) {
-                        if (absPath.startsWith('/'))
-                            top = "/" + parts[0] + "/" + parts[1];
-                        else
-                            top = parts[0] + "/" + parts[1];
-                    } else if (!absPath.isEmpty()) {
-                        top = absPath;
-                    }
-                    if (!top.isEmpty())
-                        folders.insert(QDir::toNativeSeparators(top));
-                }
-                sqlite3_finalize(s);
-            }
-        }
-    }
-    if (folders.isEmpty()) {
+    // CRITICAL: Only scan the folders the user explicitly added via Settings
+    // → Indexing → Indexed Drives. The old code derived folders from existing
+    // DB entries (SELECT path FROM Files), which meant:
+    //   - If you ever had a file from D:\ in the DB, it would re-scan D:\
+    //   - If you removed a folder from Settings, it would STILL scan it
+    //   - Files from other sources (file watcher, manual add) would cause
+    //     their parent folders to be scanned on next startup
+    // This was the "scanning not only selected folders but other source too" bug.
+    if (settings_.indexedDrives.isEmpty()) {
         autoScanRunning_ = false;
         return;
     }
 
-    const QStringList folderList(folders.begin(), folders.end());
+    autoScanRunning_ = true;
+    statusBar()->showMessage("Auto-scanning indexed folders...");
+
+    const QStringList folderList = settings_.indexedDrives;
     QString dbPath = Config::instance().dbPath();
     bool hashEnabled = settings_.hashLargeFiles;
     QStringList foldersCopy = folderList;
@@ -2356,6 +2333,19 @@ void MainWindow::onIndexingFinished() {
 void MainWindow::onFileAdded(const QString& path) {
     if (!repo_ || !db_) return;
     try {
+        // SAFETY: Only process files that are under one of the user's
+        // indexed folders. The file watcher should only fire for these,
+        // but this is a defensive check in case a watch was added for
+        // a folder the user later removed from Settings.
+        bool underIndexed = false;
+        for (const QString& drive : settings_.indexedDrives) {
+            if (path.startsWith(drive, Qt::CaseInsensitive)) {
+                underIndexed = true;
+                break;
+            }
+        }
+        if (!underIndexed) return;
+
         if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return;
 
         // Check if extension is supported.
