@@ -854,12 +854,12 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: DocuSearch-portable.zip
-          subject-digest: sha256:$(certutil -hashfile dist/DocuSearch-1.0.0.0-portable.zip SHA256 | findstr /v "SHA256\CertUtil")
+          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-1.0.0.0-portable.zip') }}
           push-to-registry: false
 
       - name: Attest build provenance (MSI installer)
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: DocuSearch-Setup.msi
-          subject-digest: sha256:$(certutil -hashfile dist/DocuSearch-Setup-1.0.0.0.msi SHA256 | findstr /v "SHA256\CertUtil")
+          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-Setup-1.0.0.0.msi') }}
           push-to-registry: false
