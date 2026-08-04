@@ -698,6 +698,110 @@ jobs:
           Write-Host "=== MSI created: $msiOut ==="
           Get-Item $msiOut | Format-List Name, Length, LastWriteTime
 
+      - name: Sign executables + MSI (self-signed Authenticode)
+        shell: pwsh
+        run: |
+          # ── Create a self-signed code signing certificate ──────────────
+          # This provides:
+          #   • Publisher name "DocuSearch" in the UAC dialog (instead of
+          #     "Unknown publisher")
+          #   • Tamper protection (any modification breaks the signature)
+          #   • Authenticode signature (some AV scanners treat signed exes
+          #     more favorably)
+          #
+          # It does NOT bypass Windows SmartScreen — that requires a paid
+          # EV certificate from a trusted CA (DigiCert, SSL.com, etc.).
+          # Users will still see a "Windows protected your PC" warning on
+          # first launch, but can click "More info → Run anyway" to proceed.
+          #
+          # For production distribution, replace this self-signed cert with
+          # a real OV/EV code signing certificate stored as a GitHub secret.
+          # ----------------------------------------------------------------
+
+          $certSubject = "CN=DocuSearch, O=DocuSearch, C=US"
+          $certPath = Join-Path $env:RUNNER_TEMP "docusearch_cert.pfx"
+          $certPwd = "DocuSearch$(Get-Date -Format 'yyyy')!"
+
+          Write-Host "=== Creating self-signed code signing certificate ==="
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject $certSubject `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "DocuSearch Code Signing" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -KeyAlgorithm RSA `
+            -KeyLength 4096 `
+            -HashAlgorithm SHA256 `
+            -NotAfter (Get-Date).AddYears(3)
+
+          # Export to PFX for signtool
+          $certPwdSecure = ConvertTo-SecureString -String $certPwd -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $certPath -Password $certPwdSecure | Out-Null
+          Write-Host "Certificate exported to: $certPath"
+
+          # ── Find signtool.exe (ships with Windows SDK) ─────────────────
+          $signtool = $null
+          $sdkPaths = @(
+            "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe",
+            "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe",
+            "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe"
+          )
+          foreach ($p in $sdkPaths) {
+            if (Test-Path $p) { $signtool = $p; break }
+          }
+          # Fallback: search for any signtool
+          if (-not $signtool) {
+            $found = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $signtool = $found.FullName }
+          }
+          if (-not $signtool) {
+            Write-Host "WARNING: signtool.exe not found — skipping signing."
+            return
+          }
+          Write-Host "Using signtool: $signtool"
+
+          # ── Sign all .exe files in the build output ────────────────────
+          $exeDir = "build\bin\Release"
+          $exes = Get-ChildItem $exeDir -Filter "*.exe" -ErrorAction SilentlyContinue
+          foreach ($exe in $exes) {
+            Write-Host "Signing: $($exe.Name)"
+            & $signtool sign /f $certPath /p $certPwd `
+              /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+              $exe.FullName 2>&1 | ForEach-Object { Write-Host $_ }
+          }
+
+          # ── Sign the MSI installer ─────────────────────────────────────
+          $msi = "dist\DocuSearch-Setup-1.0.0.0.msi"
+          if (Test-Path $msi) {
+            Write-Host "Signing: $msi"
+            & $signtool sign /f $certPath /p $certPwd `
+              /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+              $msi 2>&1 | ForEach-Object { Write-Host $_ }
+          }
+
+          # ── Verify signatures ──────────────────────────────────────────
+          Write-Host "`n=== Signature verification ==="
+          foreach ($exe in $exes) {
+            $result = & $signtool verify /pa $exe.FullName 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "  OK: $($exe.Name) — signed"
+            } else {
+              Write-Host "  FAIL: $($exe.Name) — $result"
+            }
+          }
+          if (Test-Path $msi) {
+            $result = & $signtool verify /pa $msi 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "  OK: MSI — signed"
+            } else {
+              Write-Host "  FAIL: MSI — $result"
+            }
+          }
+
+          # Clean up the certificate from the store
+          Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
+          Remove-Item $certPath -ErrorAction SilentlyContinue
+
       - name: Upload portable ZIP (the main deliverable)
         uses: actions/upload-artifact@v5
         with:
