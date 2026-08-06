@@ -570,7 +570,9 @@ jobs:
 
       - name: Download BGE Small EN v1.5 model (bundled with app)
         shell: pwsh
-        continue-on-error: true
+        # NO continue-on-error — the BGE model is required for semantic search.
+        # If this fails, the build fails. Users expect semantic search to work
+        # out of the box (the model is Apache 2.0, free to redistribute).
         run: |
           # Download the BGE Small EN v1.5 model from HuggingFace and
           # bundle it into the release folder. This way users don't need
@@ -588,35 +590,52 @@ jobs:
             @{ Name = "vocab.txt";       Url = "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt";     MinSize = 100KB }
           )
 
+          $maxRetries = 3
+          $allOk = $true
+
           foreach ($f in $files) {
             $destPath = Join-Path $dst $f.Name
-            Write-Host "Downloading $($f.Name) ..."
-            try {
-              Invoke-WebRequest -Uri $f.Url -OutFile $destPath -UseBasicParsing -ErrorAction Stop
-              $size = (Get-Item $destPath).Length
-              if ($size -lt $f.MinSize) {
-                Write-Host "WARNING: $($f.Name) is only $size bytes (expected >= $($f.MinSize))"
-              } else {
+            $downloaded = $false
+
+            for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+              Write-Host "Downloading $($f.Name) (attempt $attempt of $maxRetries) ..."
+              try {
+                # Use -UserAgent to avoid HuggingFace blocking default PowerShell UA
+                Invoke-WebRequest -Uri $f.Url -OutFile $destPath -UseBasicParsing `
+                  -UserAgent "Mozilla/5.0" -TimeoutSec 120 -ErrorAction Stop
+                $size = (Get-Item $destPath).Length
+                if ($size -lt $f.MinSize) {
+                  Write-Host "  WARNING: $($f.Name) is only $size bytes (expected >= $($f.MinSize))"
+                  throw "File too small"
+                }
                 $sizeStr = if ($size -gt 1MB) { '{0:N1} MB' -f ($size/1MB) } else { '{0:N1} KB' -f ($size/1KB) }
                 Write-Host "  OK: $($f.Name) ($sizeStr)"
+                $downloaded = $true
+                break
+              } catch {
+                Write-Host "  Attempt $attempt failed: $($_.Exception.Message)"
+                if ($attempt -lt $maxRetries) { Start-Sleep -Seconds 5 }
               }
-            } catch {
-              Write-Host "WARNING: Failed to download $($f.Name): $($_.Exception.Message)"
-              Write-Host "  Semantic search will be unavailable in this build."
+            }
+
+            if (-not $downloaded) {
+              Write-Host "ERROR: Failed to download $($f.Name) after $maxRetries attempts"
+              $allOk = $false
             }
           }
 
-          # Verify model.onnx is present (semantic search won't work without it)
+          # Hard fail if any file is missing — the installer MUST include the BGE model.
+          if (-not $allOk) {
+            throw "BGE model download failed — semantic search would be unavailable. Failing build."
+          }
+
+          # Final verification
           $modelPath = Join-Path $dst "model.onnx"
-          if (Test-Path $modelPath) {
-            $modelSize = (Get-Item $modelPath).Length
-            if ($modelSize -ge 40MB) {
-              Write-Host "BGE model bundled successfully ($('{0:N1}' -f ($modelSize/1MB)) MB)"
-            } else {
-              Write-Host "WARNING: BGE model is too small ($modelSize bytes) — semantic search may not work"
-            }
+          $modelSize = (Get-Item $modelPath).Length
+          if ($modelSize -ge 40MB) {
+            Write-Host "BGE model bundled successfully ($('{0:N1}' -f ($modelSize/1MB)) MB)"
           } else {
-            Write-Host "WARNING: BGE model not downloaded — semantic search will be unavailable"
+            throw "BGE model is too small ($modelSize bytes) — failing build"
           }
 
       - name: Bundle ONNX Runtime DLL with app
@@ -662,6 +681,25 @@ jobs:
           # harvest doesn't include it either.
           Get-ChildItem -Path "build\bin\Release" -Filter "vc_redist*" | Remove-Item -Force -ErrorAction SilentlyContinue
           Get-ChildItem -Path "build\bin\Release" -Filter "vcredist*" | Remove-Item -Force -ErrorAction SilentlyContinue
+
+          # VERIFY: BGE model is present before zipping
+          $modelPath = "build\bin\Release\models\bge-small-en-v1.5\model.onnx"
+          if (-not (Test-Path $modelPath)) {
+            throw "BGE model.onnx not found — cannot build portable ZIP without it"
+          }
+          $modelSize = (Get-Item $modelPath).Length
+          if ($modelSize -lt 40MB) {
+            throw "BGE model.onnx is too small ($modelSize bytes) — cannot build portable ZIP"
+          }
+          Write-Host "Verified: BGE model.onnx present ($('{0:N1}' -f ($modelSize/1MB)) MB)"
+
+          # VERIFY: onnxruntime.dll is present
+          $ortPath = "build\bin\Release\onnxruntime.dll"
+          if (-not (Test-Path $ortPath)) {
+            throw "onnxruntime.dll not found — semantic search won't work without it"
+          }
+          Write-Host "Verified: onnxruntime.dll present"
+
           Compress-Archive -Path "$stagingDir\*" -DestinationPath $portableZip -CompressionLevel Optimal
           Write-Host "Created portable ZIP: $portableZip"
           Write-Host "Contents:"
