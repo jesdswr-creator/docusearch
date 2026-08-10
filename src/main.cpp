@@ -20,49 +20,22 @@
 #include <QIcon>
 #include <QThread>
 #include <QThreadPool>
+#include <QSplashScreen>
+#include <QPixmap>
 
 using namespace DocuSearch;
 
 int main(int argc, char* argv[]) {
     // Install the crash handler FIRST — before anything that might crash.
-    // Writes a minidump to %APPDATA%/DocuSearch/crash.dmp on any
-    // unhandled exception. One crash dump replaces 4+ build cycles of
-    // guessing at extraction crashes.
-    // OK to call before QApplication — uses only Win32 APIs, no Qt.
     DocuSearch::installCrashHandler();
-
-    // Install the SEH translator next — converts SEH exceptions (access
-    // violations etc.) into catchable C++ exceptions via _set_se_translator.
-    // Note: this is per-thread, so worker threads must install it themselves.
-    // OK to call before QApplication — pure MSVC runtime, no Qt.
     DocuSearch::installSehTranslator();
 
     // Phase 12: Limit thread pool for 4GB RAM systems.
-    // On 4GB machines, running too many threads causes memory pressure
-    // and CPU thrashing. Cap at 2 threads (enough for parallelism without
-    // overloading). On 8GB+ machines, allow up to (cores-1).
     const int cores = QThread::idealThreadCount();
     const int maxThreads = (cores <= 2) ? 2 : std::min(cores - 1, 4);
     QThreadPool::globalInstance()->setMaxThreadCount(maxThreads);
-
-    // CRITICAL: Set a large stack size (16MB) for thread pool threads.
-    // The default 1MB stack overflows on deeply-nested PDFs — Poppler's
-    // recursive parser blows the stack and raises STACK_OVERFLOW (0xC00000FD).
-    // This was the root cause of the extraction crashes on large PDFs like
-    // "GM(W)-SWR-PLANNING-GSU MYS-MYS-1219-2026-V3-R0-A0-CPDE-SWR-Approve-4.pdf"
-    // (4.8MB, deeply nested structure).
-    // 16MB is generous — only the pages that actually need deep recursion
-    // will touch it, and the OS only commits physical memory on demand.
     QThreadPool::globalInstance()->setStackSize(16 * 1024 * 1024);
 
-    // Round the scale factor to the nearest integer (1x, 2x, 3x) instead
-    // of passing fractional scales (1.25x, 1.5x) through. On Windows,
-    // fractional scaling causes Qt to rasterize at one DPI and Windows
-    // to bitmap-stretch the window, which produces blurry text - especially
-    // noticeable on Full HD (1080p) monitors at 125% or 150% scaling.
-    // With Round, a 1.25x scale becomes 1x (crisp) and a 1.75x scale
-    // becomes 2x (also crisp). The manifest already declares
-    // PerMonitorV2 awareness so the app gets the real per-monitor DPI.
     QApplication::setHighDpiScaleFactorRoundingPolicy(
         Qt::HighDpiScaleFactorRoundingPolicy::Round);
 
@@ -72,65 +45,51 @@ int main(int argc, char* argv[]) {
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
 
-    // Initialize the logger AFTER QApplication is constructed.
-    // Logger::init() calls QMetaObject::invokeMethod() with a queued
-    // connection, which requires QCoreApplication's event dispatcher to
-    // exist. Calling it before QApplication leaves the dispatcher null
-    // and the worker thread's invokeMethod never dispatches — leading to
-    // a window that never paints (black screen).
-    // Config::instance().logDir() also needs QApplication for QSettings
-    // (which uses org/app name to determine the data location).
+    // Initialize the logger AFTER QApplication.
     DocuSearch::Logger::instance().init(
         DocuSearch::Config::instance().logDir(),
-        DocuSearch::LogLevel::Debug,  // include debug-level for crash diagnosis
+        DocuSearch::LogLevel::Debug,
         /*mirrorToStderr=*/false);
 
-    // Set the application window icon. This makes the icon appear in:
-    //   * The title bar of the main window
-    //   * The Windows taskbar
-    //   * Alt-Tab switcher
-    //   * The system tray (if we ever add one)
-    // The icon is loaded from the embedded Qt resource (app.qrc) which
-    // bundles icons/DocuSearch-256.png. We use the PNG (not the .ico)
-    // because Qt's QIcon loads PNGs natively on all platforms; the .ico
-    // is only used by the Windows linker for the .exe's embedded icon.
     app.setWindowIcon(QIcon(":/icons/DocuSearch-256.png"));
-
-    // Use Fusion style — modern cross-platform look. We DON'T apply any QSS
-    // theme (the QSS was causing the blank window). Fusion without QSS gives
-    // a clean, modern, native-looking interface.
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
-    // Windows 11-inspired light palette (no QSS - just palette, which Qt
-    // renders correctly without breaking).
+    // ── Splash screen: show IMMEDIATELY so the user sees something ──
+    // The MainWindow constructor takes ~1-3 seconds (DB open, schema
+    // migrate, widget creation, QSS parsing, icon loading). Without a
+    // splash screen, the user double-clicks the exe and sees nothing
+    // for several seconds — feels broken.
+    QPixmap splashPixmap(":/icons/DocuSearch-256.png");
+    QSplashScreen splash(splashPixmap.scaled(256, 256, Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation));
+    splash.setStyleSheet("background: #131922; color: #e9eef6;");
+    splash.showMessage("Loading DocuSearch...",
+                       Qt::AlignBottom | Qt::AlignHCenter, QColor("#f4a83a"));
+    splash.show();
+    app.processEvents();  // Force paint the splash immediately
+
     QPalette pal;
-    // Backgrounds
-    pal.setColor(QPalette::Window,          QColor(243, 243, 243));  // window bg
-    pal.setColor(QPalette::Base,            QColor(255, 255, 255));  // input bg
-    pal.setColor(QPalette::AlternateBase,   QColor(249, 249, 249));  // alt list rows
-    // Text
+    pal.setColor(QPalette::Window,          QColor(243, 243, 243));
+    pal.setColor(QPalette::Base,            QColor(255, 255, 255));
+    pal.setColor(QPalette::AlternateBase,   QColor(249, 249, 249));
     pal.setColor(QPalette::WindowText,      QColor(32, 32, 32));
     pal.setColor(QPalette::Text,            QColor(32, 32, 32));
     pal.setColor(QPalette::ButtonText,      QColor(32, 32, 32));
-    // Buttons
     pal.setColor(QPalette::Button,          QColor(243, 243, 243));
-    // Selection (Win11 accent blue)
     pal.setColor(QPalette::Highlight,       QColor(0, 120, 212));
     pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-    // Tooltips
     pal.setColor(QPalette::ToolTipBase,     QColor(255, 255, 255));
     pal.setColor(QPalette::ToolTipText,     QColor(32, 32, 32));
-    // Disabled state
     pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // Don't apply any QSS theme for now — use native Windows styling.
-    // (Logger was already initialized above, before QApplication, so the
-    // crash handler can write to it.)
-
+    // ── Construct MainWindow (this is the slow part) ──
     DocuSearch::MainWindow w;
+
+    // Close splash when the window is ready to show.
+    splash.finish(&w);
     w.show();
 
     return app.exec();

@@ -227,10 +227,14 @@ MainWindow::MainWindow(QWidget* parent)
         ocrStatusWidget_->installEventFilter(this);
     }
 
-    // Initialize semantic search subsystem (BGE + ONNX Runtime).
-    // This is OPTIONAL and gracefully degrades to keyword-only search
-    // if the model file or onnxruntime.dll is missing.
-    initializeSemanticSearch();
+    // DEFER semantic search init to after the window is shown.
+    // initializeSemanticSearch() creates a BgeService + QtConcurrent::run
+    // which, even though it runs on a worker thread, still allocates memory
+    // and loads the ONNX model path check on the main thread. Deferring it
+    // means the window appears faster.
+    QTimer::singleShot(100, this, [this]() {
+        initializeSemanticSearch();
+    });
 
     applyTheme();
 
