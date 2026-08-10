@@ -702,8 +702,23 @@ jobs:
 
           Compress-Archive -Path "$stagingDir\*" -DestinationPath $portableZip -CompressionLevel Optimal
           Write-Host "Created portable ZIP: $portableZip"
-          Write-Host "Contents:"
-          Get-ChildItem $stagingDir | Format-Table Name
+
+          # VERIFY: list what's in the staging dir + check model is there
+          Write-Host "=== Staging directory contents ==="
+          Get-ChildItem $stagingDir -Recurse | ForEach-Object {
+            $rel = $_.FullName.Substring($stagingDir.Length)
+            Write-Host "  $rel"
+          }
+          Write-Host "=== End staging contents ==="
+
+          # VERIFY: check the model is actually in the ZIP
+          $modelInStaging = Join-Path $stagingDir "models\bge-small-en-v1.5\model.onnx"
+          if (Test-Path $modelInStaging) {
+            $msize = (Get-Item $modelInStaging).Length
+            Write-Host "VERIFIED: model.onnx is in staging dir ($('{0:N1}' -f ($msize/1MB)) MB)"
+          } else {
+            throw "model.onnx NOT in staging dir — portable ZIP will be missing the BGE model"
+          }
 
       - name: Harvest build output (generate DocuSearch.Harvest.wxs)
         shell: pwsh
@@ -738,6 +753,23 @@ jobs:
           if (-not (Test-Path $msiOut)) { throw "MSI was not produced at $msiOut" }
           Write-Host "=== MSI created: $msiOut ==="
           Get-Item $msiOut | Format-List Name, Length, LastWriteTime
+
+          # VERIFY: check that the harvest file includes the BGE model
+          $harvestContent = Get-Content $wxsHarvest -Raw
+          if ($harvestContent -notmatch "model\.onnx") {
+            Write-Host "WARNING: model.onnx not found in harvest file — MSI will be missing the BGE model!"
+            Write-Host "Harvest file content (first 2000 chars):"
+            Write-Host $harvestContent.Substring(0, [Math]::Min(2000, $harvestContent.Length))
+            throw "BGE model not in MSI harvest — semantic search won't work after install"
+          } else {
+            Write-Host "VERIFIED: model.onnx is in the MSI harvest file"
+          }
+          if ($harvestContent -notmatch "onnxruntime\.dll") {
+            Write-Host "WARNING: onnxruntime.dll not found in harvest file — MSI will be missing ONNX Runtime!"
+            throw "onnxruntime.dll not in MSI harvest — semantic search won't work after install"
+          } else {
+            Write-Host "VERIFIED: onnxruntime.dll is in the MSI harvest file"
+          }
 
       - name: Sign executables + MSI (self-signed Authenticode)
         shell: pwsh
