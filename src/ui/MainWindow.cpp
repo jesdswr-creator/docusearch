@@ -2100,17 +2100,32 @@ void MainWindow::initializeSemanticSearch() {
                     this, &MainWindow::onSemanticToggled);
         }
 
-        // Check model in app dir first, then %APPDATA% as fallback.
-        // The MSI installer puts files in Program Files (which may have
-        // permission issues for model loading). The portable ZIP puts
-        // them in the exe directory.
-        QString modelPath =
-            QCoreApplication::applicationDirPath() +
-            "/models/bge-small-en-v1.5/model.onnx";
-        if (!QFileInfo::exists(modelPath)) {
-            // Fallback: check %APPDATA%/DocuSearch/models/
-            modelPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-                        "/models/bge-small-en-v1.5/model.onnx";
+        // Check model in multiple possible locations.
+        // The model may be at:
+        //   1. <exe_dir>/models/bge-small-en-v1.5/model.onnx  (standard)
+        //   2. <exe_dir>/bge-small-en-v1.5/model.onnx         (no models/ subfolder)
+        //   3. %APPDATA%/DocuSearch/models/bge-small-en-v1.5/model.onnx
+        //   4. %APPDATA%/DocuSearch/bge-small-en-v1.5/model.onnx
+        const QString exeDir = QCoreApplication::applicationDirPath();
+        const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QStringList modelCandidates = {
+            exeDir + "/models/bge-small-en-v1.5/model.onnx",
+            exeDir + "/bge-small-en-v1.5/model.onnx",
+            appData + "/models/bge-small-en-v1.5/model.onnx",
+            appData + "/bge-small-en-v1.5/model.onnx",
+        };
+        QString modelPath;
+        for (const auto& candidate : modelCandidates) {
+            DS_INFO("BGE", "Checking model path: " + candidate +
+                    (QFileInfo::exists(candidate) ? " — FOUND" : " — not found"));
+            if (QFileInfo::exists(candidate)) {
+                modelPath = candidate;
+                break;
+            }
+        }
+        if (modelPath.isEmpty()) {
+            DS_WARN("BGE", "Model not found in any of the checked paths. "
+                    "Semantic search will be unavailable.");
         }
         const QString dbPath = Config::instance().dbPath();
 

@@ -198,23 +198,35 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* modelGroup = new QGroupBox("AI Model", this);
     auto* modelLay = new QVBoxLayout(modelGroup);
 
-    // Check model in app dir AND in %APPDATA%/DocuSearch/models (fallback)
-    const QString appDirModel = QCoreApplication::applicationDirPath() +
-                                "/models/bge-small-en-v1.5/model.onnx";
-    const QString appDataModel = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-                                 "/models/bge-small-en-v1.5/model.onnx";
-    const bool modelExists = QFileInfo::exists(appDirModel) || QFileInfo::exists(appDataModel);
-    const QString modelPath = QFileInfo::exists(appDirModel) ? appDirModel : appDataModel;
+    // Check model in multiple possible locations (matching MainWindow logic).
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QStringList modelCandidates = {
+        exeDir + "/models/bge-small-en-v1.5/model.onnx",
+        exeDir + "/bge-small-en-v1.5/model.onnx",
+        appData + "/models/bge-small-en-v1.5/model.onnx",
+        appData + "/bge-small-en-v1.5/model.onnx",
+    };
+    bool modelExists = false;
+    QString modelPath;
+    for (const auto& candidate : modelCandidates) {
+        if (QFileInfo::exists(candidate)) {
+            modelExists = true;
+            modelPath = candidate;
+            break;
+        }
+    }
 
     auto* modelStatusLbl = new QLabel(
         modelExists
             ? QString("Status: <b>✓ Ready</b><br>Path: %1").arg(modelPath)
             : QString("Status: <b>Not found</b><br>"
-                      "The AI model should be bundled with DocuSearch.<br>"
-                      "Expected at:<br><code>%1</code><br><br>"
-                      "If you installed via MSI, the model may not have been<br>"
-                      "included. Try the portable ZIP instead, which includes<br>"
-                      "the model pre-bundled.").arg(appDirModel),
+                      "Searched:<br>"
+                      "<code>%1/models/bge-small-en-v1.5/model.onnx</code><br>"
+                      "<code>%1/bge-small-en-v1.5/model.onnx</code><br>"
+                      "<code>%2/models/bge-small-en-v1.5/model.onnx</code><br><br>"
+                      "Use the portable ZIP which includes the model pre-bundled.")
+                      .arg(exeDir, appData),
         this);
     modelStatusLbl->setTextFormat(Qt::RichText);
     modelStatusLbl->setWordWrap(true);
