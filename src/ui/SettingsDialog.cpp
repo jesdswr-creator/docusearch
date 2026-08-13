@@ -28,6 +28,7 @@
 #include <QSpinBox>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QStandardPaths>
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QComboBox>
