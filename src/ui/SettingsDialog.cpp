@@ -197,14 +197,23 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* modelGroup = new QGroupBox("AI Model", this);
     auto* modelLay = new QVBoxLayout(modelGroup);
 
-    const QString modelPath = QCoreApplication::applicationDirPath() +
-                              "/models/bge-small-en-v1.5/model.onnx";
-    const bool modelExists = QFileInfo::exists(modelPath);
+    // Check model in app dir AND in %APPDATA%/DocuSearch/models (fallback)
+    const QString appDirModel = QCoreApplication::applicationDirPath() +
+                                "/models/bge-small-en-v1.5/model.onnx";
+    const QString appDataModel = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                                 "/models/bge-small-en-v1.5/model.onnx";
+    const bool modelExists = QFileInfo::exists(appDirModel) || QFileInfo::exists(appDataModel);
+    const QString modelPath = QFileInfo::exists(appDirModel) ? appDirModel : appDataModel;
+
     auto* modelStatusLbl = new QLabel(
         modelExists
-            ? QString("Status: <b>Ready</b><br>Path: %1").arg(modelPath)
-            : QString("Status: <b>Not installed</b><br>"
-                      "Run <code>scripts/download_bge_model.ps1</code> to install."),
+            ? QString("Status: <b>✓ Ready</b><br>Path: %1").arg(modelPath)
+            : QString("Status: <b>Not found</b><br>"
+                      "The AI model should be bundled with DocuSearch.<br>"
+                      "Expected at:<br><code>%1</code><br><br>"
+                      "If you installed via MSI, the model may not have been<br>"
+                      "included. Try the portable ZIP instead, which includes<br>"
+                      "the model pre-bundled.").arg(appDirModel),
         this);
     modelStatusLbl->setTextFormat(Qt::RichText);
     modelStatusLbl->setWordWrap(true);

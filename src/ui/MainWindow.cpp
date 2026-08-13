@@ -2100,9 +2100,18 @@ void MainWindow::initializeSemanticSearch() {
                     this, &MainWindow::onSemanticToggled);
         }
 
-        const QString modelPath =
+        // Check model in app dir first, then %APPDATA% as fallback.
+        // The MSI installer puts files in Program Files (which may have
+        // permission issues for model loading). The portable ZIP puts
+        // them in the exe directory.
+        QString modelPath =
             QCoreApplication::applicationDirPath() +
             "/models/bge-small-en-v1.5/model.onnx";
+        if (!QFileInfo::exists(modelPath)) {
+            // Fallback: check %APPDATA%/DocuSearch/models/
+            modelPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                        "/models/bge-small-en-v1.5/model.onnx";
+        }
         const QString dbPath = Config::instance().dbPath();
 
         bgeService_ = std::make_unique<BgeService>(this);
