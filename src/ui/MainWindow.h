@@ -57,6 +57,7 @@ class FilePreviewPane;
 class MetadataPane;
 class TagsNotesPane;
 class IndexingProgressWidget;
+class SwitchControl;
 
 class BgeService;
 class HybridSearchEngine;
@@ -180,7 +181,11 @@ public:
     // Sits ABOVE previewPane_ in the same column.
     FilePreviewPane* filePreviewPane_     = nullptr;
     // Semantic search toggle button (in search bar).
-    QPushButton*    semanticToggleBtn_    = nullptr;
+    QPushButton*    semanticToggleBtn_    = nullptr;  // legacy; unused after switch port
+    QWidget*        aiControlWidget_     = nullptr;  // container: [sparkles-ico] AI [switch] [state label]
+    QLabel*         aiIconLbl_           = nullptr;
+    SwitchControl*  aiSwitch_            = nullptr;
+    QLabel*         aiStateLbl_          = nullptr;
     QPushButton*    themeToggleBtn_       = nullptr;
 
     // Semantic search subsystem (BGE + hybrid).

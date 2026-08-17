@@ -3,6 +3,7 @@
 // ============================================================
 
 #include "ResultItemDelegate.h"
+#include "Theme.h"
 #include "../core/Types.h"
 
 #include <QPainter>
@@ -87,31 +88,35 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     const bool isSelected = (option.state & QStyle::State_Selected);
     const bool isHovered  = (option.state & QStyle::State_MouseOver);
 
-    // ── 1. Card background ──────────────────────────────────────────
-    // Transparent by default, subtle amber tint on hover, stronger on select.
-    // Matches the QSS #resultCard[sel="true"] styling from the mockup.
+    // ── 1. Card background — flat solid colors, no gradients (QSS-safe) ──
+    // Per the Pastel Pop design:
+    //   .result:hover     → background: var(--hover)
+    //   .result.selected  → background: var(--primary-soft), border-left: 4px primary
+    // The delegate paints the tint + the left bar; the QSS #resultsList::item
+    // rules handle the outer card border.
     const QPalette pal = option.palette;
+    // Pull exact pastel tokens from the active theme (set by MainWindow::applyTheme).
+    const Theme::PastelPalette& tp = Theme::active();
+    const QColor primary        = QColor(tp.primary);
+    const QColor primarySoft    = QColor(tp.primarySoft);
+    const QColor primaryBorder  = QColor(tp.primaryBorder);
+    const QColor primaryStrong  = QColor(tp.primaryStrong);
+    const QColor textColor      = QColor(tp.text);
+    const QColor mutedText      = QColor(tp.muted);
+    const QColor hoverColor     = QColor(tp.hover);
+    const QColor surface        = QColor(tp.surface);
+    // Selected title uses primaryStrong for contrast against primarySoft bg.
+    const QColor selectedTitle  = primaryStrong;
+
     QColor cardBg;
-    if (isSelected) {
-        cardBg = QColor(244, 168, 58, 22);  // rgba(244,168,58,0.09) approx
-    } else if (isHovered) {
-        cardBg = pal.color(QPalette::AlternateBase);
-    } else {
-        cardBg = Qt::transparent;
-    }
+    if (isSelected)        cardBg = primarySoft;
+    else if (isHovered)    cardBg = hoverColor;
+    else                   cardBg = Qt::transparent;
 
     if (cardBg != Qt::transparent) {
         QPainterPath path;
         path.addRoundedRect(rect.adjusted(2, 2, -2, -2), 8, 8);
         painter->fillPath(path, cardBg);
-
-        // Amber left border on selection (3px, matches mockup #resultCard[sel="true"])
-        if (isSelected) {
-            QPainterPath borderPath;
-            QRect leftBar(rect.left() + 2, rect.top() + 2, 3, rect.height() - 4);
-            borderPath.addRoundedRect(leftBar, 2, 2);
-            painter->fillPath(borderPath, QColor(244, 168, 58));  // @amber@
-        }
     }
 
     // ── 2. File-type badge (36x36, colored, rounded) ───────────────
@@ -129,6 +134,14 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     const qint64 size = index.data(kRoleSize).toLongLong();
     const qint64 modTime = index.data(kRoleModDate).toLongLong();
     const double score = index.data(kRoleScore).toDouble();
+
+    // Type-color left bar (always visible per the design — .result border-left:4px).
+    {
+        QPainterPath barPath;
+        QRect leftBar(rect.left() + 2, rect.top() + 2, 4, rect.height() - 4);
+        barPath.addRoundedRect(leftBar, 2, 2);
+        painter->fillPath(barPath, badgeColor(ext));
+    }
 
     const QRect badgeRect(rect.left() + 14, rect.top() + 18, 36, 36);
     QPainterPath badgePath;
@@ -151,7 +164,8 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     titleFont.setPixelSize(13);
     titleFont.setBold(true);
     painter->setFont(titleFont);
-    painter->setPen(pal.color(QPalette::Text));
+    // Selected title → primaryStrong for contrast against primarySoft bg.
+    painter->setPen(isSelected ? selectedTitle : textColor);
 
     QFontMetrics tfm(titleFont);
     QString title = tfm.elidedText(filename, Qt::ElideRight, textRight - textX);
@@ -162,7 +176,8 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     QFont snipFont = option.font;
     snipFont.setPixelSize(12);
     painter->setFont(snipFont);
-    painter->setPen(pal.color(QPalette::WindowText));
+    // Selected snippet → use text color (not muted) for readability.
+    painter->setPen(isSelected ? textColor : mutedText);
 
     QFontMetrics sfm(snipFont);
     QString snip = stripBoldTags(snippet);
@@ -177,7 +192,7 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     metaFont.setPixelSize(10);
     metaFont.setFamily("IBM Plex Mono");
     painter->setFont(metaFont);
-    painter->setPen(pal.color(QPalette::Disabled, QPalette::WindowText));
+    painter->setPen(mutedText);
 
     QString dateStr;
     if (modTime > 0) {
@@ -191,11 +206,12 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
 
     // ── 6. Score chip (right side, if score > 0) ───────────────────
     if (score > 0.0) {
+        // Chip: surface bg + primaryBorder + primaryStrong text (matches .r-score).
         QFont scoreFont = option.font;
         scoreFont.setPixelSize(11);
         scoreFont.setFamily("IBM Plex Mono");
         painter->setFont(scoreFont);
-        painter->setPen(QColor(244, 168, 58));  // @amber@
+        painter->setPen(selectedTitle);
 
         const QString scoreText = QString::number(score, 'f', 2);
         QFontMetrics scfm(scoreFont);
@@ -206,8 +222,15 @@ void ResultItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
                         scoreW, scoreH);
 
         QPainterPath scorePath;
-        scorePath.addRoundedRect(scoreRect, 5, 5);
-        painter->fillPath(scorePath, QColor(244, 168, 58, 33));  // rgba(244,168,58,0.13)
+        scorePath.addRoundedRect(scoreRect, 999, 999);  // pill
+        painter->fillPath(scorePath, surface);
+        QPen chipBorder(primaryBorder);
+        chipBorder.setWidthF(1.0);
+        painter->setPen(chipBorder);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawPath(scorePath);
+
+        painter->setPen(selectedTitle);
         painter->drawText(scoreRect, Qt::AlignCenter, scoreText);
     }
 

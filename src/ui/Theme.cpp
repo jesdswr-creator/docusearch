@@ -254,4 +254,27 @@ QColor Theme::accent(Mode) {
     return QColor("#2563eb");
 }
 
+namespace {
+Theme::PastelPalette g_active;
+bool g_activeSet = false;
+}
+
+const Theme::PastelPalette& Theme::active() {
+    static PastelPalette fallback;
+    if (g_activeSet) return g_active;
+    // Fallback (Lavender) used only if MainWindow::applyTheme hasn't run yet.
+    fallback.bg = "#f5f6ff"; fallback.surface = "#ffffff"; fallback.surface2 = "#fafbff";
+    fallback.field = "#fdfeff"; fallback.border = "#e4e7f8"; fallback.hover = "#eef0fe";
+    fallback.text = "#4a5070"; fallback.muted = "#8d93b2";
+    fallback.primary = "#6c7cf5"; fallback.primaryStrong = "#5563e8";
+    fallback.primarySoft = "#eaedff"; fallback.primaryBorder = "#ccd4ff";
+    fallback.themeLabel = "Lavender"; fallback.index = 0;
+    return fallback;
+}
+
+void Theme::setActive(const PastelPalette& p) {
+    g_active = p;
+    g_activeSet = true;
+}
+
 } // namespace DocuSearch

@@ -12,6 +12,7 @@
 #include "TagsNotesPane.h"
 #include "IndexingProgress.h"
 #include "SettingsDialog.h"
+#include "SwitchControl.h"
 
 #include "../core/Config.h"
 #include "../core/Constants.h"
@@ -774,37 +775,63 @@ void MainWindow::buildStatusBar() {
         "Amber: oneocr.dll is missing — click for install instructions.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
-    // Semantic search toggle button (shows current state).
+    // Semantic search toggle — custom slider pill (matches Pastel Pop design).
+    // Layout:  [sparkles-icon] AI  [====switch====]  ON/OFF
     // Disabled by default — enabled after BGE service becomes ready.
-    semanticToggleBtn_ = new QPushButton(sb);
-    semanticToggleBtn_->setObjectName("semanticToggleBtn");
-    semanticToggleBtn_->setText("AI: OFF");
-    semanticToggleBtn_->setCheckable(true);
-    semanticToggleBtn_->setChecked(false);
-    semanticToggleBtn_->setEnabled(false);
-    semanticToggleBtn_->setToolTip(
+    aiControlWidget_ = new QWidget(sb);
+    aiControlWidget_->setObjectName("aiControl");
+    auto* aiLay = new QHBoxLayout(aiControlWidget_);
+    aiLay->setContentsMargins(8, 0, 8, 0);
+    aiLay->setSpacing(7);
+    aiLay->setAlignment(Qt::AlignVCenter);
+
+    aiIconLbl_ = new QLabel(aiControlWidget_);
+    aiIconLbl_->setObjectName("aiIcon");
+    aiIconLbl_->setFixedSize(14, 14);
+    aiLay->addWidget(aiIconLbl_);
+
+    auto* aiLabel = new QLabel("AI", aiControlWidget_);
+    aiLabel->setObjectName("aiLabel");
+    // The pink candy accent for the AI glyph is fixed across all 3 themes.
+    // Set via QSS (#aiLabel) in applyTheme.
+    aiLay->addWidget(aiLabel);
+
+    aiSwitch_ = new SwitchControl(aiControlWidget_);
+    aiSwitch_->setObjectName("aiSwitch");
+    aiSwitch_->setChecked(false);
+    aiSwitch_->setEnabled(false);
+    aiSwitch_->setToolTip(
         "Toggle AI semantic search (BGE Small EN v1.5).\n"
         "When ON, search results include AI semantic matches in addition to keyword matches.\n"
         "Disabled if the AI model is not installed.");
-    semanticToggleBtn_->setCursor(Qt::PointingHandCursor);
-    sb->addPermanentWidget(semanticToggleBtn_);
+    aiLay->addWidget(aiSwitch_);
 
-    // Theme toggle button — cycles Lavender → Mint → Peach
+    aiStateLbl_ = new QLabel("OFF", aiControlWidget_);
+    aiStateLbl_->setObjectName("aiState");
+    // Color is updated dynamically in onSemanticToggled based on Theme::active().
+    aiStateLbl_->setStyleSheet("background:transparent; color:#8d93b2; font-weight:800; font-size:11px; min-width:24px;");
+    aiLay->addWidget(aiStateLbl_);
+
+    aiControlWidget_->setToolTip(aiSwitch_->toolTip());
+    sb->addPermanentWidget(aiControlWidget_);
+
+    // Theme toggle button — cycles Lavender → Mint → Peach (palette icon + label).
     themeToggleBtn_ = new QPushButton(sb);
     themeToggleBtn_->setObjectName("themeToggleBtn");
     themeToggleBtn_->setText("Lavender");
     themeToggleBtn_->setToolTip("Cycle theme: Lavender → Mint → Peach");
     themeToggleBtn_->setCursor(Qt::PointingHandCursor);
-    themeToggleBtn_->setFixedHeight(28);
+    themeToggleBtn_->setFixedHeight(29);
     connect(themeToggleBtn_, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
     sb->addPermanentWidget(themeToggleBtn_);
 
+    // Open Location — small secondary button with folder-open lucide icon.
     openLocationBtn_ = new QPushButton(sb);
     openLocationBtn_->setObjectName("openLocationBtn");
     openLocationBtn_->setCursor(Qt::PointingHandCursor);
-    openLocationBtn_->setText("📁 Open");  // compact icon + short label
+    openLocationBtn_->setText("Open");
     openLocationBtn_->setToolTip("Open the folder containing the selected file");
-    openLocationBtn_->setFixedHeight(28);
+    openLocationBtn_->setFixedHeight(29);
     sb->addPermanentWidget(openLocationBtn_);
 }
 
@@ -856,6 +883,18 @@ void MainWindow::applyTheme() {
     // Update theme toggle button label
     if (themeToggleBtn_) themeToggleBtn_->setText(themeLabel);
 
+    // Publish the active pastel palette so delegates and custom widgets
+    // (ResultItemDelegate, SwitchControl) can read the exact tokens
+    // instead of re-deriving from QPalette::Highlight.
+    Theme::PastelPalette palActive;
+    palActive.bg = bg; palActive.surface = surface; palActive.surface2 = surface2;
+    palActive.field = field; palActive.border = border; palActive.hover = hover;
+    palActive.text = text; palActive.muted = muted;
+    palActive.primary = primary; palActive.primaryStrong = primaryStrong;
+    palActive.primarySoft = primarySoft; palActive.primaryBorder = primaryBorder;
+    palActive.themeLabel = themeLabel; palActive.index = pastelTheme_;
+    Theme::setActive(palActive);
+
     // ── QPalette ──────────────────────────────────────────────
     QPalette pal;
     pal.setColor(QPalette::Window,        QColor(bg));
@@ -894,21 +933,29 @@ QPushButton:hover { background: @primaryStrong@; }
 QPushButton:pressed { background: @primaryStrong@; }
 QPushButton:disabled { background: @border@; color: @muted@; }
 
-/* ── Secondary/ghost button ── */
-QPushButton#openLocationBtn { background: @surface@; color: @text@; border: 1px solid @border@; }
-QPushButton#openLocationBtn:hover { background: @hover@; }
-QPushButton#semanticToggleBtn { background: @surface@; color: @muted@; border: 1px solid @border@;
-                                font-size: 11px; }
-QPushButton#semanticToggleBtn:checked { background: @primarySoft@; color: @primaryStrong@;
-                                        border: 1px solid @primaryBorder@; }
-QPushButton#themeToggleBtn { background: @surface@; color: @text@; border: 1px solid @border@;
-                             font-size: 11px; font-weight: 800; }
+/* ── Secondary/ghost buttons (Open, Theme) — 29px tall, surface bg, border ── */
+QPushButton#openLocationBtn, QPushButton#themeToggleBtn {
+    background: @surface@; color: @text@; border: 1px solid @border@;
+    border-radius: 8px; padding: 0 11px; font-size: 12px; font-weight: 800;
+}
+QPushButton#openLocationBtn:hover, QPushButton#themeToggleBtn:hover {
+    background: @hover@; border-color: @primaryBorder@; color: @primaryStrong@;
+}
+QPushButton#openLocationBtn:disabled, QPushButton#themeToggleBtn:disabled {
+    color: @muted@; background: @surface@;
+}
+
+/* ── AI control widget (slider pill, label, state text) ── */
+QWidget#aiControl { background: transparent; border: none; }
+QLabel#aiLabel { color: #e85d97; font-weight: 800; font-size: 12px; background: transparent; }
+QLabel#aiState { color: @muted@; font-weight: 800; font-size: 11px; min-width: 24px; background: transparent; }
 
 /* ── Results list ── */
-QListWidget#resultsPane { background: @surface@; border: 1px solid @border@; border-radius: 12px; }
-QListWidget#resultsPane::item { padding: 8px; border-bottom: 1px solid @hover@; }
-QListWidget#resultsPane::item:selected { background: @primarySoft@; border-left: 4px solid @primary@; }
-QListWidget#resultsPane::item:hover { background: @hover@; }
+QWidget#resultsPanel { background: @surface@; }
+QListWidget#resultsList { background: @surface@; border: none; outline: 0; padding: 6px; }
+QListWidget#resultsList::item { padding: 8px; border-bottom: 1px solid @hover@; }
+QListWidget#resultsList::item:selected { background: @primarySoft@; border-left: 4px solid @primary@; color: @primaryStrong@; }
+QListWidget#resultsList::item:hover { background: @hover@; color: @text@; }
 
 /* ── Top menu ── */
 QListWidget#topMenuList { background: transparent; border: none; outline: none; }
@@ -949,13 +996,29 @@ QScrollBar::handle:horizontal { background: @border@; border-radius: 5px; min-wi
 /* ── Inputs ── */
 QSpinBox, QDoubleSpinBox, QComboBox { background: @field@; color: @text@;
     border: 1px solid @border@; border-radius: 8px; padding: 6px 10px; font-weight: 800; }
+QComboBox { padding-right: 28px; }
 QComboBox:hover { border-color: @primary@; }
+QComboBox::drop-down { border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right; }
+QComboBox::down-arrow { image: url(:/icons/chevron-down.png); width: 12px; height: 12px; }
+QComboBox::down-arrow:hover { image: url(:/icons/chevron-down-strong.png); }
+QComboBox::down-arrow:disabled { image: url(:/icons/chevron-down.png); }
 QComboBox QAbstractItemView { background: @surface@; color: @text@;
-    selection-background-color: @hover@; border: 1px solid @border@; border-radius: 8px; }
+    selection-background-color: @primarySoft@; selection-color: @primaryStrong@;
+    border: 1px solid @border@; border-radius: 8px; outline: 0; padding: 4px; }
+QComboBox QAbstractItemView::item { padding: 6px 12px; border-radius: 4px; }
+QComboBox QAbstractItemView::item:hover { background: @hover@; }
 QCheckBox { color: @text@; spacing: 6px; }
 QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
     border: 1px solid @border@; background: @field@; }
 QCheckBox::indicator:checked { background: @primary@; border-color: @primary@; }
+
+/* ── Metadata panel & rows (bottom border per row, matches design .meta-row) ── */
+QWidget#metadataPanel { background: @surface@; border-left: 1px solid @border@; }
+QWidget#metadataSection { background: transparent; border-bottom: 1px solid @hover@; }
+QWidget#metadataSection:last-child { border-bottom: none; }
+QLabel#metadataTitle { color: @text@; font-weight: 800; font-size: 13px; background: transparent; }
+QLabel#metaLabel { color: @muted@; font-size: 12px; font-weight: 700; background: transparent; min-width: 92px; }
+QLabel#metaValue { color: @text@; font-size: 12px; font-weight: 700; background: transparent; }
 
 /* ── Sliders ── */
 QSlider::groove:horizontal { background: @border@; height: 4px; border-radius: 2px; }
@@ -1042,8 +1105,19 @@ void MainWindow::refreshAllIcons() {
     titleCloseBtn_->setIconSize(QSize(14, 14));
 
     // ---- Open Location button icon ----
-    openLocationBtn_->setIcon(loadLucideIcon("folder", textColor, 14));
+    openLocationBtn_->setIcon(loadLucideIcon("folder-open", textColor, 14));
     openLocationBtn_->setIconSize(QSize(14, 14));
+
+    // ---- Theme toggle button icon (palette) ----
+    if (themeToggleBtn_) {
+        themeToggleBtn_->setIcon(loadLucideIcon("palette", textColor, 14));
+        themeToggleBtn_->setIconSize(QSize(14, 14));
+    }
+
+    // ---- AI control icon (pink sparkles, fixed candy accent) ----
+    if (aiIconLbl_) {
+        aiIconLbl_->setPixmap(loadLucidePixmap("sparkles", QColor("#e85d97"), 14, devicePixelRatio()));
+    }
 
     // ---- Sub-pane icon refresh ----
     if (searchBar_)     searchBar_->refreshIcons();
@@ -2050,9 +2124,9 @@ void MainWindow::initializeSemanticSearch() {
         }
         DS_INFO("BGE", "AI settings loaded from database.");
 
-        // Wire up the toggle button.
-        if (semanticToggleBtn_) {
-            connect(semanticToggleBtn_, &QPushButton::toggled,
+        // Wire up the AI slider switch.
+        if (aiSwitch_) {
+            connect(aiSwitch_, &SwitchControl::toggled,
                     this, &MainWindow::onSemanticToggled);
         }
 
@@ -2111,7 +2185,8 @@ void MainWindow::initializeSemanticSearch() {
 void MainWindow::onSemanticToggled(bool checked) {
     if (checked && (!bgeService_ || !bgeService_->isReady())) {
         // Block the toggle — show install instructions.
-        if (semanticToggleBtn_) semanticToggleBtn_->setChecked(false);
+        if (aiSwitch_) aiSwitch_->setCheckedNoAnim(false);
+        if (aiStateLbl_) aiStateLbl_->setText("OFF");
         QMessageBox::information(this, "AI Search",
             "AI search model not available.\n\n"
             "The AI model files should be bundled with DocuSearch.\n"
@@ -2124,8 +2199,14 @@ void MainWindow::onSemanticToggled(bool checked) {
     }
     semanticEnabled_ = checked;
     if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
-    if (semanticToggleBtn_) {
-        semanticToggleBtn_->setText(checked ? "AI: ON" : "AI: OFF");
+    if (aiStateLbl_) {
+        aiStateLbl_->setText(checked ? "ON" : "OFF");
+        // Color the state label: primaryStrong when on, muted when off.
+        const auto& tp = Theme::active();
+        const QString col = checked ? tp.primaryStrong : tp.muted;
+        aiStateLbl_->setStyleSheet(QString(
+            "background:transparent; color:%1; font-weight:800; font-size:11px; min-width:24px;")
+            .arg(col));
     }
     statusBar()->showMessage(
         checked ? "AI search enabled." : "AI search disabled.",
@@ -2134,12 +2215,12 @@ void MainWindow::onSemanticToggled(bool checked) {
 
 void MainWindow::onBgeReady() {
     DS_INFO("BGE", "BGE service ready: " + bgeService_->getStatus());
-    if (semanticToggleBtn_) {
-        semanticToggleBtn_->setEnabled(true);
+    if (aiSwitch_) {
+        aiSwitch_->setEnabled(true);
         // Phase 1.3: Auto-enable AI when BGE is ready.
         // Users shouldn't have to manually find and click the AI toggle.
-        if (!semanticToggleBtn_->isChecked()) {
-            semanticToggleBtn_->setChecked(true);
+        if (!aiSwitch_->isChecked()) {
+            aiSwitch_->setChecked(true);
         }
     }
     if (hybridSearch_) {

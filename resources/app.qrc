@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/DocuSearch-256.png</file>
+        <file>icons/chevron-down.png</file>
+        <file>icons/chevron-down-strong.png</file>
         <file>icons/lucide/search.svg</file>
         <file>icons/lucide/folder-plus.svg</file>
         <file>icons/lucide/settings.svg</file>
@@ -50,5 +52,8 @@
         <file>icons/lucide/play.svg</file>
         <file>icons/lucide/pause.svg</file>
         <file>icons/lucide/eye.svg</file>
+        <file>icons/lucide/folder-open.svg</file>
+        <file>icons/lucide/sparkles.svg</file>
+        <file>icons/lucide/palette.svg</file>
     </qresource>
 </RCC>
