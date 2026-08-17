@@ -561,7 +561,7 @@ void MainWindow::buildCentral() {
     sidebarList_->setFixedHeight(36);
     sidebarList_->setSelectionMode(QAbstractItemView::SingleSelection);
     sidebarList_->setFocusPolicy(Qt::NoFocus);
-    // NOTE: topMenuList styling is handled by the global QSS in applyTheme()
+    // topMenuList styling handled by global QSS in applyTheme()
     // (amber accent on selected, dim on unselected). Don't set an inline
     // stylesheet here — it would override the theme.
     const QStringList navLabels = {
@@ -789,16 +789,11 @@ void MainWindow::buildStatusBar() {
     semanticToggleBtn_->setCursor(Qt::PointingHandCursor);
     sb->addPermanentWidget(semanticToggleBtn_);
 
-    // Theme toggle button (light/dark) — compact toggle in status bar.
+    // Theme toggle button — cycles Lavender → Mint → Peach
     themeToggleBtn_ = new QPushButton(sb);
     themeToggleBtn_->setObjectName("themeToggleBtn");
-    themeToggleBtn_->setCheckable(true);
-    themeToggleBtn_->setChecked(darkMode_);
-    // Use text labels instead of emoji — emoji renders poorly on Windows
-    // (low-res bitmaps or boxes). Monospace "Dark"/"Light" matches the
-    // mockup's IBM Plex Mono aesthetic.
-    themeToggleBtn_->setText(darkMode_ ? "Dark" : "Light");
-    themeToggleBtn_->setToolTip("Toggle light/dark theme");
+    themeToggleBtn_->setText("Lavender");
+    themeToggleBtn_->setToolTip("Cycle theme: Lavender → Mint → Peach");
     themeToggleBtn_->setCursor(Qt::PointingHandCursor);
     themeToggleBtn_->setFixedHeight(28);
     connect(themeToggleBtn_, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
@@ -814,229 +809,190 @@ void MainWindow::buildStatusBar() {
 }
 
 void MainWindow::applyTheme() {
-    // ── Theme tokens (from theme.txt mockup) ───────────────────────────
-    // Two palettes: dark (default) and light. Amber accent on both.
-    //   Dark:  deep blue-black chrome + panels, amber #f4a83a accent
-    //   Light: warm light grays, same amber
-    //
-    // The mockup uses an @token@ substitution system — we replicate it here
-    // by building the QSS with placeholders then .replace()ing them.
+    // ════════════════════════════════════════════════════════════════
+    // "Pastel Pop" theme — 3 swappable palettes (Lavender/Mint/Peach)
+    // Flat solid colors, no gradients, no shadows. 100% QSS-safe.
+    // ════════════════════════════════════════════════════════════════
+    
+    // Fixed candy accents (same across all 3 palettes)
+    const QString cPdf    = "#ff7b7b";
+    const QString cDocx   = "#5aa2ff";
+    const QString cXlsx   = "#3fbf8f";
+    const QString cMd     = "#b78af7";
+    const QString cTxt    = "#35c0c0";
+    const QString success = "#2aa87e";
+    const QString warn    = "#e8940a";
+    const QString pink    = "#e85d97";
+    const QString orange  = "#f26b4e";
+    const QString sky     = "#2ba8cc";
+    const QString violet  = "#9a6ff0";
 
-    struct ThemeTokens {
-        QString desk1, desk2, chrome, panel, panel2, panel3, line, line2;
-        QString ink, dim, faint, amber, amber2, amberInk, mark, markInk;
-        QString cyan, green, red, pageBg, pageInk;
-    };
+    // Swappable palette tokens
+    QString bg, surface, surface2, field, border, hover, text, muted;
+    QString primary, primaryStrong, primarySoft, primaryBorder;
+    QString themeLabel;
 
-    const ThemeTokens c = darkMode_
-        ? ThemeTokens{
-            "#1c2533", "#090d14",                          // desk1, desk2
-            "#131922", "#171e29", "#1d2532", "#222c3b",    // chrome, panel, panel2, panel3
-            "#28323f", "#313d4d",                          // line, line2
-            "#e9eef6", "#97a6ba", "#62718a",               // ink, dim, faint
-            "#f4a83a", "#ffbe5c", "#2a1c02",               // amber, amber2, amberInk
-            "#f4a83a", "#231702",                          // mark, markInk
-            "#57d0c6", "#41d183", "#ef6258",               // cyan, green, red
-            "#fbfaf6", "#1f242c"                           // pageBg, pageInk
-          }
-        : ThemeTokens{
-            "#e7ecf3", "#cdd5e1",
-            "#f6f7fa", "#ffffff", "#f1f4f8", "#e9edf3",
-            "#dde2ea", "#cdd4de",
-            "#19222f", "#5a6779", "#8a97a8",
-            "#b97708", "#d68f12", "#ffffff",
-            "#ffd770", "#3a2600",
-            "#0f9d92", "#1f9d5b", "#d23b32",
-            "#ffffff", "#1f242c"
-          };
+    switch (pastelTheme_) {
+        case 1: // Mint
+            bg = "#f1faf6"; surface = "#ffffff"; surface2 = "#f8fcfa"; field = "#fdfffe";
+            border = "#dcefe5"; hover = "#e9f7f0"; text = "#4a5070"; muted = "#8d93b2";
+            primary = "#209972"; primaryStrong = "#177d5c"; primarySoft = "#e0f6ec"; primaryBorder = "#b5e6d2";
+            themeLabel = "Mint";
+            break;
+        case 2: // Peach
+            bg = "#fff6f1"; surface = "#ffffff"; surface2 = "#fffbf8"; field = "#fffefd";
+            border = "#f8e3d7"; hover = "#fdefe6"; text = "#4a5070"; muted = "#8d93b2";
+            primary = "#e0684c"; primaryStrong = "#c9553b"; primarySoft = "#ffe9e0"; primaryBorder = "#ffcdbb";
+            themeLabel = "Peach";
+            break;
+        default: // Lavender (0)
+            bg = "#f5f6ff"; surface = "#ffffff"; surface2 = "#fafbff"; field = "#fdfeff";
+            border = "#e4e7f8"; hover = "#eef0fe"; text = "#4a5070"; muted = "#8d93b2";
+            primary = "#6c7cf5"; primaryStrong = "#5563e8"; primarySoft = "#eaedff"; primaryBorder = "#ccd4ff";
+            themeLabel = "Lavender";
+            break;
+    }
 
-    // ── QPalette (for Qt's native widgets that don't use QSS) ──────────
+    // Update theme toggle button label
+    if (themeToggleBtn_) themeToggleBtn_->setText(themeLabel);
+
+    // ── QPalette ──────────────────────────────────────────────
     QPalette pal;
-    pal.setColor(QPalette::Window,          QColor(c.chrome));
-    pal.setColor(QPalette::Base,            QColor(c.panel));
-    pal.setColor(QPalette::AlternateBase,   QColor(c.panel2));
-    pal.setColor(QPalette::WindowText,      QColor(c.ink));
-    pal.setColor(QPalette::Text,            QColor(c.ink));
-    pal.setColor(QPalette::ButtonText,      QColor(c.ink));
-    pal.setColor(QPalette::Button,          QColor(c.panel2));
-    pal.setColor(QPalette::Highlight,       QColor(c.amber));
-    pal.setColor(QPalette::HighlightedText, QColor(c.amberInk));
-    pal.setColor(QPalette::ToolTipBase,     QColor(c.panel3));
-    pal.setColor(QPalette::ToolTipText,     QColor(c.ink));
-    pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(c.faint));
-    pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(c.faint));
-    pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(c.faint));
+    pal.setColor(QPalette::Window,        QColor(bg));
+    pal.setColor(QPalette::Base,          QColor(surface));
+    pal.setColor(QPalette::AlternateBase, QColor(surface2));
+    pal.setColor(QPalette::WindowText,    QColor(text));
+    pal.setColor(QPalette::Text,          QColor(text));
+    pal.setColor(QPalette::ButtonText,    QColor(text));
+    pal.setColor(QPalette::Button,        QColor(surface));
+    pal.setColor(QPalette::Highlight,     QColor(primary));
+    pal.setColor(QPalette::HighlightedText, QColor("#ffffff"));
+    pal.setColor(QPalette::ToolTipBase,   QColor(surface));
+    pal.setColor(QPalette::ToolTipText,  QColor(text));
+    pal.setColor(QPalette::Disabled, QPalette::WindowText, QColor(muted));
+    pal.setColor(QPalette::Disabled, QPalette::Text,     QColor(muted));
     QApplication::setPalette(pal);
 
-    // ── Full QSS — ported from theme.txt (src/theme.cpp) ───────────────
-    // The mockup uses @token@ placeholders that we substitute at the end.
-    // NOTE: Do NOT use the `*` universal selector — Qt's QSS parser can
-    // cause a black window when `*` sets font-family or other inherited
-    // properties. Apply font-family to QWidget instead.
+    // ── QSS with @token@ substitution ────────────────────────
     QString s = QStringLiteral(R"(
-QWidget { color: @ink@; font-family: "IBM Plex Sans","Segoe UI",sans-serif; }
-QToolTip { background:@panel3@; color:@ink@; border:1px solid @line2@; padding:5px 8px; border-radius:6px; font-size:11px; }
+QWidget { color: @text@; font-family: 'Nunito','Segoe UI',sans-serif; font-weight: 600; }
+QMainWindow { background: @bg@; }
+QWidget#topMenuBar { background: @surface2@; border-bottom: 1px solid @border@; }
+QStatusBar { background: @surface@; border-top: 1px solid @border@; color: @muted@; }
+QStatusBar::item { border: none; }
+QStatusBar QLabel { color: @muted@; padding: 0 4px; }
 
-QMainWindow { background: @chrome@; }
-QWidget#topMenuBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @panel2@, stop:1 @chrome@);
-                     border-bottom:1px solid @line@; }
-QLabel#titleBarText { font-family:"Space Grotesk","Segoe UI"; font-size:15px; font-weight:700; color:@ink@; }
+/* ── Search box ── */
+QLineEdit { background: @field@; color: @text@; border: 1px solid @border@; border-radius: 10px;
+            padding: 8px 12px; font-size: 13px; selection-background-color: @primary@; }
+QLineEdit:focus { border: 1px solid @primary@; }
 
-QListWidget#topMenuList { background:transparent; border:none; outline:none; }
-QListWidget#topMenuList::item { padding:6px 14px; border-radius:6px; margin:2px; font-size:10pt; color:@dim@; }
-QListWidget#topMenuList::item:selected { background:@panel2@; color:@amber@; font-weight:bold; }
-QListWidget#topMenuList::item:hover { background:@panel2@; color:@ink@; }
+/* ── Primary button (solid accent fill) ── */
+QPushButton { background: @primary@; color: #ffffff; border: none; border-radius: 10px;
+              padding: 7px 15px; font-weight: 800; font-size: 13px; }
+QPushButton:hover { background: @primaryStrong@; }
+QPushButton:pressed { background: @primaryStrong@; }
+QPushButton:disabled { background: @border@; color: @muted@; }
 
-QLabel#indexedInfo { font-family:"IBM Plex Mono",monospace; font-size:10px; color:@ink@; font-weight:500; }
-QProgressBar#indexedBar { background:@panel3@; border:none; border-radius:2px; }
-QProgressBar#indexedBar::chunk { background:@amber@; border-radius:2px; }
+/* ── Secondary/ghost button ── */
+QPushButton#openLocationBtn { background: @surface@; color: @text@; border: 1px solid @border@; }
+QPushButton#openLocationBtn:hover { background: @hover@; }
+QPushButton#semanticToggleBtn { background: @surface@; color: @muted@; border: 1px solid @border@;
+                                font-size: 11px; }
+QPushButton#semanticToggleBtn:checked { background: @primarySoft@; color: @primaryStrong@;
+                                        border: 1px solid @primaryBorder@; }
+QPushButton#themeToggleBtn { background: @surface@; color: @text@; border: 1px solid @border@;
+                             font-size: 11px; font-weight: 800; }
 
-QLineEdit { background:@panel@; border:1px solid @line2@; border-radius:10px; font-size:13px;
-            padding:8px 12px; selection-background-color: rgba(244,168,58,0.35); }
-QLineEdit:focus { border-color:@amber@; }
+/* ── Results list ── */
+QListWidget#resultsPane { background: @surface@; border: 1px solid @border@; border-radius: 12px; }
+QListWidget#resultsPane::item { padding: 8px; border-bottom: 1px solid @hover@; }
+QListWidget#resultsPane::item:selected { background: @primarySoft@; border-left: 4px solid @primary@; }
+QListWidget#resultsPane::item:hover { background: @hover@; }
 
-/* Global QPushButton — golden gradient for ALL buttons (per user request) */
-QPushButton {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
-    color: @amberInk@; font-weight:600; font-size:10pt; border:none; border-radius:8px;
-    padding:6px 14px;
-}
-QPushButton:hover {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
-}
-QPushButton:pressed { background:@amber@; }
-QPushButton:disabled { background:@panel3@; color:@faint@; border:none; }
+/* ── Top menu ── */
+QListWidget#topMenuList { background: transparent; border: none; outline: none; }
+QListWidget#topMenuList::item { padding: 6px 15px; border-radius: 999px; margin: 2px;
+                                 font-size: 12px; font-weight: 800; color: @muted@; }
+QListWidget#topMenuList::item:selected { background: @primary@; color: #ffffff; }
+QListWidget#topMenuList::item:hover { background: @hover@; color: @text@; }
 
-/* Extract button — larger, the primary CTA */
-QPushButton#extractBtn {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
-    color: @amberInk@; font-weight:600; font-size:13px; border:none; border-radius:9px;
-    padding:0 18px; min-height:36px;
-}
-QPushButton#extractBtn:hover {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
-}
-QPushButton#extractBtn:pressed { background:@amber@; }
-QPushButton#extractBtn:disabled { background:@panel3@; color:@faint@; border:none; }
+/* ── Tabs ── */
+QTabWidget::pane { border: 1px solid @border@; border-radius: 12px; background: @surface@; }
+QTabBar::tab { background: @surface2@; padding: 8px 14px; border: 1px solid @border@;
+               border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px;
+               color: @muted@; font-weight: 800; }
+QTabBar::tab:selected { background: @surface@; color: @primary@; }
 
-/* Search button — same golden style */
-QPushButton#searchBtn {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:1 @amber@);
-    color: @amberInk@; font-weight:600; font-size:12px; border:none; border-radius:8px;
-    padding:6px 16px;
-}
-QPushButton#searchBtn:hover {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 @amber2@, stop:0.6 @amber@);
-}
-QPushButton#searchBtn:pressed { background:@amber@; }
-QPushButton#searchBtn:disabled { background:@panel3@; color:@faint@; border:none; }
+/* ── Text areas ── */
+QTextEdit, QPlainTextEdit, QTextBrowser { background: @surface@; color: @text@;
+    border: 1px solid @border@; border-radius: 12px; padding: 8px; font-size: 13px;
+    selection-background-color: @primary@; }
 
-QListWidget#resultsPane { background:@panel@; border:1px solid @line@; border-radius:10px; }
-QListWidget#resultsPane::item { padding:10px; border-bottom:1px solid @line@; }
-QListWidget#resultsPane::item:selected { background: rgba(244,168,58,0.09);
-                                         border-left:3px solid @amber@; color:@ink@; }
-QListWidget#resultsPane::item:hover { background:@panel2@; }
+/* ── Group boxes ── */
+QGroupBox { border: 1px solid @border@; border-radius: 14px; margin-top: 12px;
+            padding: 10px; padding-top: 20px; font-weight: 800; color: @primary@; }
+QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
 
-QTabWidget::pane { border:1px solid @line@; border-radius:8px; background:@panel@; }
-QTabBar::tab { background:@panel2@; padding:8px 14px; border:1px solid @line@; border-bottom:none;
-               border-top-left-radius:8px; border-top-right-radius:8px; color:@dim@; font-size:10pt; }
-QTabBar::tab:selected { background:@panel@; color:@amber@; font-weight:bold; }
-QTabBar::tab:hover:!selected { background:@panel3@; color:@ink@; }
+/* ── Progress bars ── */
+QProgressBar { border: none; border-radius: 4px; background: @hover@; }
+QProgressBar::chunk { background: @primary@; border-radius: 4px; }
 
-QTextEdit, QPlainTextEdit, QTextBrowser { background:@panel@; color:@dim@; border:1px solid @line@;
-                                          border-radius:8px; padding:8px; font-size:12px;
-                                          selection-background-color: rgba(244,168,58,0.35); }
+/* ── Scrollbars ── */
+QScrollBar:vertical { background: transparent; width: 10px; }
+QScrollBar::handle:vertical { background: @border@; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: @muted@; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+QScrollBar:horizontal { background: transparent; height: 10px; }
+QScrollBar::handle:horizontal { background: @border@; border-radius: 5px; min-width: 30px; }
 
-QGroupBox { border:1px solid @line@; border-radius:10px; margin-top:12px; padding:10px;
-            padding-top:18px; font-weight:600; color:@faint@;
-            font-family:"Space Grotesk","Segoe UI"; font-size:11px; }
-QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 6px;
-                   color:@faint@; letter-spacing:1px; }
+/* ── Inputs ── */
+QSpinBox, QDoubleSpinBox, QComboBox { background: @field@; color: @text@;
+    border: 1px solid @border@; border-radius: 8px; padding: 6px 10px; font-weight: 800; }
+QComboBox:hover { border-color: @primary@; }
+QComboBox QAbstractItemView { background: @surface@; color: @text@;
+    selection-background-color: @hover@; border: 1px solid @border@; border-radius: 8px; }
+QCheckBox { color: @text@; spacing: 6px; }
+QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid @border@; background: @field@; }
+QCheckBox::indicator:checked { background: @primary@; border-color: @primary@; }
 
-QProgressBar { border:1px solid @line@; border-radius:6px; background:@panel2@; }
-QProgressBar::chunk { background:@amber@; border-radius:6px; }
-QProgressBar::text { color:@dim@; }
+/* ── Sliders ── */
+QSlider::groove:horizontal { background: @border@; height: 4px; border-radius: 2px; }
+QSlider::handle:horizontal { background: @primary@; width: 16px; height: 16px;
+    margin: -6px 0; border-radius: 8px; }
+QSlider::sub-page:horizontal { background: @primary@; border-radius: 2px; }
 
-QScrollBar:vertical { background:transparent; width:11px; margin:0; }
-QScrollBar::handle:vertical { background:@line2@; border-radius:6px; border:3px solid transparent;
-                              background-clip:padding-box; min-height:32px; }
-QScrollBar::handle:vertical:hover { background:@faint@; background-clip:padding-box; }
-QScrollBar::add-line, QScrollBar::sub-line { height:0; width:0; }
-QScrollBar::add-page, QScrollBar::sub-page { background:transparent; }
-QScrollBar:horizontal { background:transparent; height:11px; margin:0; }
-QScrollBar::handle:horizontal { background:@line2@; border-radius:6px; border:3px solid transparent;
-                                background-clip:padding-box; min-width:32px; }
-QScrollBar::handle:horizontal:hover { background:@faint@; background-clip:padding-box; }
+/* ── Menus ── */
+QMenu { background: @surface@; color: @text@; border: 1px solid @border@; border-radius: 10px; padding: 6px; }
+QMenu::item { padding: 6px 20px; border-radius: 6px; font-weight: 700; }
+QMenu::item:selected { background: @hover@; }
+QMenu::separator { height: 1px; background: @border@; margin: 4px 8px; }
 
-QSpinBox, QDoubleSpinBox, QComboBox { background:@panel@; color:@ink@; border:1px solid @line2@;
-                                       border-radius:7px; padding:6px 10px; font-size:12px; }
-QComboBox:hover { border-color:@amber@; }
-QComboBox QAbstractItemView { background:@panel@; border:1px solid @line2@; border-radius:8px;
-                              selection-background-color:@panel2@; outline:none; padding:4px; }
-QCheckBox { color:@ink@; spacing:6px; }
-QCheckBox::indicator { width:14px; height:14px; border-radius:3px; border:1px solid @line2@; background:@panel@; }
-QCheckBox::indicator:checked { background:@amber@; border-color:@amber@; }
+/* ── Tooltips ── */
+QToolTip { background: @text@; color: #ffffff; border: none; border-radius: 8px; padding: 6px 10px; }
 
-QSlider::groove:horizontal { height:4px; background:@panel3@; border-radius:2px; }
-QSlider::handle:horizontal { width:14px; height:14px; margin:-5px 0; background:@amber@; border-radius:7px; }
-QSlider::sub-page:horizontal { background:@amber@; border-radius:2px; }
+/* ── Splitters ── */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 1px; }
+QSplitter::handle:vertical { height: 1px; }
 
-QMenu { background:@panel@; border:1px solid @line2@; border-radius:9px; padding:6px; }
-QMenu::item { padding:7px 22px 7px 10px; border-radius:6px; font-size:12px; color:@ink@; }
-QMenu::item:selected { background:@panel2@; }
-QMenu::separator { height:1px; background:@line@; margin:4px 8px; }
-
-QStatusBar { background:@chrome@; border-top:1px solid @line@; }
-QStatusBar::item { border:none; }
-QStatusBar QLabel { color:@dim@; padding:0 4px; }
-QLabel#statusReady { color:@green@; font-weight:bold; }
-QLabel#statusInfo { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
-QLabel#ocrStatus { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; }
-
-/* Named buttons inherit the golden global style.
- * These rules only override shape/size-specific properties. */
-QPushButton#openLocationBtn { border-radius:7px; }
-QPushButton#semanticToggleBtn { font-family:"IBM Plex Mono",monospace; font-size:11px; border-radius:7px; }
-QPushButton#semanticToggleBtn:checked { background: rgba(244,168,58,0.12); color:@amber@; border:1px solid rgba(244,168,58,0.55); }
-QPushButton#themeToggleBtn { font-family:"IBM Plex Mono",monospace; font-size:11px; border-radius:7px; padding:4px 10px; min-width:50px; }
-
-QSplitter::handle { background:transparent; }
-QSplitter::handle:horizontal { width:6px; }
-QSplitter::handle:vertical { height:6px; }
-QSplitter::handle:hover { background:@amber@; }
-
-/* ---------- OCR status indicator (property-based) ---------- */
-QLabel#ocrDot { border-radius:4px; background:@faint@; }
-QLabel#ocrDot[status="ready"] { background:@green@; }
-QLabel#ocrDot[status="setup"] { background:@amber@; }
-QLabel#ocrStatus[status="ready"] { color:@green@; }
-QLabel#ocrStatus[status="setup"] { color:@amber@; }
-
-/* ---------- preview panes (objectName-based, no inline styles) ---------- */
-QLabel#previewHeader { font-weight:bold; font-size:10pt; padding:4px 8px;
-                       background:@panel2@; border-bottom:1px solid @line@; color:@ink@; }
-QLabel#previewInfo { font-family:"IBM Plex Mono",monospace; font-size:10px; padding:4px 8px;
-                     background:@panel2@; border-bottom:1px solid @line@; color:@dim@; }
-QLabel#previewNote { color:@faint@; font-style:italic; font-size:9pt; padding:4px; }
-QLabel#previewEmpty { color:@faint@; font-size:14pt; }
-QLabel#previewEmptyDark { color:@dim@; font-size:14pt; background:@panel2@; }
-QLabel#previewPageLabel { font-family:"IBM Plex Mono",monospace; font-size:11px; color:@dim@; padding:0 8px; }
-QWidget#previewToolbar { background:@panel2@; border-bottom:1px solid @line@; }
-QScrollArea#previewScroll { background:@panel2@; }
-QScrollArea#previewScrollDark { background:@panel2@; }
-QLabel#fileIconBadge { color:#ffffff; border-radius:8px; font-size:10px; font-weight:700; }
+/* ── Labels ── */
+QLabel#indexedInfo { color: @primaryStrong@; font-size: 11px; font-weight: 800;
+    background: @primarySoft@; border: 1px solid @primaryBorder@; border-radius: 999px; padding: 2px 10px; }
+QLabel#statusReady { color: @primary@; font-weight: 800; }
+QLabel#statusInfo { color: @muted@; font-size: 11px; }
+QLabel#ocrStatus { color: @warn; font-weight: 800; font-size: 11px; }
+QLabel#titleBarText { color: @text@; font-weight: 800; font-size: 15px; }
 )");
 
-    // Token substitution — same as theme.cpp's apply()
+    // Token substitution
     struct P { const char* k; const QString& v; };
     const P map[] = {
-        {"@ink@",c.ink},{"@dim@",c.dim},{"@faint@",c.faint},{"@chrome@",c.chrome},
-        {"@panel@",c.panel},{"@panel2@",c.panel2},{"@panel3@",c.panel3},
-        {"@line@",c.line},{"@line2@",c.line2},
-        {"@amber@",c.amber},{"@amber2@",c.amber2},{"@amberInk@",c.amberInk},
-        {"@mark@",c.mark},{"@markInk@",c.markInk},
-        {"@cyan@",c.cyan},{"@green@",c.green},{"@red@",c.red},
-        {"@pageBg@",c.pageBg},{"@pageInk@",c.pageInk},
+        {"@bg@",bg},{"@surface@",surface},{"@surface2@",surface2},{"@field@",field},
+        {"@border@",border},{"@hover@",hover},{"@text@",text},{"@muted@",muted},
+        {"@primary@",primary},{"@primaryStrong@",primaryStrong},{"@primarySoft@",primarySoft},
+        {"@primaryBorder@",primaryBorder},
     };
     for (const auto& p : map) s.replace(QLatin1String(p.k), p.v);
 
@@ -2967,15 +2923,12 @@ void MainWindow::onOpenSettings() {
 
 void MainWindow::onToggleTheme() {
     try {
-        darkMode_ = !darkMode_;
-        settings_.darkMode = darkMode_;
+        // Cycle: Lavender (0) → Mint (1) → Peach (2) → Lavender (0)
+        pastelTheme_ = (pastelTheme_ + 1) % 3;
+        QString names[] = {"Lavender", "Mint", "Peach"};
         saveSettings();
-        if (themeToggleBtn_) {
-            themeToggleBtn_->setText(darkMode_ ? "Dark" : "Light");
-            themeToggleBtn_->setChecked(darkMode_);
-        }
         applyTheme();
-        statusBar()->showMessage(darkMode_ ? "Dark theme." : "Light theme.", 2000);
+        statusBar()->showMessage(QString("Theme: %1").arg(names[pastelTheme_]), 2000);
     } catch (...) {
         statusBar()->showMessage("Theme toggle failed.", 3000);
     }
