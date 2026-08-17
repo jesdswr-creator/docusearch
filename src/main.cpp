@@ -59,12 +59,24 @@ int main(int argc, char* argv[]) {
     // migrate, widget creation, QSS parsing, icon loading). Without a
     // splash screen, the user double-clicks the exe and sees nothing
     // for several seconds — feels broken.
-    QPixmap splashPixmap(":/icons/DocuSearch-256.png");
-    QSplashScreen splash(splashPixmap.scaled(256, 256, Qt::KeepAspectRatio,
-                                             Qt::SmoothTransformation));
-    splash.setStyleSheet("background: #131922; color: #e9eef6;");
-    splash.showMessage("Loading DocuSearch...",
-                       Qt::AlignBottom | Qt::AlignHCenter, QColor("#f4a83a"));
+    //
+    // Splash pixmap: a 440x280 rounded card in pastel primary with the
+    // DocuSearch icon + wordmark, on a transparent background. The
+    // transparent canvas means no edge bleed against the desktop.
+    QPixmap splashPixmap(":/icons/splash.png");
+    if (splashPixmap.isNull()) {
+        // Fallback to the app icon if the splash PNG failed to load.
+        splashPixmap = QPixmap(":/icons/DocuSearch-256.png");
+    }
+    // Frameless + always-on-top so it floats over the desktop cleanly.
+    QSplashScreen splash(splashPixmap,
+                         Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    // No stylesheet background — the pixmap itself carries all the
+    // visual styling. Setting a stylesheet bg here causes edge bleed
+    // because QSplashScreen fills the window with the bg color around
+    // the pixmap's transparent corners.
+    splash.showMessage("Loading DocuSearch…",
+                       Qt::AlignBottom | Qt::AlignHCenter, QColor("#ffffff"));
     splash.show();
     app.processEvents();  // Force paint the splash immediately
 

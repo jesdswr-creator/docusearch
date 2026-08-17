@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/DocuSearch-256.png</file>
+        <file>icons/splash.png</file>
         <file>icons/chevron-down.png</file>
         <file>icons/chevron-down-strong.png</file>
         <file>icons/lucide/search.svg</file>

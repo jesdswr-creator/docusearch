@@ -220,6 +220,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Status bar at bottom (created by QMainWindow::statusBar()).
     buildStatusBar();
 
+    // Probe the OCR engine NOW (cheap file-existence check — no process
+    // spawn, no model load). This sets WindowsOcrEngine::isOneocrAvailable()
+    // based on the actual oneocr.dll + oneocr.onemodel files on disk so
+    // the status bar indicator reflects reality. Without this call, the
+    // indicator would default to "Setup Required" — confusing users who
+    // have oneocr installed and can already OCR images without issues.
+    WindowsOcrEngine::instance().init();
+
     // Update the OCR availability indicator on the status bar.
     // Clicking the indicator shows the install-instructions dialog.
     updateOcrStatusIndicator();
@@ -505,7 +513,7 @@ void MainWindow::buildTitleBar() {
     titleMaxBtn_->setFixedSize(32, 32);
 
     titleCloseBtn_ = new QPushButton(titleBar_);
-    titleCloseBtn_->setObjectName("titleBtn");
+    titleCloseBtn_->setObjectName("closeBtn");
     titleCloseBtn_->setCursor(Qt::PointingHandCursor);
     titleCloseBtn_->setToolTip("Close");
     titleCloseBtn_->setFixedSize(32, 32);
@@ -933,6 +941,37 @@ QPushButton:hover { background: @primaryStrong@; }
 QPushButton:pressed { background: @primaryStrong@; }
 QPushButton:disabled { background: @border@; color: @muted@; }
 
+/* ── Title bar window buttons (min/max/close) ── white/surface background
+   with a subtle border so they're clearly visible against the title bar.
+   Icons are dark (text color) on the white bg.
+   Close hover = red bg with white icon (icon color swapped in refreshIcons). ── */
+QPushButton#titleBtn {
+    background: @surface@; border: 1px solid @border@; border-radius: 8px;
+    padding: 0; margin: 0;
+}
+QPushButton#titleBtn:hover { background: @hover@; border-color: @primaryBorder@; }
+QPushButton#titleBtn:pressed { background: @primarySoft@; }
+QPushButton#closeBtn {
+    background: @surface@; border: 1px solid @border@; border-radius: 8px;
+    padding: 0; margin: 0;
+}
+QPushButton#closeBtn:hover { background: #ef4444; border-color: #ef4444; }
+QPushButton#closeBtn:pressed { background: #dc2626; border-color: #dc2626; }
+
+/* ── App logo: primary-colored square so the white search glyph is visible ── */
+QLabel#appLogo {
+    background: @primary@;
+    border-radius: 9px;
+}
+
+/* ── Metadata edit button: primary bg with white icon ── */
+QPushButton#editBtn {
+    background: @primary@; color: #ffffff; border: none;
+    border-radius: 8px; padding: 6px; min-width: 28px; min-height: 28px;
+}
+QPushButton#editBtn:hover { background: @primaryStrong@; }
+QPushButton#editBtn:pressed { background: @primaryStrong@; }
+
 /* ── Secondary/ghost buttons (Open, Theme) — 29px tall, surface bg, border ── */
 QPushButton#openLocationBtn, QPushButton#themeToggleBtn {
     background: @surface@; color: @text@; border: 1px solid @border@;
@@ -957,12 +996,15 @@ QListWidget#resultsList::item { padding: 8px; border-bottom: 1px solid @hover@; 
 QListWidget#resultsList::item:selected { background: @primarySoft@; border-left: 4px solid @primary@; color: @primaryStrong@; }
 QListWidget#resultsList::item:hover { background: @hover@; color: @text@; }
 
-/* ── Top menu ── */
+/* ── Top menu (pills) ── no persistent highlight after click.
+   The :selected state is reset to look identical to the unselected state so
+   clicking a nav pill navigates without leaving a stuck highlight. ── */
 QListWidget#topMenuList { background: transparent; border: none; outline: none; }
 QListWidget#topMenuList::item { padding: 6px 15px; border-radius: 999px; margin: 2px;
                                  font-size: 12px; font-weight: 800; color: @muted@; }
-QListWidget#topMenuList::item:selected { background: @primary@; color: #ffffff; }
+QListWidget#topMenuList::item:selected { background: transparent; color: @muted@; }
 QListWidget#topMenuList::item:hover { background: @hover@; color: @text@; }
+QListWidget#topMenuList::item:selected:hover { background: @hover@; color: @text@; }
 
 /* ── Tabs ── */
 QTabWidget::pane { border: 1px solid @border@; border-radius: 12px; background: @surface@; }
@@ -1002,19 +1044,61 @@ QComboBox::drop-down { border: none; width: 22px; subcontrol-origin: padding; su
 QComboBox::down-arrow { image: url(:/icons/chevron-down.png); width: 12px; height: 12px; }
 QComboBox::down-arrow:hover { image: url(:/icons/chevron-down-strong.png); }
 QComboBox::down-arrow:disabled { image: url(:/icons/chevron-down.png); }
-QComboBox QAbstractItemView { background: @surface@; color: @text@;
-    selection-background-color: @primarySoft@; selection-color: @primaryStrong@;
-    border: 1px solid @border@; border-radius: 8px; outline: 0; padding: 4px; }
-QComboBox QAbstractItemView::item { padding: 6px 12px; border-radius: 4px; }
-QComboBox QAbstractItemView::item:hover { background: @hover@; }
+
+/* ── Combobox popup (modern flat menu) ──
+   No border-radius (Qt doesn't apply it to QAbstractItemView windows).
+   Generous item padding, pill-style hover/selected backgrounds. ── */
+QComboBox QAbstractItemView {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    outline: 0;
+    padding: 6px;
+    selection-background-color: @primarySoft@;
+    selection-color: @primaryStrong@;
+    /* Force Qt to honor the QSS selection colors over QPalette::Highlight. */
+    background-color: @surface@;
+}
+QComboBox QAbstractItemView::item {
+    padding: 8px 14px;
+    min-height: 22px;
+    border-radius: 6px;
+    background: transparent;
+    color: @text@;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: @hover@;
+    color: @text@;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+}
+
+/* Generic QListView fallback so other list views don't fall back to
+   the ugly default Qt style. */
+QListView {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    outline: 0;
+    padding: 4px;
+}
+QListView::item { padding: 6px 10px; border-radius: 4px; }
+QListView::item:hover { background: @hover@; }
+QListView::item:selected { background: @primarySoft@; color: @primaryStrong@; }
+
 QCheckBox { color: @text@; spacing: 6px; }
 QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
     border: 1px solid @border@; background: @field@; }
 QCheckBox::indicator:checked { background: @primary@; border-color: @primary@; }
 
-/* ── Metadata panel & rows (bottom border per row, matches design .meta-row) ── */
+/* ── Metadata panel & rows (bottom border per row, matches design .meta-row) ──
+   Uses @border@ (more visible than @hover@) so the row dividers are clearly
+   visible across the full width of the column. */
 QWidget#metadataPanel { background: @surface@; border-left: 1px solid @border@; }
-QWidget#metadataSection { background: transparent; border-bottom: 1px solid @hover@; }
+QWidget#metadataSection { background: transparent; border-bottom: 1px solid @border@; }
 QWidget#metadataSection:last-child { border-bottom: none; }
 QLabel#metadataTitle { color: @text@; font-weight: 800; font-size: 13px; background: transparent; }
 QLabel#metaLabel { color: @muted@; font-size: 12px; font-weight: 700; background: transparent; min-width: 92px; }
@@ -2040,11 +2124,6 @@ void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
     // Use dynamic properties + QSS selectors instead of inline setStyleSheet.
-    // The global QSS has:
-    //   QLabel#ocrDot[status="ready"]   { background: @green@; ... }
-    //   QLabel#ocrDot[status="setup"]   { background: @amber@; ... }
-    //   QLabel#ocrStatus[status="ready"] { color: @green@; ... }
-    //   QLabel#ocrStatus[status="setup"] { color: @amber@; ... }
     auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
     if (oneocr.isOneocrAvailable()) {
         ocrDotLbl_->setProperty("status", "ready");
@@ -2053,7 +2132,9 @@ void MainWindow::updateOcrStatusIndicator() {
     } else {
         ocrDotLbl_->setProperty("status", "setup");
         ocrStatusLbl_->setProperty("status", "setup");
-        ocrStatusLbl_->setText("OCR: Setup Required");
+        // "Click to setup" is softer than "Required" — and accurate,
+        // since clicking the chip surfaces the install instructions.
+        ocrStatusLbl_->setText("OCR: Click to setup");
     }
     // Force QSS re-evaluation.
     ocrDotLbl_->style()->unpolish(ocrDotLbl_);

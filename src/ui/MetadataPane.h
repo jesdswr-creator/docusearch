@@ -6,7 +6,7 @@
 //
 // Layout (vertical):
 //   ┌──────────────────────────────────────────────────┐
-//   │ Metadata ⓘ                              [edit]  │  header
+//   │ Metadata                                [edit]  │  header
 //   ├──────────────────────────────────────────────────┤
 //   │ [📄] File Name    NOC.pdf                        │  row
 //   │ [📁] Path         D:/Documents/Official/NOC.pdf  │
@@ -38,7 +38,7 @@ public:
 private:
     // Header
     QLabel*     titleLbl_  = nullptr;
-    QLabel*     infoIconLbl_ = nullptr;
+    QLabel*     infoIconLbl_ = nullptr;  // unused — kept for ABI compat
     QPushButton* editBtn_   = nullptr;
 
     // Metadata rows (each row has icon + label + value)

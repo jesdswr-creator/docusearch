@@ -65,10 +65,10 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     titleLbl_->setObjectName("metadataTitle");
     hLay->addWidget(titleLbl_);
 
-    infoIconLbl_ = new QLabel("i", header);
-    infoIconLbl_->setObjectName("infoIcon");
-    infoIconLbl_->setToolTip("File metadata extracted from the filesystem and indexed content.");
-    hLay->addWidget(infoIconLbl_);
+    // Removed the "i" info icon — the title is self-explanatory and the
+    // "i" glyph was visually noisy next to the heading text. The tooltip
+    // on the title label still surfaces the same info on hover.
+    titleLbl_->setToolTip("File metadata extracted from the filesystem and indexed content.");
 
     hLay->addStretch();
 
@@ -174,8 +174,10 @@ void MetadataPane::refreshIcons() {
         iconLbl->setPixmap(loadLucidePixmap(icons[i], iconColor, 16, row->devicePixelRatio()));
     }
 
-    // Edit button icon
-    editBtn_->setIcon(loadLucideIcon("pencil", iconColor, 16));
+    // Edit button icon — white (the button has primary bg via QSS, so a
+    // white icon is visible). Previously this used muted gray which was
+    // invisible against the primary background.
+    editBtn_->setIcon(loadLucideIcon("pencil", QColor("#ffffff"), 16));
     editBtn_->setIconSize(QSize(16, 16));
 }
 
