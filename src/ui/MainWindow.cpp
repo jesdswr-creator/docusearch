@@ -3387,9 +3387,17 @@ void MainWindow::onOcrThisFile(const QString& path) {
                                 QImage::Format_ARGB32);
                     if (qimg.isNull()) continue;
 
-                    // Save page as temp PNG and OCR it
-                    QString tempPath = QDir::tempPath() + "/docusearch_ocr_page_" +
-                        QString::number(i) + ".png";
+                    // Save page as temp PNG and OCR it.
+                    // Use native separators: the OCR helper exe calls
+                    // WinRT StorageFile::GetFileFromPathAsync which
+                    // rejects forward slashes with the misleading
+                    // "The path contains one or more invalid characters"
+                    // error. (Note: ocrFile() also normalizes defensively,
+                    // but doing it here keeps the tempPath we log / remove
+                    // consistent with what we pass to the helper.)
+                    QString tempPath = QDir::toNativeSeparators(
+                        QDir::tempPath() + "/docusearch_ocr_page_" +
+                        QString::number(i) + ".png");
                     qimg.save(tempPath, "PNG");
 
                     QString pageText = ocrEngine.ocrFile(tempPath);

@@ -132,6 +132,15 @@ static OcrEngine CreateEngine() {
 static std::string OcrFile(const OcrEngine& engine, const std::string& path) {
     std::wstring wpath = Utf8ToWide(path);
 
+    // Defense in depth: StorageFile::GetFileFromPathAsync rejects forward
+    // slashes with the misleading "The path contains one or more invalid
+    // characters" error. Normalize any '/' to '\\' before calling WinRT.
+    // This protects the helper against callers that haven't normalized
+    // the path themselves (e.g. a future ad-hoc invocation).
+    for (wchar_t& c : wpath) {
+        if (c == L'/') c = L'\\';
+    }
+
     // Skip files > 20 MB — low-RAM protection.
     WIN32_FILE_ATTRIBUTE_DATA fad;
     if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {

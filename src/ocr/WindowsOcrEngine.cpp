@@ -68,8 +68,13 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
     if (!initialized_) return {};
     if (img.isNull()) return {};
 
-    const QString tempPath = QDir::tempPath() + "/docusearch_ocr_" +
-        QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png";
+    // Use native separators so the path we hand to the WinRT helper is
+    // accepted by StorageFile::GetFileFromPathAsync — WinRT rejects
+    // forward slashes with the misleading "path contains invalid
+    // characters" error.
+    const QString tempPath = QDir::toNativeSeparators(
+        QDir::tempPath() + "/docusearch_ocr_" +
+        QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png");
     if (!img.save(tempPath, "PNG")) return {};
     const QString text = ocrFile(tempPath);
     QFile::remove(tempPath);
@@ -80,11 +85,21 @@ QString WindowsOcrEngine::ocrFile(const QString& path) {
     if (!initialized_) return {};
     if (!QFileInfo::exists(path)) return {};
 
+    // Normalize to native Windows separators. The OCR helper exe calls
+    // WinRT's StorageFile::GetFileFromPathAsync which throws
+    // IllegalArgumentException ("The path contains one or more invalid
+    // characters") when the path uses forward slashes — even though
+    // CreateFileW and most Win32 APIs accept them. This is the fix
+    // for the bug reported as:
+    //   "The specified path (C:/Users/.../Temp/docusearch_ocr_page_0.png)
+    //    contains one or more invalid characters."
+    const QString nativePath = QDir::toNativeSeparators(path);
+
     const QString helper = QCoreApplication::applicationDirPath() + "/docusearch_ocr_helper.exe";
 
     QProcess proc;
     proc.setProgram(helper);
-    proc.setArguments({path});
+    proc.setArguments({nativePath});
     proc.setWorkingDirectory(QCoreApplication::applicationDirPath());
 
     proc.start();
