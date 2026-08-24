@@ -1661,10 +1661,27 @@ void MainWindow::onSearch(const QString& query) {
                 h.path         = hr.path;
                 h.extension    = hr.extension;
                 h.score        = hr.combinedScore;
-                h.snippet      = QString("[keyword: %1, semantic: %2, combined: %3]")
-                    .arg(hr.keywordScore, 0, 'f', 3)
-                    .arg(hr.semanticScore, 0, 'f', 3)
-                    .arg(hr.combinedScore, 0, 'f', 3);
+                // Visible AI contribution indicator. Show three cases:
+                //  1. Pure keyword match (semanticScore = 0)  → no badge
+                //  2. Hybrid match (both > 0)                 → "AI + keyword"
+                //  3. Pure semantic match (keywordScore = 0)   → "AI only"
+                // The user said "AI has no role in search. It is acting
+                // like normal keyword search" — this badge makes the AI
+                // contribution visible so they can SEE when AI is working.
+                if (hr.semanticScore > 0.01f && hr.keywordScore > 0.01f) {
+                    h.snippet = QString(
+                        "<b>[AI + keyword]</b> keyword: %1%  •  semantic: %2%")
+                        .arg(int(hr.keywordScore * 100))
+                        .arg(int(hr.semanticScore * 100));
+                } else if (hr.semanticScore > 0.01f) {
+                    h.snippet = QString(
+                        "<b>[AI match]</b> semantic similarity: %1%  "
+                        "(no keyword match — AI found this document)")
+                        .arg(int(hr.semanticScore * 100));
+                } else {
+                    h.snippet = QString("[keyword match] relevance: %1%")
+                        .arg(int(hr.keywordScore * 100));
+                }
                 // Preserve favorite flag + dates from the original hit if present.
                 for (const auto& orig : hits) {
                     if (orig.fileId == hr.fileId) {
@@ -2718,9 +2735,76 @@ void MainWindow::onSemanticToggled(bool checked) {
             "background:transparent; color:%1; font-weight:800; font-size:11px; min-width:24px;")
             .arg(col));
     }
-    statusBar()->showMessage(
-        checked ? "AI search enabled." : "AI search disabled.",
-        3000);
+
+    // CRITICAL FIX: When user toggles AI ON, scan for indexed files that
+    // don't have BGE embeddings yet and auto-queue them on the background
+    // worker thread. Without this, AI search has nothing to match against
+    // (semanticHits is empty → RRF falls back to pure keyword → user sees
+    // no AI contribution → "AI has no role in search" complaint).
+    //
+    // This is the band-aid for the bigger architectural problem that
+    // bgeService_->embedDocument() during extraction was commented out.
+    // Until we can safely re-enable that, this toggle-time scan is the
+    // way to retroactively embed files indexed before the fix.
+    if (checked && bgeService_ && bgeService_->isReady()) {
+        const auto stats = bgeService_->getStats();
+        // Cheap heuristic: query the Files table for any files that have
+        // been content-indexed (indexing_status = 'indexed') but whose
+        // file_id is NOT in the Embeddings table. Build a batch and
+        // send it to BgeService::embedDocumentsBatch on the worker thread.
+        sqlite3* raw = db_->raw();
+        if (raw) {
+            // Pull all (file_id, content) pairs that have a SearchIndex
+            // row but no BgeEmbeddings row. JOIN with SearchIndex to grab
+            // the extracted text at the same time (avoids a second query
+            // per file). Cap at 1000 files per batch to bound memory.
+            sqlite3_stmt* sel = nullptr;
+            sqlite3_prepare_v2(raw,
+                "SELECT s.file_id, s.content "
+                "FROM SearchIndex s "
+                "LEFT JOIN BgeEmbeddings e ON e.file_id = s.file_id "
+                "WHERE e.file_id IS NULL "
+                "  AND length(s.content) > 0 "
+                "LIMIT 1000;",
+                -1, &sel, nullptr);
+            QVector<int> fileIds;
+            QStringList texts;
+            if (sel) {
+                while (sqlite3_step(sel) == SQLITE_ROW) {
+                    const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
+                    const unsigned char* c = sqlite3_column_text(sel, 1);
+                    if (c && c[0]) {
+                        fileIds.append(fileId);
+                        texts.append(QString::fromUtf8(
+                            reinterpret_cast<const char*>(c)));
+                    }
+                }
+                sqlite3_finalize(sel);
+            }
+            const qint64 totalUnembedded = fileIds.size();
+            if (totalUnembedded > 0) {
+                statusBar()->showMessage(
+                    QString("AI: generating embeddings for %1 unembedded file%2...")
+                        .arg(totalUnembedded)
+                        .arg(totalUnembedded == 1 ? "" : "s"), 5000);
+                bgeService_->embedDocumentsBatch(fileIds, texts);
+            } else if (stats.total > 0) {
+                statusBar()->showMessage(
+                    QString("AI search enabled — %1 embeddings ready.")
+                        .arg(stats.total), 3000);
+            } else {
+                statusBar()->showMessage(
+                    "AI search enabled. Extract files to generate embeddings.",
+                    4000);
+            }
+        } else {
+            statusBar()->showMessage(
+                checked ? "AI search enabled." : "AI search disabled.", 3000);
+        }
+    } else {
+        statusBar()->showMessage(
+            checked ? "AI search enabled." : "AI search disabled.", 3000);
+    }
 }
 
 void MainWindow::onBgeReady() {
