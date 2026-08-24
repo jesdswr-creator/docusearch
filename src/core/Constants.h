@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.3.0";  // Fluent Design UI redesign
+constexpr const char* kAppVersion     = "1.4.0";  // Phase 2: real AI semantic search wiring
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

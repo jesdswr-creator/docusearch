@@ -1699,24 +1699,43 @@ void MainWindow::onSearch(const QString& query) {
                     h.snippet = QString("[keyword match] relevance: %1%")
                         .arg(int(hr.keywordScore * 100));
                 }
-                // Preserve favorite flag + dates from the original hit if present.
+                // Phase 2 BUGFIX: previously the line below OVERWROTE
+                //   the [AI + keyword] / [AI match] badge with the original
+                //   keyword snippet, making AI contributions invisible to the
+                //   user. Now we PREPEND the AI badge to the original snippet
+                //   so the user sees BOTH the badge AND the keyword context.
                 for (const auto& orig : hits) {
                     if (orig.fileId == hr.fileId) {
                         h.size          = orig.size;
                         h.modifiedDate  = orig.modifiedDate;
                         h.isFavorite    = orig.isFavorite;
-                        if (!orig.snippet.isEmpty()) h.snippet = orig.snippet;
+                        // Phase 2: keep the AI badge, append original snippet if any.
+                        if (!orig.snippet.isEmpty()) {
+                            h.snippet = h.snippet + "<br>" + orig.snippet;
+                        }
                         break;
                     }
                 }
                 merged.append(h);
             }
             resultsPane_->setResults(merged);
+            // Phase 2: surface AI debug info so user can SEE that AI ran.
+            //   Status bar now shows: result count + how many had AI
+            //   contribution + total time. This directly addresses the
+            //   user complaint "AI has no role in search" — every search
+            //   now reports its AI contribution in the status bar.
+            int aiContribCount = 0;
+            int aiOnlyCount = 0;
+            for (const auto& hr : hybridResults) {
+                if (hr.semanticScore > 0.01f) ++aiContribCount;
+                if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
+            }
             statusBar()->showMessage(
-                QString("AI search: %1 result%2 (%3 keyword + semantic) in %4 ms")
+                QString("AI search: %1 result%2  |  AI contributed to %3  |  AI-only finds: %4  |  %5 ms")
                     .arg(merged.size())
                     .arg(merged.size() == 1 ? "" : "s")
-                    .arg(hits.size())
+                    .arg(aiContribCount)
+                    .arg(aiOnlyCount)
                     .arg(t.elapsed()));
         } else {
             // Keyword-only search (existing behavior).

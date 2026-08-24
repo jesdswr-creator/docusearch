@@ -57,7 +57,11 @@ private:
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticEnabled = false;
     float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword (read from SemanticSettings)
-    float       m_threshold       = 0.65f;  // cosine similarity threshold (read from SemanticSettings)
+    // Phase 2: lowered from 0.65 (too strict for BGE-small-en-v1.5,
+    // which typically returns 0.45-0.60 for genuinely related docs).
+    // The old 0.65 default filtered out almost all semantic matches,
+    // which is why the user said "AI has no role in search".
+    float       m_threshold       = 0.45f;  // cosine similarity threshold
     int         m_topK            = 20;
     QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
 };

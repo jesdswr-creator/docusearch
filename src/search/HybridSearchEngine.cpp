@@ -83,6 +83,15 @@ std::vector<HybridResult> HybridSearchEngine::search(
         const float aiWeight = computeAiWeight(queryText);
         const int K = 60;  // RRF constant
 
+        // ── Phase 2: Adaptive RRF (Reciprocal Rank Fusion) ─────────
+        // OLD (Phase 1): hardcoded `3*kwRrf + 1*semRrf` — keyword
+        //   always dominated regardless of query type. Users saw no
+        //   AI contribution → "AI has no role in search" complaint.
+        // NEW (Phase 2): weight each side by `aiWeight` computed from
+        //   query shape. Natural-language questions get up to 60%
+        //   AI weight; short keyword queries get <=25% AI weight.
+        //   This is the design that was intended but never wired up.
+
         // ── Phase 3: RRF (Reciprocal Rank Fusion) ──────────────
         // Run keyword and semantic searches INDEPENDENTLY, then merge
         // by rank. This fixes the fundamental flaw where semantic search
@@ -170,32 +179,32 @@ std::vector<HybridResult> HybridSearchEngine::search(
                 }
             }
 
-            // RRF: rrf_score = 1/(K+keyword_rank) + 1/(K+semantic_rank)
-            // Keyword matches get 3x weight — user wants keyword results
-            // to dominate. AI only BOOSTS files that keyword already found,
-            // and adds semantic-only results ONLY if very similar (0.75+).
+            // RRF: rrf_score = (1-aiWeight)/(K+keyword_rank) + aiWeight/(K+semantic_rank)
+            // Phase 2: Use adaptive AI weight — natural-language queries
+            // get more AI influence, short keyword queries get less.
+            // This is what makes AI visibly contribute to ranking.
             int kwRank = 999, semRank = 999;
             auto krIt = keywordRank.find(fileId);
             if (krIt != keywordRank.end()) kwRank = krIt->second;
             auto srIt = semanticRank.find(fileId);
             if (srIt != semanticRank.end()) semRank = srIt->second;
 
-            // Keyword gets 3x weight in RRF — keyword matches dominate.
-            float kwRrf = (kwRank < 999) ? 3.0f / (K + kwRank) : 0.0f;
-            float semRrf = (semRank < 999) ? 1.0f / (K + semRank) : 0.0f;
+            // Phase 2: Weighted RRF — each side scaled by aiWeight.
+            float kwRrf  = (kwRank  < 999) ? (1.0f - aiWeight) / (K + kwRank)  : 0.0f;
+            float semRrf = (semRank < 999) ? aiWeight           / (K + semRank) : 0.0f;
 
-            // Semantic-only results (not in keyword list) must have
-            // very high similarity (0.75+) to be included at all.
-            // This prevents AI from bringing in irrelevant files.
+            // Semantic-only results (not in keyword list) must clear a
+            // modest similarity bar to be included. BGE-small-en v1.5
+            // typically returns 0.45-0.60 for genuinely related docs —
+            // the OLD 0.75 cutoff filtered those out entirely, which is
+            // why AI felt dead. Phase 2 lowers this to 0.50.
             if (kwRank >= 999 && semRank < 999) {
-                // This is a semantic-only hit. Check similarity.
                 float semSim = 0.0f;
                 for (const auto& sh : semanticHits) {
                     if (sh.fileId == fileId) { semSim = sh.similarity; break; }
                 }
-                if (semSim < 0.75f) {
-                    // Skip — not similar enough to include without keyword match.
-                    continue;
+                if (semSim < 0.50f) {
+                    continue;  // skip — not similar enough to surface standalone
                 }
             }
 
