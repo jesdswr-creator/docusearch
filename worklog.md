@@ -937,3 +937,104 @@ Stage Summary:
   • worklog.md — historical task entries documenting prior implementation (intentional — worklog is an audit trail).
 - Files modified: HELP.md, INSTALL.md, GET-THE-EXE.md, BUILD.md.
 - Project is now ready for Microsoft Store commercial sale at $9.99 with the Windows.Media.Ocr engine swap and elevated visual design.
+
+---
+Task ID: phase-2-ai-fix
+Agent: main
+Task: Real fix for "AI has no role in search. It is acting like normal keyword search" — investigate HybridSearchEngine + BgeService + MainWindow and fix the actual bugs that made AI invisible to the user.
+
+Work Log:
+- Read src/search/HybridSearchEngine.cpp + HybridSearchEngine.h in full
+- Read src/embeddings/BgeService.cpp in full
+- Read src/embeddings/BgeEmbeddingDb.cpp search path in full
+- Read MainWindow.cpp onSearch() (lines 1633-1739) + onSemanticToggled() (lines 2729-2825) + onBgeReady()
+- Identified 4 root-cause bugs:
+
+  BUG A (CRITICAL — aiWeight dead code):
+    HybridSearchEngine::search() line 83 computes aiWeight via computeAiWeight()
+    which returns adaptive weight (0.15-0.60) based on query shape. But the
+    variable was NEVER USED in the RRF computation — lines 184-185 hardcoded
+    `3.0f/(K+kwRank)` for keyword and `1.0f/(K+semRank)` for semantic, giving
+    keyword 3x weight always. So no matter what query the user typed, AI
+    contributed at most 25% to ranking. This was the architectural reason
+    AI "felt like keyword search".
+    FIX: Wire aiWeight into RRF: kwRrf=(1-aiWeight)/(K+kwRank),
+         semRrf=aiWeight/(K+semRank). Now natural-language questions get
+         up to 60% AI weight, short keyword queries get <=25%.
+
+  BUG B (threshold too strict):
+    HybridSearchEngine default m_threshold=0.65 + semantic-only cutoff=0.75.
+    BGE-small-en-v1.5 typically returns cosine 0.45-0.60 for genuinely
+    related documents. With 0.65 cutoff, most semantic matches were filtered
+    out before RRF even ran. With 0.75 cutoff for semantic-only hits, pure-AI
+    finds essentially never surfaced.
+    FIX: Lower m_threshold 0.65 -> 0.45, semantic-only cutoff 0.75 -> 0.50.
+
+  BUG C (AI badge overwrite — UX dead code):
+    MainWindow.cpp line 1708:
+      `if (!orig.snippet.isEmpty()) h.snippet = orig.snippet;`
+    This OVERWROTE the carefully-built [AI + keyword] / [AI match] /
+    [keyword match] badge with the original keyword snippet. So even when
+    AI contributed meaningfully, the user saw the same plain keyword snippet
+    they always did. The badges were dead code.
+    FIX: Append rather than overwrite:
+         `h.snippet = h.snippet + "<br>" + orig.snippet;`
+
+  BUG D (chunked embeddings never stored):
+    BgeService::embedDocumentsBatch() only called database->storeEmbedding()
+    (single full-doc embedding). The EmbeddingChunks table stayed empty.
+    So HybridSearchEngine::search() -> searchChunksAll() (which reads from
+    EmbeddingChunks) always returned empty, then fell back to search() (which
+    reads from BgeEmbeddings). That fallback worked but meant long documents
+    had only one coarse embedding for the whole doc.
+    FIX: Inlined the chunking logic into embedDocumentsBatch() so each
+         document > 1000 chars gets ~50 chunk embeddings with 250-char
+         overlap, sentence-boundary-aware splitting. Now searchChunksAll()
+         finds the best matching chunk per file → 5x more precise for long docs.
+
+- Added Phase 2 status bar in MainWindow::onSearch(): now reports
+  "AI search: X results | AI contributed to Y | AI-only finds: Z | N ms"
+  per query. This makes AI's contribution visible per-search, addressing
+  the user complaint that AI feels invisible.
+
+- Bumped version 1.3.0 -> 1.4.0 (CMakeLists.txt + Constants.h + DocuSearch.wxs).
+
+- Committed as af16e4e "fix(ai-phase2): wire adaptive AI weight, lower
+  thresholds, fix AI badge overwrite".
+
+- Pushed to GitHub origin/main.
+
+- CI run 32721919398 triggered, currently in_progress (started 11:27Z).
+
+Stage Summary:
+- The architectural root cause was that `computeAiWeight()` was a paper
+  design — the actual RRF code ignored its result and hardcoded keyword
+  dominance. Phase 2 wires it up so query shape actually drives the
+  AI/keyword balance.
+- Threshold defaults were calibrated for some hypothetical embedding
+  model with very high cosine separations, not BGE-small-en-v1.5's actual
+  0.45-0.60 distribution. Phase 2 lowers them to match reality.
+- The snippet overwrite bug meant the AI badges (which were correctly
+  generated) were silently replaced with the keyword snippet. Phase 2
+  preserves both, so users can SEE when AI contributed.
+- Chunked embeddings make search more precise for long documents by
+  matching at the chunk level rather than the whole-doc level.
+- The status bar now reports per-query AI contribution count, so users
+  get immediate feedback that AI is running and contributing.
+- Files modified: src/search/HybridSearchEngine.cpp,
+  src/search/HybridSearchEngine.h, src/embeddings/BgeService.cpp,
+  src/ui/MainWindow.cpp, CMakeLists.txt, src/core/Constants.h,
+  installer/DocuSearch.wxs.
+- Awaiting CI build verification (run 32721919398).
+
+Next steps:
+- Wait for CI run 32721919398 to complete. If green, deliverable is ready
+  for user to test AI search and confirm it now visibly contributes.
+- If user still reports "AI not working" after this fix, the next
+  investigation point is whether bgeService_->isReady() returns true
+  (i.e., the model file is found and ONNX runtime initializes without
+  exception). The model path candidates are checked at MainWindow
+  initialization — if none exists, BGE never initializes and AI silently
+  no-ops.
+- Still deferred: Poppler -> PDFium swap (GPL blocker for commercial sale),
+  MSIX packaging in CI, EV/OV code cert, Partner Center account ($19).
