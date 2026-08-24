@@ -1038,3 +1038,79 @@ Next steps:
   no-ops.
 - Still deferred: Poppler -> PDFium swap (GPL blocker for commercial sale),
   MSIX packaging in CI, EV/OV code cert, Partner Center account ($19).
+
+---
+Task ID: phase-3-component-redesign-verify
+Agent: main
+Task: User asked "component redesign done?" + provided HTML reference at /home/z/my-project/upload/Pasted Content_1787568567336.txt → verify if Fluent Design from HTML reference is already implemented and ship any refinements.
+
+Work Log:
+- Compared /home/z/my-project/upload/Pasted Content_1787568567336.txt
+  with /home/z/my-project/docusearch/docs/ui-design-reference.html
+  via `diff` — files are byte-identical (672 lines each, zero diffs).
+- Confirmed via git log that the HTML reference was already committed
+  to the repo in commit fca8ddf "feat(ui): Fluent Design palette
+  (light + dark) — v1.3.0".
+- Verified that MainWindow::applyTheme() (lines 848-1551) already:
+  • Implements both Fluent Light (mica #f2f1ee, accent #0067c0) and
+    Fluent Dark (mica #1c1c1c, accent #4cc2ff) palettes — the exact
+    tokens from the HTML reference's `:root` and `html[data-theme=...]`.
+  • Cycles via pastelTheme_ (0=light, 1=dark) → themeToggleBtn_.
+  • Uses @token@ substitution to drive a comprehensive QSS template
+    covering: title bar, sidebar, search box, primary/ghost buttons,
+    AI control pill, results list (card-style with hover lift),
+    tabs, text areas, group boxes, progress bars, scrollbars,
+    comboboxes, checkboxes, metadata panel, sliders, menus, tooltips,
+    splitters, labels with refined typography hierarchy.
+  • Calls QApplication::setPalette() with the Fluent colors.
+  • Calls qApp->setStyleSheet(s) at line 1546 — this is the LIVE
+    stylesheet, overriding any baseline set by Theme::apply().
+
+- Discovered that Theme::apply() (the fallback in Theme.cpp) was
+  light-only and hardcoded — out of sync with the dual-mode palette
+  that MainWindow::applyTheme() already supports.
+  Rewrote src/ui/Theme.cpp to serve a Fluent-compliant QSS for BOTH
+  dark and light modes (kQssDark + kQssLight, ~400 lines each).
+  Also fixed Theme::apply() to set QPalette correctly per mode
+  (was hardcoded for light).
+
+  This matters for early startup (before MainWindow::applyTheme()
+  runs), unit tests that don't construct MainWindow, and QDialog
+  children created before the stylesheet is wired.
+
+- Committed as c339fd0 "feat(theme): dual-mode Fluent Design
+  fallback QSS in Theme::apply". Pushed to origin/main.
+
+- CI run 32724449056 triggered, currently in_progress.
+
+Stage Summary:
+- The HTML reference the user provided is the SAME file already
+  in the repo at docs/ui-design-reference.html.
+- The Fluent Design from that reference was ALREADY implemented in
+  v1.3.0 (commit fca8ddf). That commit shipped:
+  • Dual-mode palette (light + dark) with the exact tokens from
+    the HTML reference's `:root` and `html[data-theme="dark"]` /
+    `html[data-theme="light"]` blocks.
+  • A 700+ line @token@-substituted QSS template covering all
+    major widget classes (title bar, sidebar, search box, results,
+    preview, metadata, tags/notes, status bar, dialogs, menus).
+  • Theme toggle button cycles light ↔ dark.
+- This commit (c339fd0) is a refinement: the fallback Theme::apply()
+  path now also serves Fluent-compliant QSS for both modes. It does
+  not change the live appearance (MainWindow::applyTheme() is still
+  the active styler), but it ensures consistency in early startup
+  and dialog scenarios.
+- Files modified: src/ui/Theme.cpp (838 insertions, 157 deletions —
+  full rewrite of the fallback QSS), worklog.md (this entry).
+- Awaiting CI run 32724449056 for compile verification.
+
+Next steps:
+- Wait for CI run 32724449056 (Theme.cpp refinement) to complete.
+- If user wants further UI changes (e.g. specific components from
+  the HTML reference not yet implemented like the syntax helper
+  panel, OCR scan animation overlay, paper-text styled preview,
+  or toast notifications), those are deferred and would be future
+  commits.
+- Still deferred: Poppler → PDFium swap (GPL blocker for
+  commercial sale), MSIX packaging in CI, EV/OV code cert,
+  Partner Center account ($19).
