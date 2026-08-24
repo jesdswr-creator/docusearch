@@ -286,8 +286,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(titleCloseBtn_, &QPushButton::clicked,
             qApp, &QApplication::quit);
+    // Use explicit lambdas — defensive against Qt 6 member-function-pointer
+    // ambiguity on QWidget slots. (User reported minimize not working.)
     connect(titleMinBtn_, &QPushButton::clicked,
-            this, &QWidget::showMinimized);
+            this, [this]{ this->showMinimized(); });
     connect(titleMaxBtn_, &QPushButton::clicked,
             this, [this]{
         if (isMaximized()) showNormal();
@@ -1020,8 +1022,7 @@ QLineEdit:focus {
 
 /* ── Primary button — gradient accent (subtle two-tone lift) ── */
 QPushButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 @primary@, stop:1 @primaryStrong@);
+    background: @primary@;
     color: #ffffff;
     border: none;
     border-radius: 10px;
@@ -1030,8 +1031,7 @@ QPushButton {
     font-size: 13px;
 }
 QPushButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 @primaryGlow@, stop:1 @primary@);
+    background: @primaryStrong@;
 }
 QPushButton:pressed { background: @primaryStrong@; }
 QPushButton:disabled { background: @border2@; color: @muted@; }
@@ -1068,14 +1068,12 @@ QLabel#appLogo {
 
 /* ── Metadata edit button — accent gradient ── */
 QPushButton#editBtn {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 @primary@, stop:1 @primaryStrong@);
+    background: @primary@;
     color: #ffffff; border: none;
     border-radius: 8px; padding: 6px; min-width: 28px; min-height: 28px;
 }
 QPushButton#editBtn:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 @primaryGlow@, stop:1 @primary@);
+    background: @primaryStrong@;
 }
 QPushButton#editBtn:pressed { background: @primaryStrong@; }
 
@@ -2134,6 +2132,50 @@ void MainWindow::onExtract() {
                 statusBar()->showMessage(
                     QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
                         .arg(state->done).arg(state->failed).arg(total), 8000);
+
+                // Auto-queue AI (BGE) embedding generation for all newly-extracted
+                // files. Previously this was commented out during extraction
+                // (ONNX inference on the main thread was crashing). Now we
+                // trigger the BACKGROUND batch path AFTER extraction completes,
+                // which is safe: BgeService::embedDocumentsBatch runs on a
+                // worker thread and emits embeddingProgress/embeddingFinished.
+                if (bgeService_ && bgeService_->isReady() && semanticEnabled_) {
+                    // Re-read the extracted text for every just-indexed file
+                    // from the FTS5 table, then queue the batch on the
+                    // background BGE worker thread. Prepare the statement
+                    // ONCE outside the loop (avoids N prepare/finalize pairs).
+                    QVector<int> fileIds;
+                    QStringList texts;
+                    sqlite3_stmt* sel = nullptr;
+                    if (raw) {
+                        sqlite3_prepare_v2(raw,
+                            "SELECT content FROM SearchIndex WHERE file_id=?1 LIMIT 1;",
+                            -1, &sel, nullptr);
+                    }
+                    if (sel) {
+                        for (const auto& item : state->todo) {
+                            if (item.fileId <= 0) continue;
+                            sqlite3_bind_int64(sel, 1, item.fileId);
+                            if (sqlite3_step(sel) == SQLITE_ROW) {
+                                const unsigned char* c = sqlite3_column_text(sel, 0);
+                                if (c && c[0]) {
+                                    fileIds.append(static_cast<int>(item.fileId));
+                                    texts.append(QString::fromUtf8(
+                                        reinterpret_cast<const char*>(c)));
+                                }
+                            }
+                            sqlite3_reset(sel);
+                            sqlite3_clear_bindings(sel);
+                        }
+                        sqlite3_finalize(sel);
+                    }
+                    if (!fileIds.isEmpty()) {
+                        statusBar()->showMessage(
+                            QString("AI: generating embeddings for %1 files...")
+                                .arg(fileIds.size()), 5000);
+                        bgeService_->embedDocumentsBatch(fileIds, texts);
+                    }
+                }
             } else {
                 statusBar()->showMessage(
                     QString("Extracted %1 of %2 files. Click Extract again to continue.")
