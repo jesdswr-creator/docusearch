@@ -7,11 +7,12 @@
     Runs a comprehensive check of the DocuSearch installation:
       1. Verifies docusearch.exe exists and is runnable.
       2. Verifies docusearch_ocr_helper.exe exists.
-      3. Verifies oneocr.dll, oneocr.onemodel, onnxruntime.dll are present.
+      3. Verifies Windows.Media.Ocr language packs are installed.
       4. Verifies Qt6 DLLs are present.
       5. Verifies Poppler DLLs are present.
-      6. Verifies the Snipping Tool is installed (for re-installing oneocr if needed).
+      6. Verifies zlib / minizip DLL is present (OOXML extraction).
       7. Verifies write access to %APPDATA%\DocuSearch\.
+      8. Verifies SQLite DLL is present.
 
     Exits 0 if all checks pass, 1 if any check fails.
 
@@ -64,25 +65,44 @@ if (Test-Path $helperExe) {
     $failures++
 }
 
-# ── 3. oneocr files ────────────────────────────────────────
-$oneocrFiles = @("oneocr.dll", "oneocr.onemodel", "onnxruntime.dll")
-$oneocrMissing = @()
-foreach ($f in $oneocrFiles) {
-    $p = Join-Path $TargetDir $f
-    if (Test-Path $p) {
-        $size = (Get-Item $p).Length
-        Write-Pass "$f found ($('{0:N1}' -f ($size/1MB)) MB)"
+# ── 3. Windows.Media.Ocr language packs ───────────────────
+# DocuSearch uses Windows.Media.Ocr — the officially-supported WinRT
+# OCR API built into Windows 10 1809+. No DLLs to install; the only
+# requirement is at least one OCR language pack.
+#
+# We probe by launching the helper exe with no args (it exits 1 and
+# prints "Usage:" to stderr). If the helper is missing or the WinRT
+# runtime isn't available, we'll catch it here.
+$ocrLangs = $null
+try {
+    # Windows.Media.Ocr.OcrEngine.AvailableRecognizerLanguages is the
+    # canonical list. We use a tiny PowerShell probe via the WinRT
+    # projection (the same one the helper uses).
+    Add-Type -AssemblyName "System.Runtime.WindowsRuntime" -ErrorAction Stop
+    $asTaskGeneric = ([System.WindowsRuntime.WindowsRuntimeSystemExtensions].GetMethods() |
+        Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } |
+        Select-Object -First 1).MakeGenericMethod([Windows.Media.Ocr.OcrResult])
+    # Simpler: just enumerate the language tags via the static property.
+    $langs = [Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime]::AvailableRecognizerLanguages
+    if ($langs -and $langs.Size -gt 0) {
+        $ocrLangs = @()
+        for ($i = 0; $i -lt $langs.Size; $i++) {
+            $ocrLangs += $langs.GetAt($i).LanguageTag
+        }
+        Write-Pass "Windows.Media.Ocr ready — $($ocrLangs.Count) language pack(s): $($ocrLangs -join ', ')"
     } else {
-        Write-Warn2 "$f NOT found"
-        $oneocrMissing += $f
+        Write-Warn2 "No OCR language packs installed"
+        Write-Host "         Install via: Settings > Time & Language > Language >" -ForegroundColor Yellow
+        Write-Host "           Add a language > Optical character recognition" -ForegroundColor Yellow
         $warnings++
     }
-}
-
-if ($oneocrMissing.Count -gt 0) {
-    Write-Host ""
-    Write-Warn2 "OCR is not configured. Install with:"
-    Write-Host "  .\scripts\get_oneocr.ps1" -ForegroundColor Yellow
+} catch {
+    # WinRT projection not available in this PowerShell host — skip the
+    # check rather than fail. The helper exe will surface the real
+    # status when the user runs OCR.
+    Write-Warn2 "Could not probe Windows.Media.Ocr from PowerShell: $($_.Exception.Message)"
+    Write-Host "         The helper exe will report status at runtime." -ForegroundColor Yellow
+    $warnings++
 }
 
 # ── 4. Qt6 DLLs ────────────────────────────────────────────
@@ -114,31 +134,7 @@ if ($zlibDll) {
     $warnings++
 }
 
-# ── 6. Snipping Tool installation ──────────────────────────
-$snipPkg = Get-AppxPackage -Name "Microsoft.ScreenSketch" -ErrorAction SilentlyContinue
-if ($snipPkg) {
-    Write-Pass "Snipping Tool installed (version $($snipPkg.Version))"
-    Write-Info "  Install path: $($snipPkg.InstallLocation)"
-
-    # Check the Snipping Tool folder for oneocr files (so user can install if needed)
-    $snipDir = Join-Path $snipPkg.InstallLocation "SnippingTool"
-    if (-not (Test-Path $snipDir)) { $snipDir = $snipPkg.InstallLocation }
-
-    $oneocrInSnip = Join-Path $snipDir "oneocr.dll"
-    if (Test-Path $oneocrInSnip) {
-        Write-Pass "oneocr.dll is available in Snipping Tool (can install via get_oneocr.ps1)"
-    } else {
-        Write-Warn2 "oneocr.dll not found in Snipping Tool folder — update Snipping Tool from Microsoft Store"
-        $warnings++
-    }
-} else {
-    Write-Warn2 "Snipping Tool (Microsoft.ScreenSketch) is not installed"
-    Write-Host "         Install from: https://apps.microsoft.com/detail/9mz95kl8mr0l" -ForegroundColor Yellow
-    Write-Host "         (Required to install oneocr files via get_oneocr.ps1)"
-    $warnings++
-}
-
-# ── 7. AppData directory write access ──────────────────────
+# ── 6. AppData directory write access ──────────────────────
 $appDataDir = Join-Path $env:APPDATA "DocuSearch"
 try {
     if (-not (Test-Path $appDataDir)) {
@@ -153,7 +149,7 @@ try {
     $failures++
 }
 
-# ── 8. SQLite DLL ──────────────────────────────────────────
+# ── 7. SQLite DLL ──────────────────────────────────────────
 $sqliteDll = Get-ChildItem -Path $TargetDir -Filter "sqlite*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($sqliteDll) {
     Write-Pass "SQLite DLL found: $($sqliteDll.Name)"

@@ -65,7 +65,6 @@ private slots:
 
 private:
     void populateSavedSearches();
-    void populateLangCombo();
 
     AppSettings current_;
     FileRepository* repo_;
@@ -88,9 +87,10 @@ private:
     QCheckBox*   hashFilesCheck_;
     QCheckBox*   monitorCheck_;
 
-    // OCR
-    QLineEdit*   tessdataEdit_;
-    QComboBox*   langCombo_;
+    // (OCR tab removed — the app uses Windows.Media.Ocr (built into
+    // Windows 10/11), which needs no user-tunable path or language
+    // combo. OCR status is shown in the status bar; click it for
+    // setup instructions.)
 
     // UI
     QCheckBox*   darkModeCheck_;

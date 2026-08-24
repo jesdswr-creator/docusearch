@@ -13,8 +13,6 @@
     * Optional Desktop shortcut (checkbox in wizard)
     * Add/Remove Programs entry with publisher + version + icon
     * File associations for .pdf, .docx, .xlsx, .pptx
-    * Tessdata folder prompt (user can point at a folder of
-      *.traineddata files; default %ProgramFiles%\Tesseract-OCR\tessdata)
     * Per-machine install (ALLUSERS=1) so all users on the PC get it
     * Uninstall removes everything including the local DB
 
@@ -36,7 +34,7 @@
 
   <?define ProductName       = "DocuSearch" ?>
   <?define ProductPublisher  = "DocuSearch" ?>
-  <?define ProductVersion    = "1.0.0.0" ?>
+  <?define ProductVersion    = "1.1.0.0" ?>
   <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
 
   <Package
@@ -101,8 +99,7 @@
          ============================================================ -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)">
-        <Directory Id="BinFolder"      Name="bin" />
-        <Directory Id="TessdataFolder" Name="tessdata" />
+        <Directory Id="BinFolder" Name="bin" />
       </Directory>
     </StandardDirectory>
 

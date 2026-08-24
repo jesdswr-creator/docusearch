@@ -2,7 +2,7 @@
 
 **Offline Intelligent Document Search & OCR System for Windows 11**
 
-C++20 · Qt 6 Widgets · SQLite + FTS5 · Tesseract OCR · Poppler PDF
+C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · Poppler PDF
 
 ---
 
@@ -54,7 +54,7 @@ docusearch/
 ├── install.bat                 ← One-click Windows build + package script
 ├── BUILD.md                    ← Full build & setup guide (read this!)
 ├── README.md                   ← Project overview
-├── CMakeLists.txt              ← CMake build (Qt6, SQLite, Tesseract, Poppler)
+├── CMakeLists.txt              ← CMake build (Qt6, SQLite, Windows.Media.Ocr runtime, Poppler)
 ├── vcpkg.json                  ← C++ dependency manifest
 ├── installer/
 │   ├── DocuSearch.wxs          ← WiX v4 MSI definition
@@ -76,7 +76,7 @@ docusearch/
 │   ├── core/                   ← Logger, Config, StringUtils, FileUtils, Types
 │   ├── database/               ← SQLite + FTS5 wrapper, schema, repository
 │   ├── documents/              ← PDF / DOCX / XLSX / PPTX / Text extractors
-│   ├── ocr/                    ← Tesseract engine + CPU-throttled worker pool
+│   ├── ocr/                    ← Windows.Media.Ocr wrapper + CPU-throttled worker pool
 │   ├── indexer/                ← Two-phase indexer + priority scheduler
 │   ├── search/                 ← Query parser + FTS5 search engine
 │   ├── monitoring/             ← ReadDirectoryChangesW file watcher
@@ -85,7 +85,7 @@ docusearch/
 │   ├── backup/                 ← Backup / restore
 │   ├── win/                    ← Native Win11 (JumpList via COM)
 │   └── ui/                     ← MainWindow + 8 panes + Win11 Fluent theme
-└── tests/                      ← Qt Test unit suite (~75 test cases)
+└── tests/                      ← Qt Test unit suite (~143 test cases)
 ```
 
 ---
@@ -100,12 +100,24 @@ docusearch/
 | Disk              | ~200 MB for the app + DB grows with content  |
 | Build tools (dev) | Visual Studio 2022, Qt 6.7+, vcpkg, CMake 3.21+ |
 
-**Tesseract OCR** requires `*.traineddata` files in one of:
-- `%TESSDATA_PREFIX%` (env var)
-- A folder you specify in **Settings → OCR**
-- `C:\Program Files\Tesseract-OCR\tessdata`
+**OCR** is powered by **Windows.Media.Ocr** — the officially-supported
+WinRT OCR API built into Windows 10 1809+ and Windows 11. This is the
+same OCR engine that powers Windows Search, the Snipping Tool, and the
+Photos app.
 
-Download `eng.traineddata` from <https://github.com/tesseract-ocr/tessdata>.
+- **No DLLs to install** — Windows itself provides the OCR engine.
+- **No scripts to run** — no `get_oneocr.ps1`, no DLL extraction.
+- **No licensing risk** — Windows.Media.Ocr is the public, royalty-free
+  OCR API that any Windows app (including commercial software) can use.
+- **25+ languages** — auto-detected from your Windows language profile.
+
+The only prerequisite is at least one OCR language pack installed
+(which ships with most consumer Windows installs). See
+**[docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)** for full licensing
+and technical details.
+
+OCR is optional — without it, born-digital PDFs, DOCX, XLSX, PPTX, TXT
+are still fully indexed (only scanned PDFs and images require OCR).
 
 ---
 
@@ -141,7 +153,8 @@ Download `eng.traineddata` from <https://github.com/tesseract-ocr/tessdata>.
 
 See `docusearch/BUILD.md` §10 for common issues:
 - "Cannot find Qt6"
-- "Tesseract init failed"
+- "OCR: Click to setup" — no OCR language packs installed; install
+  via Settings → Time & Language → Language → Add (OCR option)
 - "MSIX install fails with 0x80073CFF" (sideloading disabled)
 - "Mica backdrop doesn't show" (need Win11 22000+)
 - "File system access denied (MSIX)" — grant in Settings → Privacy
@@ -150,9 +163,10 @@ See `docusearch/BUILD.md` §10 for common issues:
 
 ## License
 
-DocuSearch source: MIT-style. Bundled libraries retain their original
-licenses (Qt: LGPL/Commercial, SQLite: Public Domain, Tesseract: Apache 2.0,
-Poppler: GPL).
+DocuSearch source: BSD 3-Clause. Bundled libraries retain their original
+licenses (Qt: LGPL/Commercial, SQLite: Public Domain, Poppler: GPL,
+ONNX Runtime: MIT, BGE Small EN v1.5: MIT, Windows.Media.Ocr:
+built into Windows 10 1809+ (no redistribution needed).
 
 ---
 

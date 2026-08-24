@@ -2,7 +2,7 @@
 
 **Offline Intelligent Document Search & OCR System for Windows 11**
 
-C++20 · Qt 6 Widgets · SQLite + FTS5 · Tesseract OCR · Poppler PDF
+C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · Poppler PDF
 
 ---
 
@@ -88,12 +88,30 @@ The executable is produced at `build\bin\Release\DocuSearch.exe`.
 
 ## 3. Runtime Dependencies
 
-### 3.1 Tesseract tessdata
-Download `eng.traineddata` (and any other languages) from
-<https://github.com/tesseract-ocr/tessdata> and place in one of:
-- `%TESSDATA_PREFIX%` (environment variable)
-- A folder you specify in **Settings → OCR**
-- The default location `C:\Program Files\Tesseract-OCR\tessdata`
+### 3.1 OCR (Windows.Media.Ocr)
+DocuSearch uses **Windows.Media.Ocr** — the officially-supported WinRT
+OCR API built into Windows 10 1809+ and Windows 11. This is the same
+OCR engine that powers Windows Search, the Snipping Tool, and the
+Photos app.
+
+**No DLLs to install. No scripts to run. No licensing risk** — it's
+the public, royalty-free OCR API that any Windows app (commercial
+included) can use.
+
+The only prerequisite is at least one OCR language pack, which ships
+with most consumer Windows installs. If the status bar shows "OCR:
+Click to setup":
+1. Open **Settings → Time & Language → Language & Region**
+2. Click **Add a language**
+3. Pick a language (e.g. English (United States))
+4. In the language options, check **Optical character recognition**
+5. Click Install, then restart DocuSearch
+
+OCR is optional — without it, born-digital PDFs, DOCX, XLSX, PPTX,
+TXT are still fully indexed (only scanned PDFs and images require OCR).
+
+See **[docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)** for full
+licensing + technical details.
 
 ### 3.2 Qt runtime DLLs
 Run `windeployqt` on the built executable to bundle the Qt DLLs:
@@ -192,7 +210,7 @@ Get-AppxPackage DocuSearch.DocuSearch | Remove-AppxPackage
                   └──────────────────────┘
 
    Document extractors        OcrEngine + OcrWorkerPool
-   (PDF / DOCX / XLSX /       (Tesseract, per-thread,
+   (PDF / DOCX / XLSX /       (Windows.Media.Ocr WinRT API, per-thread,
     PPTX / Text / RTF)         CPU-throttled)
 
    Windows 11 native layer
@@ -312,8 +330,11 @@ The full suite runs in well under a second on a normal office PC.
 **"Cannot find Qt6"** — ensure `CMAKE_PREFIX_PATH` points to the Qt
 `msvc2022_64` directory.
 
-**"Tesseract init failed"** — set `TESSDATA_PREFIX` or specify the tessdata
-folder in Settings. You need at least `eng.traineddata`.
+**"OCR: Click to setup"** — the status bar shows this when no OCR
+language packs are installed. Install via: Settings → Time & Language
+→ Language → Add a language with the Optical character recognition
+option checked. Restart DocuSearch — the status bar should switch to
+**OCR: Ready**. See **docs/OCR_LICENSING.md** for full troubleshooting.
 
 **"PDF text empty"** — the PDF may be scanned. Enable OCR; the system will
 flag `needsOcr` and queue the file.
@@ -340,6 +361,10 @@ This is required because the indexer needs to walk `D:\`, `E:\`, etc.
 
 ## 11. License & Credits
 
-DocuSearch is distributed as source code. Bundled libraries retain their
-original licenses (Qt: LGPL/Commercial, SQLite: Public Domain,
-Tesseract: Apache 2.0, Poppler: GPL).
+DocuSearch is distributed as source code under the BSD 3-Clause license.
+Bundled libraries retain their original licenses (Qt: LGPL/Commercial,
+SQLite: Public Domain, Poppler: GPL, ONNX Runtime: MIT, BGE Small EN
+v1.5: MIT). The OCR engine is **Windows.Media.Ocr** — the official
+WinRT OCR API built into Windows 10 1809+. No DLLs are redistributed
+(the OS provides the engine). See **docs/OCR_LICENSING.md** for the
+full OCR compliance documentation.

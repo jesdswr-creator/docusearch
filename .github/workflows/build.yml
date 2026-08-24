@@ -202,8 +202,9 @@ jobs:
       # NOTE: vcpkg dependencies (sqlite3, poppler, zlib)
       # are installed automatically by CMake via the vcpkg manifest (vcpkg.json)
       # when we configure with -DCMAKE_TOOLCHAIN_FILE=vcpkg.cmake. No need for
-      # a separate `vcpkg install` step. Tesseract/Leptonica are REMOVED —
-      # OCR is handled by Windows OCR (built into Windows 10/11).
+      # a separate `vcpkg install` step. OCR is handled by Windows.Media.Ocr
+      # (the official WinRT API built into Windows 10 1809+ — no third-party
+      # dependency, no redistributed DLLs, no licensing risk for commercial use).
 
       - name: Download ONNX Runtime (for build + bundle)
         shell: pwsh
@@ -246,9 +247,10 @@ jobs:
         shell: pwsh
         run: |
           # Poppler is ENABLED for PDF text extraction (born-digital PDFs).
-          # OCR is handled by oneocr.dll (from the Win11 Snipping Tool),
-          # loaded at runtime by docusearch_ocr_helper.exe — no third-party
-          # build dependency. Users install oneocr files via get_oneocr.ps1.
+          # OCR is handled by Windows.Media.Ocr (the official WinRT API
+          # built into Windows 10 1809+) via the separate helper exe —
+          # no third-party build dependency, no redistributed DLLs,
+          # no install scripts for the user to run.
           #
           # ONNX Runtime is ENABLED if ONNXRUNTIME_ROOT is set (downloaded
           # in the previous step). This enables BGE semantic search.
@@ -427,7 +429,8 @@ jobs:
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
           # ---- Bundle non-Qt DLLs: Poppler and its transitive deps.
-          # Tesseract/Leptonica are REMOVED — OCR uses Windows OCR.
+          # OCR is handled by Windows.Media.Ocr (WinRT API built into Windows —
+          # no third-party DLLs to bundle).
           # windeployqt only handles Qt DLLs - it doesn't know about
           # vcpkg-installed libraries. We copy them from the vcpkg bin.
           $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
@@ -492,10 +495,12 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          # Copy the oneocr-based helper exe to the release folder.
-          # The helper loads oneocr.dll at runtime; the DLL itself is NOT
-          # bundled (users run scripts/get_oneocr.ps1 to install it from
-          # their locally-installed Snipping Tool).
+          # Copy the Windows.Media.Ocr helper exe to the release folder.
+          # The helper uses C++/WinRT to call Windows.Media.Ocr.OcrEngine —
+          # the same OCR engine that powers Windows Search and the Snipping
+          # Tool. No DLLs to bundle, no install scripts to run. The only
+          # prerequisite is at least one OCR language pack (which ships with
+          # most consumer Windows installs).
           $helperExe = Get-ChildItem -Path "build" -Filter "docusearch_ocr_helper.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($helperExe) {
             Copy-Item $helperExe.FullName "build\bin\Release\docusearch_ocr_helper.exe" -Force
@@ -522,29 +527,24 @@ jobs:
             }
           }
 
-      - name: Bundle OCR setup instructions + help docs
+      - name: Bundle help docs + licensing info
         shell: pwsh
         run: |
-          # Copy the oneocr setup script + docs + help files into the
-          # release folder so users have everything they need after
-          # extracting the ZIP.
+          # Copy the docs + help files into the release folder so users
+          # have everything they need after extracting the ZIP. The old
+          # get_oneocr.ps1 + ONEOCR_SETUP.md files are GONE — Windows.Media.Ocr
+          # requires no user-side setup beyond the language pack check.
           $dst = "build\bin\Release"
           New-Item -ItemType Directory -Path "$dst\scripts" -Force | Out-Null
           New-Item -ItemType Directory -Path "$dst\docs" -Force | Out-Null
 
-          # OCR setup script + docs
-          if (Test-Path "scripts\get_oneocr.ps1") {
-            Copy-Item "scripts\get_oneocr.ps1" "$dst\scripts\get_oneocr.ps1" -Force
-            Write-Host "Bundled scripts/get_oneocr.ps1"
-          }
+          # Verify setup script (checks helper exe + Qt DLLs + Poppler)
           if (Test-Path "scripts\verify_setup.ps1") {
             Copy-Item "scripts\verify_setup.ps1" "$dst\scripts\verify_setup.ps1" -Force
             Write-Host "Bundled scripts/verify_setup.ps1"
           }
-          if (Test-Path "ONEOCR_SETUP.md") {
-            Copy-Item "ONEOCR_SETUP.md" "$dst\ONEOCR_SETUP.md" -Force
-            Write-Host "Bundled ONEOCR_SETUP.md"
-          }
+          # OCR licensing docs (now describes Windows.Media.Ocr — fully
+          # licensed for commercial use, no Microsoft proprietary binaries)
           if (Test-Path "docs\OCR_LICENSING.md") {
             Copy-Item "docs\OCR_LICENSING.md" "$dst\docs\OCR_LICENSING.md" -Force
             Write-Host "Bundled docs/OCR_LICENSING.md"

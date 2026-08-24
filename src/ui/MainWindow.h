@@ -221,7 +221,7 @@ public:
 
     AppSettings     settings_;
     bool            darkMode_             = true;
-    // Pastel theme cycling: 0=Lavender, 1=Mint, 2=Peach
+    // Pastel theme cycling: 0=Lavender, 1=Mint, 2=Peach, 3=Midnight (dark)
     int             pastelTheme_          = 0;
     bool            contentExtractionRunning_ = false;
     std::atomic<bool> extractCancelFlag_{false};

@@ -61,7 +61,7 @@ private:
 };
 
 // Install the SEH translator. Call ONCE at startup, before any
-// library that might raise SEH exceptions (Poppler, zlib, oneocr).
+// library that might raise SEH exceptions (Poppler, zlib, Windows.Media.Ocr).
 // Safe to call multiple times — re-installs the same translator.
 void installSehTranslator();
 

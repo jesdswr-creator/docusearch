@@ -29,9 +29,9 @@ This guide covers everything you need to use DocuSearch effectively.
    [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions).
 2. **Install/extract** to any folder.
 3. **Run** `DocuSearch.exe`.
-4. **(Optional) Install OCR support** — run `scripts\get_oneocr.ps1`
-   to enable OCR for scanned PDFs and images. See
-   [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for details.
+4. **(Optional) Install OCR language pack** — Settings → Time &
+   Language → Language → Add → Optical character recognition.
+   See [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md) for details.
 
 The first window you see has:
 - A sidebar on the left with navigation items
@@ -139,18 +139,27 @@ the green OCR button.
 
 ## OCR (Scanned PDFs & Images)
 
-OCR extracts text from images and scanned PDFs using **oneocr.dll**
-(the native OCR engine from the Windows 11 Snipping Tool).
+OCR extracts text from images and scanned PDFs using
+**Windows.Media.Ocr** — the officially-supported WinRT OCR API
+built into Windows 10 1809+ and Windows 11.
 
-### One-time setup
+- **No DLLs to install** — Windows itself provides the OCR engine.
+- **No scripts to run** — no `get_oneocr.ps1`, no DLL extraction.
+- **No licensing risk** — Windows.Media.Ocr is the public, royalty-free
+  OCR API that any Windows app (including commercial software) can use.
+- **25+ languages** — auto-detected from your Windows language profile.
 
-```powershell
-.\scripts\get_oneocr.ps1
-```
+The only prerequisite is at least one OCR language pack installed.
+If the status bar shows "OCR: Click to setup":
 
-This script copies the oneocr files from your locally-installed
-Snipping Tool into the DocuSearch folder. See
-[ONEOCR_SETUP.md](ONEOCR_SETUP.md) for full details.
+1. Open Settings → Time & Language → Language & Region
+2. Click Add a language
+3. Pick a language (e.g., English (United States))
+4. In the language options, check Optical character recognition
+5. Click Install, then restart DocuSearch
+
+See [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md) for full licensing
+and technical details.
 
 ### Running OCR on a file
 
@@ -162,17 +171,22 @@ Snipping Tool into the DocuSearch folder. See
 ### OCR status indicator
 
 The status bar at the bottom shows the current OCR status:
-- 🟢 **OCR: Ready** — oneocr is installed and ready.
-- 🟡 **OCR: Setup Required** — oneocr is not installed. Click the
-  indicator for install instructions.
+- 🟢 **OCR: Ready** — Windows.Media.Ocr language packs installed.
+- 🟡 **OCR: Click to setup** — no OCR language packs installed.
+  Click the indicator for install instructions.
 
 ### Supported languages
 
-The oneocr model auto-detects:
-- English
-- Chinese (Simplified & Traditional)
-- Korean
-- Japanese
+Windows.Media.Ocr supports 25+ languages including:
+- English (US, UK, AU, CA, IN)
+- Chinese (Simplified, Traditional — HK, TW)
+- Japanese, Korean
+- German, French, Spanish, Italian, Portuguese
+- Russian, Polish, Czech, Hungarian
+- Arabic, Hebrew, Hindi, Thai, Vietnamese
+
+The helper auto-detects the document language from your Windows
+profile languages — no manual language selection needed.
 
 ---
 
@@ -249,7 +263,8 @@ The backup includes:
 Open **Settings** from the sidebar. Tabs:
 
 - **Indexing** — Worker threads, CPU usage limits, monitor options.
-- **OCR** — Information about oneocr + list of supported languages.
+- **Performance** — Information about extraction/OCR/DB limits
+  (read-only).
 - **Limits** — Read-only display of all extraction/OCR/database limits.
 - **Appearance** — Dark mode toggle (currently light-only).
 - **Saved Searches** — Manage saved searches.
@@ -282,10 +297,11 @@ Open **Settings** from the sidebar. Tabs:
 ### OCR button doesn't work
 
 - Check the OCR status indicator in the status bar.
-  - 🟡 Yellow means oneocr isn't installed.
-- Run `scripts\get_oneocr.ps1` to install.
-- Restart DocuSearch.
-- See [ONEOCR_SETUP.md](ONEOCR_SETUP.md) for troubleshooting.
+  - 🟡 Yellow means no OCR language packs are installed.
+- Install via Settings → Time & Language → Language → Add a language
+  with the Optical character recognition option checked.
+- Restart DocuSearch after install.
+- See [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md) for troubleshooting.
 
 ### Search returns no results
 
@@ -319,7 +335,7 @@ Open **Settings** from the sidebar. Tabs:
 
 - **Bug reports**: [GitHub Issues](https://github.com/jesdswr-creator/docusearch/issues)
 - **Latest builds**: [GitHub Actions](https://github.com/jesdswr-creator/docusearch/actions)
-- **OCR setup**: [ONEOCR_SETUP.md](ONEOCR_SETUP.md)
+- **OCR setup**: [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)
 - **OCR licensing**: [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)
 - **FAQ**: [FAQ.md](FAQ.md)
 

@@ -4,8 +4,9 @@
 
 A professional, completely offline C++20 / Qt 6 desktop application that indexes
 your drives, extracts text from documents (PDF, DOCX, XLSX, PPTX), OCRs scanned
-PDFs and images (oneocr), and provides instant full-text search — all without
-any cloud dependency. Your data never leaves your machine.
+PDFs and images via Windows.Media.Ocr (the official WinRT OCR API), and
+provides instant full-text search — all without any cloud dependency.
+Your data never leaves your machine.
 
 ## Key Features
 
@@ -13,7 +14,8 @@ any cloud dependency. Your data never leaves your machine.
 - **Advanced query syntax**: phrases, boolean (AND/OR/NOT), field filters
   (`type:pdf`, `folder:Railway`, `date:>2024-01-01`)
 - **PDF text extraction** via Poppler (born-digital PDFs) + **OCR** via
-  oneocr (the Windows 11 Snipping Tool's OCR engine — scanned PDFs and images)
+  Windows.Media.Ocr (the official WinRT OCR API — supports 25+ languages,
+  no licensing risk for commercial use)
 - **Auto-scan every 1 hour** — detects new and modified files automatically
 - **Tags, notes, favorites, saved searches** — organize your way
 - **Duplicate detection** by SHA-256 hash
@@ -47,7 +49,7 @@ any cloud dependency. Your data never leaves your machine.
 | Language | C++20 |
 | UI Framework | Qt 6.7 (Widgets) |
 | Database | SQLite 3 + FTS5 (full-text search) |
-| OCR | oneocr.dll (from Windows 11 Snipping Tool) |
+| OCR | Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) |
 | PDF | Poppler (cpp binding) |
 | Build | CMake + vcpkg (manifest mode) |
 | Installer | WiX v4 (MSI) |
@@ -59,17 +61,33 @@ Download the latest build from [GitHub Actions](https://github.com/jesdswr-creat
 - **DocuSearch-Setup-msi** — MSI installer (recommended, includes EULA)
 - **DocuSearch-portable** — Portable ZIP (no installation required)
 
-## OCR Setup (oneocr)
+## OCR Setup (Windows.Media.Ocr)
 
-DocuSearch uses **oneocr.dll** — the native OCR engine from the Windows 11
-Snipping Tool — for text recognition. The DLL is **not bundled**; you install
-it from your own locally-installed Snipping Tool:
+DocuSearch uses **Windows.Media.Ocr** — the officially-supported WinRT OCR
+API built into Windows 10 1809+ and Windows 11. This is the same OCR engine
+that powers Windows Search, the Snipping Tool, and the Photos app.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\get_oneocr.ps1
-```
+- **No DLLs to install** — Windows itself provides the OCR engine.
+- **No scripts to run** — no `get_oneocr.ps1`, no DLL extraction.
+- **No licensing risk** — Windows.Media.Ocr is the public, royalty-free
+  OCR API that any Windows app (including commercial software) can use.
+- **25+ languages** — auto-detected from your Windows language profile.
 
-See **[ONEOCR_SETUP.md](ONEOCR_SETUP.md)** for full instructions and troubleshooting.
+### Prerequisites
+
+The only requirement is at least one OCR language pack installed. On
+most consumer Windows 10/11 installs, this is already the case. If the
+status bar shows "OCR: Click to setup":
+
+1. Open **Settings → Time & Language → Language & Region**
+2. Click **Add a language**
+3. Pick a language (e.g., English (United States))
+4. In the language options, check **Optical character recognition**
+5. Click Install
+6. Restart DocuSearch
+
+See **[docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)** for full licensing
+and technical details.
 
 ## Build from Source
 
@@ -93,7 +111,7 @@ src/
   core/         Config, Logger, FileUtils, Constants, Types
   database/     Database (RAII SQLite), FileRepository, Schema
   documents/    DocumentExtractorRegistry, PdfExtractor, DocxExtractor, ...
-  ocr/          WindowsOcrEngine (oneocr.dll wrapper), ocr_helper_main.cpp
+  ocr/          WindowsOcrEngine (Windows.Media.Ocr wrapper), ocr_helper_main.cpp
   indexer/      ContentIndexer, MetadataIndexer, PriorityScheduler
   search/       SearchEngine, QueryParser (AST-based)
   preview/      ThumbnailGenerator

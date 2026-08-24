@@ -169,13 +169,12 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     tabs->addTab(perfTab, "Performance");
 
     // -------- OCR tab -------- REMOVED.
-    // The OCR tab was info-only (just described oneocr.dll + listed languages).
-    // The status bar already shows OCR status with a click-for-info indicator.
-    // Kept these as nullptr so existing references in settings I/O don't crash.
-    tessdataEdit_ = new QLineEdit(current_.tessdataPath, this);
-    tessdataEdit_->setVisible(false);
-    langCombo_ = new QComboBox(this);
-    langCombo_->setVisible(false);
+    // The OCR tab was info-only (just described Windows.Media.Ocr +
+    // listed languages). The status bar already shows OCR status with
+    // a click-for-info indicator. No hidden QWidgets are allocated —
+    // the AppSettings.tessdataPath and
+    // .ocrLanguage fields are preserved verbatim from `current_` in result()
+    // so legacy settings files don't lose data on round-trip.
 
     // -------- Limits tab -------- REMOVED.
     // The Limits tab was read-only info (extraction/OCR/database caps).
@@ -446,15 +445,6 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     populateSavedSearches();
 }
 
-void SettingsDialog::populateLangCombo() {
-    // Common Tesseract language packs. The combo is editable so the
-    // user can also type a custom combination (e.g., "eng+chi_sim+hin").
-    langCombo_->clear();
-    langCombo_->addItems({"eng", "eng+hin", "eng+chi_sim", "chi_sim",
-                          "chi_tra", "fra", "deu", "spa", "ita",
-                          "por", "rus", "jpn", "kor", "ara", "hin"});
-}
-
 void SettingsDialog::populateSavedSearches() {
     savedList_->clear();
     if (!repo_) {
@@ -497,8 +487,8 @@ AppSettings SettingsDialog::result() const {
     s.lazyOcrEnabled       = lazyOcrCheck_->isChecked();
     s.hashLargeFiles       = hashFilesCheck_->isChecked();
     s.monitorFileChanges   = monitorCheck_->isChecked();
-    s.tessdataPath         = tessdataEdit_->text().trimmed();
-    s.ocrLanguage          = langCombo_->currentText().trimmed();
+    s.tessdataPath         = current_.tessdataPath;  // legacy field preserved (OCR tab removed)
+    s.ocrLanguage          = current_.ocrLanguage;   // legacy field preserved (OCR tab removed)
     s.darkMode             = darkModeCheck_->isChecked();
     return s;
 }

@@ -7,11 +7,11 @@ This document explains the three real options.
 
 ## ⚠️ Why I can't just hand you an .exe
 
-DocuSearch is a Qt 6 + Tesseract + Poppler + SQLite application. Building
-it produces a `.exe` plus ~50 Qt DLLs, Qt plugins, MSVC runtime DLLs, and
-Tesseract/Leptonica/Poppler DLLs — all of which must match the compiler
-(MSVC 2022), architecture (x64), and Windows version (10/11) of the
-target machine.
+DocuSearch is a Qt 6 + Windows.Media.Ocr + Poppler + SQLite application.
+Building it produces a `.exe` plus ~50 Qt DLLs, Qt plugins, MSVC
+runtime DLLs, and Poppler/zlib DLLs — all of which must match the
+compiler (MSVC 2022), architecture (x64), and Windows version (10/11)
+of the target machine.
 
 The sandbox where I generated your source code is **Linux**. There is no
 way to produce a reliable, self-contained Windows .exe of a Qt6 app from
@@ -50,8 +50,8 @@ tab — no Windows PC required.
 
 4. **Watch the build** at
    `https://github.com/YOUR-USERNAME/docusearch/actions`
-   It takes ~30–45 minutes on the first run (vcpkg compiles Tesseract +
-   Poppler from source), then ~5 minutes on subsequent runs (cached).
+   It takes ~30–45 minutes on the first run (vcpkg compiles Poppler
+   from source), then ~5 minutes on subsequent runs (cached).
 
 5. **Download the binaries** from the run page:
    - `DocuSearch-Setup-msi` artifact → unzip → double-click the .msi
@@ -99,7 +99,7 @@ library computer), this is the simplest path.
    ```
 5. The `dist\` folder opens with the .msi, .msix, and .zip ready to use.
 
-First build takes ~30 min (vcpkg compiles Tesseract/Poppler). Subsequent
+First build takes ~30 min (vcpkg compiles Poppler). Subsequent
 builds take ~2 min.
 
 ---
@@ -135,12 +135,35 @@ a Windows VM by the hour:
 7. Search bar is live after a few seconds (Phase 1 = filename search).
 8. Content + OCR search become available as Phase 2 progresses.
 
-### Tesseract OCR data
+### Windows.Media.Ocr language packs
 
-Download `eng.traineddata` from
-<https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata>
-and drop it in `C:\Program Files\Tesseract-OCR\tessdata\` (create the
-folder if needed). Or specify a custom path in **Settings → OCR**.
+DocuSearch uses **Windows.Media.Ocr** — the officially-supported
+WinRT OCR API built into Windows 10 1809+ and Windows 11. This is
+the same OCR engine that powers Windows Search, the Snipping Tool,
+and the Photos app.
+
+- **No DLLs to install** — Windows itself provides the OCR engine.
+- **No scripts to run** — no `get_oneocr.ps1`, no DLL extraction.
+- **No licensing risk** — Windows.Media.Ocr is the public,
+  royalty-free OCR API that any Windows app (commercial included)
+  can use.
+- **25+ languages** — auto-detected from your Windows language profile.
+
+The only prerequisite is at least one OCR language pack installed
+(which ships with most consumer Windows installs). If the status bar
+shows "OCR: Click to setup":
+
+1. Open Settings → Time & Language → Language & Region
+2. Click Add a language
+3. Pick a language (e.g., English (United States))
+4. In the language options, check Optical character recognition
+5. Click Install, then restart DocuSearch
+
+See **[docs/OCR_LICENSING.md](docs/OCR_LICENSING.md)** for full
+instructions and troubleshooting.
+
+OCR is optional — without it, born-digital PDFs and Office documents
+are still fully indexed (only scanned PDFs and raster images require OCR).
 
 ---
 

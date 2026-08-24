@@ -38,9 +38,7 @@ Extract the portable ZIP on a clean Windows 10/11 machine and verify:
 - [ ] `poppler*.dll` present (PDF text extraction)
 - [ ] `zlib*.dll` present (DOCX/XLSX/PPTX extraction)
 - [ ] `sqldrivers\qsqlite.dll` present (SQLite driver plugin)
-- [ ] `scripts\get_oneocr.ps1` present (OCR installer)
 - [ ] `scripts\verify_setup.ps1` present (setup verifier)
-- [ ] `ONEOCR_SETUP.md` present
 - [ ] `HELP.md` present
 - [ ] `FAQ.md` present
 - [ ] `docs\OCR_LICENSING.md` present
@@ -56,18 +54,17 @@ Extract the portable ZIP on a clean Windows 10/11 machine and verify:
 
 ## Functional Testing (Manual)
 
-On a clean Windows 11 machine with Snipping Tool installed:
+On a clean Windows 11 machine with at least one OCR language pack
+installed (most consumer installs have one by default):
 
 ### Setup
 - [ ] Run `scripts\verify_setup.ps1` — should report all checks pass
-  except oneocr files (warn)
-- [ ] Run `scripts\get_oneocr.ps1` — should install oneocr files
-- [ ] Run `scripts\verify_setup.ps1` again — should report all checks pass
+  (OCR ready if language packs are installed; warning if not)
 
 ### First Run
 - [ ] DocuSearch.exe launches without errors
-- [ ] Status bar shows "OCR: Setup Required" before oneocr install
-- [ ] Status bar shows "OCR: Ready" after oneocr install + restart
+- [ ] Status bar shows "OCR: Ready" (if language packs installed)
+- [ ] Status bar shows "OCR: Click to setup" (if no language packs)
 - [ ] Clicking OCR status indicator shows helpful message
 
 ### Add Folder
@@ -119,9 +116,10 @@ On a clean Windows 11 machine with Snipping Tool installed:
 
 ### Settings
 - [ ] Indexing tab — adjust worker threads, applies on next indexing
-- [ ] OCR tab — shows oneocr info + language list
-- [ ] Limits tab — shows all extraction/OCR/DB limits (read-only)
-- [ ] Appearance tab — dark mode toggle (currently cosmetic only)
+- [ ] Performance tab — shows all extraction/OCR/DB limits (read-only)
+- [ ] Semantic Search tab — shows BGE model status + embedding count
+- [ ] Theme toggle (status bar) — cycles through Lavender / Mint /
+      Peach / Midnight (dark) palettes
 - [ ] Saved Searches tab — manage saved searches
 - [ ] Backup/Restore tab — backup and restore buttons work
 
@@ -149,22 +147,24 @@ On a clean Windows 11 machine with Snipping Tool installed:
 - [ ] **README.md** — accurate, no broken links
 - [ ] **HELP.md** — covers all features, no broken links
 - [ ] **FAQ.md** — answers common questions accurately
-- [ ] **ONEOCR_SETUP.md** — install instructions work
-- [ ] **docs/OCR_LICENSING.md** — accurate legal info
+- [ ] **docs/OCR_LICENSING.md** — accurate legal info (Windows.Media.Ocr)
 - [ ] **docs/RELEASE_CHECKLIST.md** — this file is up to date
 - [ ] **BUILD.md** — build instructions work on clean Windows
 
 ## License / Legal
 
 - [ ] **BSD 3-Clause** license file present (`installer/LICENSE.rtf`)
-- [ ] **Third-party notices** included (Qt, Poppler, zlib, SQLite, oneocr)
-- [ ] **No proprietary binaries** bundled (oneocr NOT included —
-      users install via get_oneocr.ps1)
+- [ ] **Third-party notices** included (Qt, Poppler, zlib, SQLite)
+- [ ] **No proprietary binaries bundled** — OCR uses Windows.Media.Ocr
+      (the official WinRT API built into Windows 10 1809+; no DLLs
+      redistributed, no install scripts needed)
+- [ ] **Compatible with Microsoft Store commercial policy** — no
+      Microsoft-proprietary binaries redistributed
 - [ ] **Version number** bumped in `src/core/Constants.h`
 
 ## Release Process
 
-- [ ] **Tag the commit** as `v1.0.0` (or appropriate version)
+- [ ] **Tag the commit** as `v1.1.0` (or appropriate version)
 - [ ] **CI builds the tag** automatically
 - [ ] **Download artifacts** from the tag build
 - [ ] **Create GitHub Release** with release notes
@@ -186,16 +186,16 @@ On a clean Windows 11 machine with Snipping Tool installed:
 From the DocuSearch folder on a Windows machine:
 
 ```powershell
-# 1. Verify setup
+# 1. Verify setup (checks helper exe + Qt DLLs + Poppler + OCR
+#    language packs + write access to AppData)
 .\scripts\verify_setup.ps1
 
-# 2. Install OCR support
-.\scripts\get_oneocr.ps1
+# 2. (Optional) If OCR shows "Click to setup":
+#    Install an OCR language pack via Settings → Time & Language →
+#    Language → Add → Optical character recognition. Then restart
+#    DocuSearch.
 
-# 3. Verify setup again
-.\scripts\verify_setup.ps1
-
-# 4. Launch DocuSearch
+# 3. Launch DocuSearch
 .\DocuSearch.exe
 ```
 

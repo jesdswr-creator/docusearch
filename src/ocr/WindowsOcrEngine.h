@@ -1,23 +1,28 @@
 #pragma once
 
 // ============================================================
-// WindowsOcrEngine.h - OCR wrapper using oneocr.dll
+// WindowsOcrEngine.h - OCR wrapper backed by Windows.Media.Ocr
 // ============================================================
 //
-// Uses oneocr.dll — the native OCR engine shipped with the Windows 11
-// Snipping Tool (Microsoft.ScreenSketch). The DLL is loaded by a
-// separate helper exe (docusearch_ocr_helper.exe) which calls the
-// C-ABI exports. This is a drop-in replacement for the previous
-// WinRT-based implementation that was crashing the app on low-RAM
-// Windows systems.
+// Uses the official Windows.Media.Ocr WinRT API — the same OCR
+// engine that powers Windows Search, Snipping Tool, and the Photos
+// app. This is the officially-supported, royalty-free OCR API for
+// any Windows app (commercial included — see docs/OCR_LICENSING.md).
 //
-// NO Python required. NO WinRT. NO apartment threading.
-// The oneocr.dll + oneocr.onemodel + onnxruntime.dll files must be
-// obtained from the locally-installed Snipping Tool via
-// scripts/get_oneocr.ps1 and placed next to docusearch.exe.
+// The WinRT calls live in a SEPARATE helper exe (docusearch_ocr_helper.exe)
+// spawned via QProcess. This keeps runtimeobject.lib (WinRT) out of
+// the main Qt app, avoiding the well-known Qt/WinRT entry-point
+// conflict. It also gives us free process isolation: even if the
+// OCR subsystem faults, the main app is unaffected.
 //
-// The class name is kept as WindowsOcrEngine for backward
-// compatibility with existing code that references it.
+// Availability:
+//   Windows.Media.Ocr is always present on Windows 10 1809+ when at
+//   least one OCR language pack is installed (most consumer Windows
+//   installs do). The helper exe is the only file that needs to ship
+//   with DocuSearch — no DLLs, no models, no scripts to run.
+//
+// Class name kept as WindowsOcrEngine for backward compatibility
+// with existing code that references it.
 // ============================================================
 
 #include <QString>
@@ -35,45 +40,44 @@ public:
 
     // Singleton accessor — used by status bar / UI to query OCR status
     // without creating a new instance each time (which would lose the
-    // cached oneocrAvailable_ flag set by previous OCR runs).
+    // cached available_ flag set by previous OCR runs).
     static WindowsOcrEngine& instance();
 
-    // Initialize the OCR engine. Checks for the helper exe and the
-    // oneocr.dll + model files. Returns true if the helper is present.
-    // Even if oneocr.dll is missing, returns true so the helper can
-    // surface the install-instructions error message to the user.
+    // Initialize the OCR engine. Checks for the helper exe.
+    // Returns true if the helper is present (and WinRT will be ready
+    // when ocrFile() is called).
     bool init();
 
-    // Shutdown hook — call before QApplication is destroyed to clean
-    // up any pending state. Currently a no-op because we create a
-    // fresh QProcess per ocrFile() call (no long-lived QProcess member),
-    // but kept for forward compatibility and to match the shutdown
-    // pattern used by other singletons.
+    // Shutdown hook — call before QApplication is destroyed.
+    // Currently a no-op because we create a fresh QProcess per ocrFile()
+    // call, but kept for forward compatibility and to match the
+    // shutdown pattern used by other singletons.
     void shutdown() {}
 
     // OCR an image. Returns extracted text (empty on failure).
     QString ocrImage(const QImage& img);
 
-    // OCR a file directly (PNG, JPG, BMP, TIFF, WebP).
+    // OCR a file directly (PNG, JPG, BMP, TIFF, WebP, GIF, HEIF).
     QString ocrFile(const QString& path);
 
     bool isInitialized() const { return initialized_; }
 
-    // Returns true if oneocr.dll + oneocr.onemodel are available
-    // alongside the app. If false, OCR calls will return empty and
-    // the user should run scripts/get_oneocr.ps1.
-    bool isOneocrAvailable() const;
+    // Returns true if Windows.Media.Ocr appears to be available
+    // (helper exe present + at least one OCR language pack installed
+    // per the helper's last run). The check is cheap and cached.
+    bool isAvailable() const;
 
-    // Returns the list of available OCR languages.
+    // Returns the list of installed OCR language tags — empty if
+    // no OCR languages are installed yet (caller should prompt user
+    // to install one via Windows Settings).
     static QStringList availableLanguages();
 
 private:
-    // Search for the directory containing oneocr.dll.
-    // Returns empty string if not found.
-    QString findOneocrDir() const;
-
     bool initialized_ = false;
-    bool oneocrAvailable_ = false;
+    bool available_ = false;
+    // Tracks whether the last OCR call surfaced a "no language packs
+    // installed" message — drives the status bar indicator.
+    bool noLanguagePacks_ = false;
 };
 
 } // namespace DocuSearch

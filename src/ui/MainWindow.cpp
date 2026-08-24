@@ -220,12 +220,12 @@ MainWindow::MainWindow(QWidget* parent)
     // Status bar at bottom (created by QMainWindow::statusBar()).
     buildStatusBar();
 
-    // Probe the OCR engine NOW (cheap file-existence check — no process
-    // spawn, no model load). This sets WindowsOcrEngine::isOneocrAvailable()
-    // based on the actual oneocr.dll + oneocr.onemodel files on disk so
-    // the status bar indicator reflects reality. Without this call, the
-    // indicator would default to "Setup Required" — confusing users who
-    // have oneocr installed and can already OCR images without issues.
+    // Probe the OCR engine NOW (cheap helper-exe existence check —
+    // no WinRT init, no language pack load). This sets
+    // WindowsOcrEngine::isAvailable() based on whether the helper
+    // exe is present and whether the last OCR call surfaced a
+    // "no language packs" error. Without this call, the indicator
+    // would default to "Ready" — fine on most Windows installs.
     WindowsOcrEngine::instance().init();
 
     // Update the OCR availability indicator on the status bar.
@@ -765,7 +765,7 @@ void MainWindow::buildStatusBar() {
 
     // Right side: OCR status indicator + Open Location button.
     // Shows a colored dot + "OCR: Ready" / "OCR: Setup Required" so users
-    // know at a glance whether oneocr is installed.
+    // know at a glance whether Windows.Media.Ocr has language packs installed.
     ocrStatusWidget_ = new QWidget(sb);
     auto* ocrLay = new QHBoxLayout(ocrStatusWidget_);
     ocrLay->setContentsMargins(8, 0, 8, 0);
@@ -779,8 +779,8 @@ void MainWindow::buildStatusBar() {
     ocrLay->addWidget(ocrStatusLbl_);
     ocrStatusWidget_->setToolTip(
         "OCR (Optical Character Recognition) status.\n"
-        "Green: oneocr.dll is installed and ready.\n"
-        "Amber: oneocr.dll is missing — click for install instructions.");
+        "Green: Windows.Media.Ocr is ready (language packs installed).\n"
+        "Amber: no OCR language packs installed — click for instructions.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
     // Semantic search toggle — custom slider pill (matches Pastel Pop design).
@@ -845,45 +845,91 @@ void MainWindow::buildStatusBar() {
 
 void MainWindow::applyTheme() {
     // ════════════════════════════════════════════════════════════════
-    // "Pastel Pop" theme — 3 swappable palettes (Lavender/Mint/Peach)
-    // Flat solid colors, no gradients, no shadows. 100% QSS-safe.
+    // "Pastel Pop Pro" — 4 swappable palettes, refined Win11 design.
+    //   0 = Lavender (light)   — soft purple-blue accents
+    //   1 = Mint     (light)   — emerald-teal accents
+    //   2 = Peach    (light)   — coral-orange accents
+    //   3 = Midnight (dark)    — deep indigo + neon-blue accents
+    //
+    // Refinements over the original Pastel Pop:
+    //   • Subtle gradient accents on primary CTAs (search, add folder)
+    //   • Refined typography hierarchy (500/600/700/800 used strategically)
+    //   • Smoother hover states (subtle color lift, no jarring darkening)
+    //   • Better elevation via subtle gradient backgrounds + inset borders
+    //   • Thinner semi-transparent scrollbars (auto-reveal on hover)
+    //   • Polished status bar with gradient pill on OCR indicator
+    //   • Refined progress bar with gradient chunk
+    //   • Better tooltips (rounded, subtle border, elevated)
+    //   • True dark mode (Midnight) with elevated surface tiers
     // ════════════════════════════════════════════════════════════════
-    
-    // Fixed candy accents (same across all 3 palettes)
-    const QString cPdf    = "#ff7b7b";
-    const QString cDocx   = "#5aa2ff";
-    const QString cXlsx   = "#3fbf8f";
-    const QString cMd     = "#b78af7";
-    const QString cTxt    = "#35c0c0";
-    const QString success = "#2aa87e";
-    const QString warn    = "#e8940a";
-    const QString pink    = "#e85d97";
-    const QString orange  = "#f26b4e";
-    const QString sky     = "#2ba8cc";
-    const QString violet  = "#9a6ff0";
+
+    // Fixed candy accents — slightly desaturated in dark mode for less
+    // glare on the elevated dark surfaces.
+    QString cPdf, cDocx, cXlsx, cMd, cTxt;
+    QString success, warn, pink, orange, sky, violet;
+    QString cPdfBg, cDocxBg, cXlsxBg, cMdBg, cTxtBg;
+    QString tooltipBg, tooltipText;
 
     // Swappable palette tokens
-    QString bg, surface, surface2, field, border, hover, text, muted;
-    QString primary, primaryStrong, primarySoft, primaryBorder;
+    QString bg, surface, surface2, surface3, field, border, border2, hover, hoverSoft, text, muted;
+    QString primary, primaryStrong, primarySoft, primaryBorder, primaryGlow;
+    QString shadow, elevation1, elevation2;
     QString themeLabel;
+    bool isDark = false;
 
     switch (pastelTheme_) {
-        case 1: // Mint
-            bg = "#f1faf6"; surface = "#ffffff"; surface2 = "#f8fcfa"; field = "#fdfffe";
-            border = "#dcefe5"; hover = "#e9f7f0"; text = "#4a5070"; muted = "#8d93b2";
-            primary = "#209972"; primaryStrong = "#177d5c"; primarySoft = "#e0f6ec"; primaryBorder = "#b5e6d2";
+        case 1: // Mint (light)
+            bg = "#f1faf6"; surface = "#ffffff"; surface2 = "#f8fcfa"; surface3 = "#f0f8f3";
+            field = "#fdfffe"; border = "#dcefe5"; border2 = "#c5e3d2"; hover = "#e9f7f0"; hoverSoft = "#f3fbf7";
+            text = "#1f3a32"; muted = "#6b8580";
+            primary = "#209972"; primaryStrong = "#177d5c"; primarySoft = "#e0f6ec";
+            primaryBorder = "#b5e6d2"; primaryGlow = "#3fbf8f";
+            shadow = "#1a2a2410"; elevation1 = "#ffffff"; elevation2 = "#f5fbf8";
+            tooltipBg = "#1f3a32"; tooltipText = "#ffffff";
+            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
+            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
+            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
             themeLabel = "Mint";
             break;
-        case 2: // Peach
-            bg = "#fff6f1"; surface = "#ffffff"; surface2 = "#fffbf8"; field = "#fffefd";
-            border = "#f8e3d7"; hover = "#fdefe6"; text = "#4a5070"; muted = "#8d93b2";
-            primary = "#e0684c"; primaryStrong = "#c9553b"; primarySoft = "#ffe9e0"; primaryBorder = "#ffcdbb";
+        case 2: // Peach (light)
+            bg = "#fff6f1"; surface = "#ffffff"; surface2 = "#fffbf8"; surface3 = "#fff2eb";
+            field = "#fffefd"; border = "#f8e3d7"; border2 = "#f0c9b3"; hover = "#fdefe6"; hoverSoft = "#fef7f0";
+            text = "#3a1f12"; muted = "#8a6555";
+            primary = "#e0684c"; primaryStrong = "#c9553b"; primarySoft = "#ffe9e0";
+            primaryBorder = "#ffcdbb"; primaryGlow = "#ff8c69";
+            shadow = "#3a1f1210"; elevation1 = "#ffffff"; elevation2 = "#fff5ef";
+            tooltipBg = "#3a1f12"; tooltipText = "#ffffff";
+            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
+            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
+            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
             themeLabel = "Peach";
             break;
-        default: // Lavender (0)
-            bg = "#f5f6ff"; surface = "#ffffff"; surface2 = "#fafbff"; field = "#fdfeff";
-            border = "#e4e7f8"; hover = "#eef0fe"; text = "#4a5070"; muted = "#8d93b2";
-            primary = "#6c7cf5"; primaryStrong = "#5563e8"; primarySoft = "#eaedff"; primaryBorder = "#ccd4ff";
+        case 3: // Midnight (dark)
+            isDark = true;
+            bg = "#0a0a12"; surface = "#13131e"; surface2 = "#1a1a28"; surface3 = "#222234";
+            field = "#1a1a28"; border = "#2a2a3d"; border2 = "#3a3a52"; hover = "#252538"; hoverSoft = "#1d1d2e";
+            text = "#e8e8f0"; muted = "#8a8aa0";
+            primary = "#6c7cf5"; primaryStrong = "#8b8fff"; primarySoft = "#252548";
+            primaryBorder = "#3a3a72"; primaryGlow = "#a5b4ff";
+            shadow = "#00000040"; elevation1 = "#1a1a28"; elevation2 = "#222234";
+            tooltipBg = "#1a1a28"; tooltipText = "#e8e8f0";
+            // Candy accents slightly desaturated for dark-mode readability
+            cPdf="#f87171"; cDocx="#60a5fa"; cXlsx="#34d399"; cMd="#c084fc"; cTxt="#22d3ee";
+            cPdfBg="#3d1818"; cDocxBg="#172554"; cXlsxBg="#0f3d2e"; cMdBg="#3b1a5e"; cTxtBg="#0d3b45";
+            success="#4ade80"; warn="#fb923c"; pink="#f472b6"; orange="#fb923c"; sky="#38bdf8"; violet="#a78bfa";
+            themeLabel = "Midnight";
+            break;
+        default: // Lavender (light, index 0)
+            bg = "#f5f6ff"; surface = "#ffffff"; surface2 = "#fafbff"; surface3 = "#eef0fe";
+            field = "#fdfeff"; border = "#e4e7f8"; border2 = "#ccd4ff"; hover = "#eef0fe"; hoverSoft = "#f5f6ff";
+            text = "#1f1f3a"; muted = "#6b6f8a";
+            primary = "#6c7cf5"; primaryStrong = "#5563e8"; primarySoft = "#eaedff";
+            primaryBorder = "#ccd4ff"; primaryGlow = "#8b9aff";
+            shadow = "#1f1f3a10"; elevation1 = "#ffffff"; elevation2 = "#fafbff";
+            tooltipBg = "#1f1f3a"; tooltipText = "#ffffff";
+            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
+            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
+            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
             themeLabel = "Lavender";
             break;
     }
@@ -914,71 +960,136 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::Button,        QColor(surface));
     pal.setColor(QPalette::Highlight,     QColor(primary));
     pal.setColor(QPalette::HighlightedText, QColor("#ffffff"));
-    pal.setColor(QPalette::ToolTipBase,   QColor(surface));
-    pal.setColor(QPalette::ToolTipText,  QColor(text));
+    pal.setColor(QPalette::ToolTipBase,   QColor(tooltipBg));
+    pal.setColor(QPalette::ToolTipText,  QColor(tooltipText));
     pal.setColor(QPalette::Disabled, QPalette::WindowText, QColor(muted));
     pal.setColor(QPalette::Disabled, QPalette::Text,     QColor(muted));
     QApplication::setPalette(pal);
 
     // ── QSS with @token@ substitution ────────────────────────
+    // Pastel Pop Pro — refined Win11 design language.
+    //   • Gradient accents on primary CTAs (qlineargradient)
+    //   • Strategic typography hierarchy (500/600/700/800 weights)
+    //   • Subtle gradient on title bar + sidebar for elevation
+    //   • Thinner scrollbars with hover-reveal
+    //   • Gradient progress-bar chunks
+    //   • Polished pills for status indicators
     QString s = QStringLiteral(R"(
-QWidget { color: @text@; font-family: 'Nunito','Segoe UI',sans-serif; font-weight: 600; }
-QMainWindow { background: @bg@; }
-QWidget#topMenuBar { background: @surface2@; border-bottom: 1px solid @border@; }
-QStatusBar { background: @surface@; border-top: 1px solid @border@; color: @muted@; }
-QStatusBar::item { border: none; }
-QStatusBar QLabel { color: @muted@; padding: 0 4px; }
-
-/* ── Search box ── */
-QLineEdit { background: @field@; color: @text@; border: 1px solid @border@; border-radius: 10px;
-            padding: 8px 12px; font-size: 13px; selection-background-color: @primary@; }
-QLineEdit:focus { border: 1px solid @primary@; }
-
-/* ── Primary button (solid accent fill) ── */
-QPushButton { background: @primary@; color: #ffffff; border: none; border-radius: 10px;
-              padding: 7px 15px; font-weight: 800; font-size: 13px; }
-QPushButton:hover { background: @primaryStrong@; }
-QPushButton:pressed { background: @primaryStrong@; }
-QPushButton:disabled { background: @border@; color: @muted@; }
-
-/* ── Title bar window buttons (min/max/close) ── white/surface background
-   with a subtle border so they're clearly visible against the title bar.
-   Icons are dark (text color) on the white bg.
-   Close hover = red bg with white icon (icon color swapped in refreshIcons). ── */
-QPushButton#titleBtn {
-    background: @surface@; border: 1px solid @border@; border-radius: 8px;
-    padding: 0; margin: 0;
+QWidget {
+    color: @text@;
+    font-family: 'Segoe UI Variable Text','Segoe UI','Nunito',sans-serif;
+    font-size: 13px;
+    font-weight: 500;
 }
-QPushButton#titleBtn:hover { background: @hover@; border-color: @primaryBorder@; }
+QMainWindow { background: @bg@; }
+
+/* ── Title bar — subtle gradient for premium feel ── */
+QWidget#topMenuBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @surface2@, stop:1 @surface3@);
+    border-bottom: 1px solid @border@;
+}
+
+/* ── Status bar — pill-style status indicators ── */
+QStatusBar {
+    background: @surface2@;
+    border-top: 1px solid @border@;
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 600;
+}
+QStatusBar::item { border: none; }
+QStatusBar QLabel { color: @muted@; padding: 0 6px; }
+
+/* ── Search box — refined focus ring ── */
+QLineEdit {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    selection-background-color: @primary@;
+    selection-color: #ffffff;
+}
+QLineEdit:hover { border-color: @primaryBorder@; }
+QLineEdit:focus {
+    border: 1px solid @primary@;
+    background: @surface@;
+}
+
+/* ── Primary button — gradient accent (subtle two-tone lift) ── */
+QPushButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @primary@, stop:1 @primaryStrong@);
+    color: #ffffff;
+    border: none;
+    border-radius: 10px;
+    padding: 7px 16px;
+    font-weight: 700;
+    font-size: 13px;
+}
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @primaryGlow@, stop:1 @primary@);
+}
+QPushButton:pressed { background: @primaryStrong@; }
+QPushButton:disabled { background: @border2@; color: @muted@; }
+
+/* ── Title bar window buttons (min/max/close) ──
+   Surface-tinted background with subtle inset border for a "button on
+   a chrome bar" look. Close hover = bright red with smooth transition. */
+QPushButton#titleBtn {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: 0; margin: 2px;
+}
+QPushButton#titleBtn:hover {
+    background: @hover@;
+    border-color: @primaryBorder@;
+}
 QPushButton#titleBtn:pressed { background: @primarySoft@; }
 QPushButton#closeBtn {
-    background: @surface@; border: 1px solid @border@; border-radius: 8px;
-    padding: 0; margin: 0;
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: 0; margin: 2px;
 }
 QPushButton#closeBtn:hover { background: #ef4444; border-color: #ef4444; }
 QPushButton#closeBtn:pressed { background: #dc2626; border-color: #dc2626; }
 
-/* ── App logo: primary-colored square so the white search glyph is visible ── */
+/* ── App logo — accent-colored rounded square with subtle gradient ── */
 QLabel#appLogo {
-    background: @primary@;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 @primary@, stop:1 @primaryStrong@);
     border-radius: 9px;
 }
 
-/* ── Metadata edit button: primary bg with white icon ── */
+/* ── Metadata edit button — accent gradient ── */
 QPushButton#editBtn {
-    background: @primary@; color: #ffffff; border: none;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @primary@, stop:1 @primaryStrong@);
+    color: #ffffff; border: none;
     border-radius: 8px; padding: 6px; min-width: 28px; min-height: 28px;
 }
-QPushButton#editBtn:hover { background: @primaryStrong@; }
+QPushButton#editBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @primaryGlow@, stop:1 @primary@);
+}
 QPushButton#editBtn:pressed { background: @primaryStrong@; }
 
-/* ── Secondary/ghost buttons (Open, Theme) — 29px tall, surface bg, border ── */
+/* ── Secondary/ghost buttons (Open, Theme) — surface bg, refined hover ── */
 QPushButton#openLocationBtn, QPushButton#themeToggleBtn {
-    background: @surface@; color: @text@; border: 1px solid @border@;
-    border-radius: 8px; padding: 0 11px; font-size: 12px; font-weight: 800;
+    background: @surface@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 8px; padding: 0 12px;
+    font-size: 12px; font-weight: 700;
 }
 QPushButton#openLocationBtn:hover, QPushButton#themeToggleBtn:hover {
-    background: @hover@; border-color: @primaryBorder@; color: @primaryStrong@;
+    background: @hoverSoft@;
+    border-color: @primaryBorder@;
+    color: @primaryStrong@;
 }
 QPushButton#openLocationBtn:disabled, QPushButton#themeToggleBtn:disabled {
     color: @muted@; background: @surface@;
@@ -986,68 +1097,175 @@ QPushButton#openLocationBtn:disabled, QPushButton#themeToggleBtn:disabled {
 
 /* ── AI control widget (slider pill, label, state text) ── */
 QWidget#aiControl { background: transparent; border: none; }
-QLabel#aiLabel { color: #e85d97; font-weight: 800; font-size: 12px; background: transparent; }
+QLabel#aiLabel { color: @pink@; font-weight: 800; font-size: 12px; background: transparent; }
 QLabel#aiState { color: @muted@; font-weight: 800; font-size: 11px; min-width: 24px; background: transparent; }
 
-/* ── Results list ── */
-QWidget#resultsPanel { background: @surface@; }
-QListWidget#resultsList { background: @surface@; border: none; outline: 0; padding: 6px; }
-QListWidget#resultsList::item { padding: 8px; border-bottom: 1px solid @hover@; }
-QListWidget#resultsList::item:selected { background: @primarySoft@; border-left: 4px solid @primary@; color: @primaryStrong@; }
-QListWidget#resultsList::item:hover { background: @hover@; color: @text@; }
+/* ── Results list — card-style with hover lift ── */
+QWidget#resultsPanel { background: @bg@; }
+QListWidget#resultsList {
+    background: transparent;
+    border: none;
+    outline: 0;
+    padding: 4px 8px;
+}
+QListWidget#resultsList::item {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 3px 0;
+}
+QListWidget#resultsList::item:hover {
+    background: @elevation1@;
+    border-color: @primaryBorder@;
+}
+QListWidget#resultsList::item:selected {
+    background: @primarySoft@;
+    border: 1px solid @primaryBorder@;
+    border-left: 4px solid @primary@;
+    color: @primaryStrong@;
+}
 
-/* ── Top menu (pills) ── no persistent highlight after click.
-   The :selected state is reset to look identical to the unselected state so
-   clicking a nav pill navigates without leaving a stuck highlight. ── */
+/* ── Top menu (pills) ── subtle hover, no stuck highlight ── */
 QListWidget#topMenuList { background: transparent; border: none; outline: none; }
-QListWidget#topMenuList::item { padding: 6px 15px; border-radius: 999px; margin: 2px;
-                                 font-size: 12px; font-weight: 800; color: @muted@; }
+QListWidget#topMenuList::item {
+    padding: 6px 15px; border-radius: 999px; margin: 2px;
+    font-size: 12px; font-weight: 700; color: @muted@;
+}
 QListWidget#topMenuList::item:selected { background: transparent; color: @muted@; }
 QListWidget#topMenuList::item:hover { background: @hover@; color: @text@; }
 QListWidget#topMenuList::item:selected:hover { background: @hover@; color: @text@; }
 
-/* ── Tabs ── */
-QTabWidget::pane { border: 1px solid @border@; border-radius: 12px; background: @surface@; }
-QTabBar::tab { background: @surface2@; padding: 8px 14px; border: 1px solid @border@;
-               border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px;
-               color: @muted@; font-weight: 800; }
-QTabBar::tab:selected { background: @surface@; color: @primary@; }
+/* ── Tabs — refined active/inactive contrast ── */
+QTabWidget::pane {
+    border: 1px solid @border@;
+    border-radius: 12px;
+    background: @surface@;
+}
+QTabBar::tab {
+    background: @surface2@;
+    padding: 8px 16px;
+    border: 1px solid @border@;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    color: @muted@;
+    font-weight: 700;
+}
+QTabBar::tab:hover { background: @hover@; color: @text@; }
+QTabBar::tab:selected { background: @surface@; color: @primaryStrong@; font-weight: 800; }
 
-/* ── Text areas ── */
-QTextEdit, QPlainTextEdit, QTextBrowser { background: @surface@; color: @text@;
-    border: 1px solid @border@; border-radius: 12px; padding: 8px; font-size: 13px;
-    selection-background-color: @primary@; }
+/* ── Text areas — softer borders, refined focus ── */
+QTextEdit, QPlainTextEdit, QTextBrowser {
+    background: @surface@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 12px;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    selection-background-color: @primary@;
+    selection-color: #ffffff;
+}
+QTextEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus {
+    border: 1px solid @primaryBorder@;
+}
 
-/* ── Group boxes ── */
-QGroupBox { border: 1px solid @border@; border-radius: 14px; margin-top: 12px;
-            padding: 10px; padding-top: 20px; font-weight: 800; color: @primary@; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
+/* ── Group boxes — accent header strip ── */
+QGroupBox {
+    border: 1px solid @border@;
+    border-radius: 14px;
+    margin-top: 12px;
+    padding: 12px;
+    padding-top: 22px;
+    background: @surface@;
+    font-weight: 700;
+    color: @primaryStrong@;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+    background: @surface@;
+    color: @primaryStrong@;
+}
 
-/* ── Progress bars ── */
-QProgressBar { border: none; border-radius: 4px; background: @hover@; }
-QProgressBar::chunk { background: @primary@; border-radius: 4px; }
+/* ── Progress bar — gradient chunk with rounded ends ── */
+QProgressBar {
+    border: none;
+    border-radius: 4px;
+    background: @hover@;
+    text-align: center;
+    color: transparent;
+    min-height: 6px;
+    max-height: 6px;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 @primary@, stop:1 @primaryGlow@);
+    border-radius: 4px;
+    margin: 0;
+}
 
-/* ── Scrollbars ── */
-QScrollBar:vertical { background: transparent; width: 10px; }
-QScrollBar::handle:vertical { background: @border@; border-radius: 5px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: @muted@; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
-QScrollBar:horizontal { background: transparent; height: 10px; }
-QScrollBar::handle:horizontal { background: @border@; border-radius: 5px; min-width: 30px; }
+/* ── Scrollbars — thinner, semi-transparent, hover-reveal ── */
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 4px 2px 4px 0;
+}
+QScrollBar::handle:vertical {
+    background: @border2@;
+    border-radius: 4px;
+    min-height: 32px;
+}
+QScrollBar::handle:vertical:hover {
+    background: @muted@;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:pressed {
+    background: @primary@;
+}
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0 2px 4px 0;
+}
+QScrollBar::handle:horizontal {
+    background: @border2@;
+    border-radius: 4px;
+    min-width: 32px;
+}
+QScrollBar::handle:horizontal:hover { background: @muted@; }
+QScrollBar::handle:horizontal:pressed { background: @primary@; }
 
-/* ── Inputs ── */
-QSpinBox, QDoubleSpinBox, QComboBox { background: @field@; color: @text@;
-    border: 1px solid @border@; border-radius: 8px; padding: 6px 10px; font-weight: 800; }
+/* ── Inputs — refined focus ring ── */
+QSpinBox, QDoubleSpinBox, QComboBox {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
+    border-color: @primaryBorder@;
+}
+QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid @primary@;
+    background: @surface@;
+}
 QComboBox { padding-right: 28px; }
-QComboBox:hover { border-color: @primary@; }
-QComboBox::drop-down { border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right; }
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
 QComboBox::down-arrow { image: url(:/icons/chevron-down.png); width: 12px; height: 12px; }
 QComboBox::down-arrow:hover { image: url(:/icons/chevron-down-strong.png); }
 QComboBox::down-arrow:disabled { image: url(:/icons/chevron-down.png); }
 
-/* ── Combobox popup (modern flat menu) ──
-   No border-radius (Qt doesn't apply it to QAbstractItemView windows).
-   Generous item padding, pill-style hover/selected backgrounds. ── */
+/* ── Combobox popup — pill-style hover, refined elevation ── */
 QComboBox QAbstractItemView {
     background: @surface@;
     color: @text@;
@@ -1056,12 +1274,11 @@ QComboBox QAbstractItemView {
     padding: 6px;
     selection-background-color: @primarySoft@;
     selection-color: @primaryStrong@;
-    /* Force Qt to honor the QSS selection colors over QPalette::Highlight. */
     background-color: @surface@;
 }
 QComboBox QAbstractItemView::item {
     padding: 8px 14px;
-    min-height: 22px;
+    min-height: 24px;
     border-radius: 6px;
     background: transparent;
     color: @text@;
@@ -1075,71 +1292,239 @@ QComboBox QAbstractItemView::item:selected {
     color: @primaryStrong@;
 }
 
-/* Generic QListView fallback so other list views don't fall back to
-   the ugly default Qt style. */
+/* Generic QListView fallback — refined card style */
 QListView {
     background: @surface@;
     color: @text@;
     border: 1px solid @border@;
-    border-radius: 8px;
+    border-radius: 10px;
     outline: 0;
     padding: 4px;
 }
-QListView::item { padding: 6px 10px; border-radius: 4px; }
+QListView::item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-weight: 500;
+}
 QListView::item:hover { background: @hover@; }
-QListView::item:selected { background: @primarySoft@; color: @primaryStrong@; }
+QListView::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+    font-weight: 600;
+}
 
-QCheckBox { color: @text@; spacing: 6px; }
-QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
-    border: 1px solid @border@; background: @field@; }
-QCheckBox::indicator:checked { background: @primary@; border-color: @primary@; }
+/* ── Checkboxes / radios — accent fill, refined border ── */
+QCheckBox, QRadioButton { color: @text@; spacing: 8px; font-weight: 500; }
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid @border2@;
+    background: @field@;
+}
+QRadioButton::indicator { border-radius: 8px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {
+    border-color: @primaryBorder@;
+}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background: @primary@;
+    border-color: @primary@;
+}
 
-/* ── Metadata panel & rows (bottom border per row, matches design .meta-row) ──
-   Uses @border@ (more visible than @hover@) so the row dividers are clearly
-   visible across the full width of the column. */
-QWidget#metadataPanel { background: @surface@; border-left: 1px solid @border@; }
-QWidget#metadataSection { background: transparent; border-bottom: 1px solid @border@; }
+/* ── Metadata panel — elevated card with subtle dividers ── */
+QWidget#metadataPanel {
+    background: @surface@;
+    border-left: 1px solid @border@;
+}
+QWidget#metadataSection {
+    background: transparent;
+    border-bottom: 1px solid @hover@;
+    padding: 4px 0;
+}
 QWidget#metadataSection:last-child { border-bottom: none; }
-QLabel#metadataTitle { color: @text@; font-weight: 800; font-size: 13px; background: transparent; }
-QLabel#metaLabel { color: @muted@; font-size: 12px; font-weight: 700; background: transparent; min-width: 92px; }
-QLabel#metaValue { color: @text@; font-size: 12px; font-weight: 700; background: transparent; }
+QLabel#metadataTitle {
+    color: @text@;
+    font-weight: 800;
+    font-size: 13px;
+    background: transparent;
+}
+QLabel#metaLabel {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    min-width: 92px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+QLabel#metaValue {
+    color: @text@;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
 
-/* ── Sliders ── */
-QSlider::groove:horizontal { background: @border@; height: 4px; border-radius: 2px; }
-QSlider::handle:horizontal { background: @primary@; width: 16px; height: 16px;
-    margin: -6px 0; border-radius: 8px; }
-QSlider::sub-page:horizontal { background: @primary@; border-radius: 2px; }
+/* ── Sliders — gradient sub-page for progress feel ── */
+QSlider::groove:horizontal {
+    background: @border@;
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: @surface@;
+    border: 2px solid @primary@;
+    width: 14px; height: 14px;
+    margin: -6px 0;
+    border-radius: 8px;
+}
+QSlider::handle:horizontal:hover {
+    background: @primary@;
+    border-color: @primaryStrong@;
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 @primary@, stop:1 @primaryGlow@);
+    border-radius: 2px;
+}
 
-/* ── Menus ── */
-QMenu { background: @surface@; color: @text@; border: 1px solid @border@; border-radius: 10px; padding: 6px; }
-QMenu::item { padding: 6px 20px; border-radius: 6px; font-weight: 700; }
-QMenu::item:selected { background: @hover@; }
-QMenu::separator { height: 1px; background: @border@; margin: 4px 8px; }
+/* ── Menus — refined elevation, pill hover ── */
+QMenu {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 8px 22px 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+QMenu::item:hover { background: @hover@; }
+QMenu::item:disabled { color: @muted@; }
+QMenu::separator {
+    height: 1px;
+    background: @border@;
+    margin: 4px 8px;
+}
 
-/* ── Tooltips ── */
-QToolTip { background: @text@; color: #ffffff; border: none; border-radius: 8px; padding: 6px 10px; }
+/* ── Tooltips — elevated with subtle border ── */
+QToolTip {
+    background: @tooltipBg@;
+    color: @tooltipText@;
+    border: 1px solid @border2@;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
 
-/* ── Splitters ── */
+/* ── Splitters — transparent, just a hair-thin divider on hover ── */
 QSplitter::handle { background: transparent; }
 QSplitter::handle:horizontal { width: 1px; }
 QSplitter::handle:vertical { height: 1px; }
+QSplitter::handle:hover { background: @primarySoft@; }
 
-/* ── Labels ── */
-QLabel#indexedInfo { color: @primaryStrong@; font-size: 11px; font-weight: 800;
-    background: @primarySoft@; border: 1px solid @primaryBorder@; border-radius: 999px; padding: 2px 10px; }
-QLabel#statusReady { color: @primary@; font-weight: 800; }
-QLabel#statusInfo { color: @muted@; font-size: 11px; }
-QLabel#ocrStatus { color: @warn; font-weight: 800; font-size: 11px; }
-QLabel#titleBarText { color: @text@; font-weight: 800; font-size: 15px; }
+/* ── Labels — refined hierarchy ── */
+QLabel#indexedInfo {
+    color: @primaryStrong@;
+    font-size: 11px;
+    font-weight: 700;
+    background: @primarySoft@;
+    border: 1px solid @primaryBorder@;
+    border-radius: 999px;
+    padding: 3px 12px;
+}
+QLabel#statusReady {
+    color: @primary@;
+    font-weight: 700;
+}
+QLabel#statusInfo {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 500;
+}
+QLabel#ocrStatus {
+    color: @warn@;
+    font-weight: 700;
+    font-size: 11px;
+}
+QLabel#titleBarText {
+    color: @text@;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.2px;
+}
+
+/* ── OCR status indicator pill ──
+   The status dot + label use dynamic `status` property (ready/setup).
+   A soft pill background + colored dot gives a modern look. */
+QWidget#ocrStatusWidget {
+    background: @hoverSoft@;
+    border: 1px solid @border@;
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+QLabel#ocrDot[status="ready"] {
+    background: @success@;
+    border-radius: 4px;
+    min-width: 8px; min-height: 8px;
+    max-width: 8px; max-height: 8px;
+}
+QLabel#ocrDot[status="setup"] {
+    background: @warn@;
+    border-radius: 4px;
+    min-width: 8px; min-height: 8px;
+    max-width: 8px; max-height: 8px;
+}
+QLabel#ocrStatus[status="ready"] { color: @success@; }
+QLabel#ocrStatus[status="setup"] { color: @warn@; }
+
+/* ── Sidebar — subtle elevated card background ── */
+QWidget#sidebar {
+    background: @surface2@;
+    border-right: 1px solid @border@;
+}
+QListWidget#sidebar {
+    background: transparent;
+    border: none;
+    outline: 0;
+    padding: 8px 6px;
+}
+QListWidget#sidebar::item {
+    padding: 9px 14px;
+    border: none;
+    border-radius: 8px;
+    margin: 1px 0;
+    color: @muted@;
+    font-weight: 600;
+    font-size: 13px;
+}
+QListWidget#sidebar::item:hover {
+    background: @hover@;
+    color: @text@;
+}
+QListWidget#sidebar::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+    font-weight: 700;
+    border-left: 3px solid @primary@;
+}
 )");
 
     // Token substitution
     struct P { const char* k; const QString& v; };
     const P map[] = {
-        {"@bg@",bg},{"@surface@",surface},{"@surface2@",surface2},{"@field@",field},
-        {"@border@",border},{"@hover@",hover},{"@text@",text},{"@muted@",muted},
-        {"@primary@",primary},{"@primaryStrong@",primaryStrong},{"@primarySoft@",primarySoft},
-        {"@primaryBorder@",primaryBorder},
+        {"@bg@",bg},{"@surface@",surface},{"@surface2@",surface2},{"@surface3@",surface3},
+        {"@field@",field},{"@border@",border},{"@border2@",border2},
+        {"@hover@",hover},{"@hoverSoft@",hoverSoft},
+        {"@text@",text},{"@muted@",muted},
+        {"@primary@",primary},{"@primaryStrong@",primaryStrong},
+        {"@primarySoft@",primarySoft},{"@primaryBorder@",primaryBorder},
+        {"@primaryGlow@",primaryGlow},
+        {"@tooltipBg@",tooltipBg},{"@tooltipText@",tooltipText},
+        {"@success@",success},{"@warn@",warn},{"@pink@",pink},
+        {"@orange@",orange},{"@sky@",sky},{"@violet@",violet},
+        {"@elevation1@",elevation1},{"@elevation2@",elevation2},
     };
     for (const auto& p : map) s.replace(QLatin1String(p.k), p.v);
 
@@ -2124,8 +2509,8 @@ void MainWindow::updateOcrStatusIndicator() {
     if (!ocrDotLbl_ || !ocrStatusLbl_) return;
 
     // Use dynamic properties + QSS selectors instead of inline setStyleSheet.
-    auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
-    if (oneocr.isOneocrAvailable()) {
+    auto& ocr = DocuSearch::WindowsOcrEngine::instance();
+    if (ocr.isAvailable()) {
         ocrDotLbl_->setProperty("status", "ready");
         ocrStatusLbl_->setProperty("status", "ready");
         ocrStatusLbl_->setText("OCR: Ready");
@@ -2133,7 +2518,7 @@ void MainWindow::updateOcrStatusIndicator() {
         ocrDotLbl_->setProperty("status", "setup");
         ocrStatusLbl_->setProperty("status", "setup");
         // "Click to setup" is softer than "Required" — and accurate,
-        // since clicking the chip surfaces the install instructions.
+        // since clicking the chip surfaces the language-pack instructions.
         ocrStatusLbl_->setText("OCR: Click to setup");
     }
     // Force QSS re-evaluation.
@@ -2146,22 +2531,24 @@ void MainWindow::updateOcrStatusIndicator() {
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
-        auto& oneocr = DocuSearch::WindowsOcrEngine::instance();
+        auto& ocr = DocuSearch::WindowsOcrEngine::instance();
 
         QString msg;
-        if (oneocr.isOneocrAvailable()) {
-            msg = "OCR engine: oneocr.dll (local)\n\n"
+        if (ocr.isAvailable()) {
+            msg = "OCR engine: Windows.Media.Ocr (built into Windows 10/11)\n\n"
                   "• Runs entirely on your machine — no internet needed.\n"
-                  "• Supports: English, Chinese (Simplified & Traditional),\n"
-                  "  Korean, Japanese.\n\n"
+                  "• Auto-detects document language from your Windows profile.\n"
+                  "• Supports every OCR language pack you have installed.\n\n"
                   "Click an image or scanned PDF's OCR button to extract text.";
         } else {
             msg = "OCR is not set up.\n\n"
-                  "To install oneocr.dll:\n"
-                  "  Run scripts\\get_oneocr.ps1\n\n"
-                  "This copies the oneocr files from your locally-installed\n"
-                  "Windows 11 Snipping Tool into the DocuSearch folder.\n\n"
-                  "See ONEOCR_SETUP.md for details.";
+                  "DocuSearch uses Windows.Media.Ocr, which is built into\n"
+                  "Windows 10/11. To enable OCR, install at least one OCR\n"
+                  "language pack:\n\n"
+                  "  Settings > Time & Language > Language >\n"
+                  "    Add a language > Optical character recognition\n\n"
+                  "Then restart DocuSearch. No DLLs to download, no scripts\n"
+                  "to run — Windows itself provides the OCR engine.";
         }
         QMessageBox::information(this, "OCR Status", msg);
         return true;
@@ -2778,7 +3165,7 @@ void MainWindow::onOcrThisFile(const QString& path) {
     statusBar()->showMessage("Running OCR...", 0);
     QApplication::processEvents();
 
-    // Use the singleton — this way the oneocrAvailable_ flag persists
+    // Use the singleton — this way the available_ flag persists
     // across calls (the status bar indicator and the OCR button share
     // the same engine state).
     WindowsOcrEngine& ocrEngine = WindowsOcrEngine::instance();
@@ -2789,9 +3176,10 @@ void MainWindow::onOcrThisFile(const QString& path) {
             "Make sure it's in the same folder as DocuSearch.exe.");
         return;
     }
-    // Don't check isOneocrAvailable() — the C++ path check is unreliable.
-    // The helper exe searches paths we don't check here. Just try OCR
-    // silently. If it fails, empty text will be shown as the result.
+    // Don't check isAvailable() — the cached flag may be stale.
+    // Just try OCR silently. If it fails, empty text will be shown as
+    // the result, and the helper's stderr will update the flag for
+    // the next status-bar refresh.
 
     QString ocrText;
 
@@ -2941,10 +3329,10 @@ void MainWindow::onOcrThisFile(const QString& path) {
     statusBar()->showMessage(
         QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
 
-    // Refresh the OCR status indicator — if OCR just succeeded, oneocr
-    // is definitely installed. This fixes the case where the indicator
-    // showed "Setup Required" because the user installed files after
-    // DocuSearch launched (and our startup detection missed them).
+    // Refresh the OCR status indicator — if OCR just succeeded, the
+    // Windows.Media.Ocr language packs are definitely installed. This
+    // fixes the case where the indicator showed "Setup Required" because
+    // the user installed language packs after launching DocuSearch.
     updateOcrStatusIndicator();
 }
 
@@ -3085,9 +3473,11 @@ void MainWindow::onOpenSettings() {
 
 void MainWindow::onToggleTheme() {
     try {
-        // Cycle: Lavender (0) → Mint (1) → Peach (2) → Lavender (0)
-        pastelTheme_ = (pastelTheme_ + 1) % 3;
-        QString names[] = {"Lavender", "Mint", "Peach"};
+        // Cycle: Lavender (0) → Mint (1) → Peach (2) → Midnight (3) → Lavender (0)
+        // Midnight is the dark mode palette — gives users a real dark
+        // option without needing a separate UI toggle.
+        pastelTheme_ = (pastelTheme_ + 1) % 4;
+        QString names[] = {"Lavender", "Mint", "Peach", "Midnight"};
         saveSettings();
         applyTheme();
         statusBar()->showMessage(QString("Theme: %1").arg(names[pastelTheme_]), 2000);

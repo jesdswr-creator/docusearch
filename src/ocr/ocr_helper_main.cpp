@@ -1,103 +1,73 @@
 // ============================================================
-// ocr_helper_main.cpp - oneocr.dll-based OCR helper (crash-proof)
+// ocr_helper_main.cpp - Windows.Media.Ocr (WinRT) OCR helper
 // ============================================================
 //
-// REPLACES the previous WinRT/Windows.Media.Ocr implementation that
-// was crashing the app on low-RAM Windows systems.
+// Uses the official Windows.Media.Ocr WinRT API — the same OCR
+// engine that powers Windows Search, Snipping Tool, and the Photos
+// app. This is the officially-supported, royalty-free OCR API for
+// any Windows app (including commercial ones — see docs/OCR_LICENSING.md).
 //
-// This version uses oneocr.dll — the native OCR engine shipped with
-// the Windows 11 Snipping Tool (Microsoft.ScreenSketch). It is a
-// plain C-ABI DLL (no WinRT, no apartment threading, no async IAsyncOperation),
-// so it cannot trigger the WinRT init/recognize crashes we were seeing.
+// Architecture
+//   • This is a SEPARATE console exe (docusearch_ocr_helper.exe).
+//   • The main Qt app spawns it as a child process via QProcess.
+//   • WinRT calls live here — NOT in the main Qt app — because
+//     linking runtimeobject.lib pulls in /INCLUDE:WINRT_CRT_MAIN
+//     which conflicts with Qt's WIN32 entry point. The helper is
+//     a plain console app, so there is no conflict here.
 //
-// The DLL + model files are NOT redistributed. The user obtains them
-// from their locally-installed Snipping Tool via scripts/get_oneocr.ps1
-// and they are placed next to docusearch.exe.
-//
-// Crash-safety design:
-//   • Runs as a SEPARATE process (killed by main app if it hangs).
-//   • Loads oneocr.dll via LoadLibraryW (no static linkage).
+// Crash-safety design
+//   • Runs as a SEPARATE process — a WinRT fault can't take down
+//     the main app.
 //   • SEH translator installed — access violations become catchable.
-//   • ImageStruct validated BEFORE being passed to oneocr.dll.
-//   • All Win32 errors are caught and reported as text — no exceptions escape.
-//   • Per-file try/catch keeps one bad image from aborting the batch.
-//   • 100 ms gap between files keeps memory pressure low on 4 GB systems.
+//   • Per-file try/catch — one bad image can't abort the whole batch.
+//   • 100 ms gap between files — keeps memory pressure low.
+//   • Cooperative cancellation via stdin EOF — main app kills the
+//     helper via QProcess::kill() if it hangs.
 //
-// Usage: docusearch_ocr_helper.exe <image_path_1> [image_path_2] ...
-// Output for each image:
-//   ===FILE===<path>
-//   <recognized text>
-//   ===END===
-// Exit codes: 0 = at least one image succeeded, 1 = all failed / setup error
+// Output protocol
+//   For each input image, prints:
+//     ===FILE===<path>
+//     <recognized text — may be empty>
+//     ===END===
+//   Exit codes: 0 = at least one image succeeded, 1 = setup error or all failed
+//
+// Usage
+//   docusearch_ocr_helper.exe <image_path_1> [image_path_2] ...
 // ============================================================
 
+// ── C++/WinRT (ships with Windows 10 SDK 17763+ — no cppwinrt.exe needed) ──
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Media.Ocr.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
+
 #include <windows.h>
-#include <wincodec.h>
-#include <objbase.h>
 #include <eh.h>
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstdint>
-#include <cstring>
 #include <sstream>
 #include <iomanip>
 
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "windowscodecs.lib")
+// Link the WinRT runtime + the unified delay-load stub. windowsapp.lib is
+// the modern, recommended way to consume WinRT APIs from native C++ —
+// it provides the runtime thunks that route WinRT calls to the OS.
+#pragma comment(lib, "windowsapp.lib")
+#pragma comment(lib, "runtimeobject.lib")
 
-// ── oneocr C ABI ────────────────────────────────────────────
-// Reverse-engineered from oneocr.py (https://github.com/AuroraWright/oneocr).
-// The DLL exports use the default x64 calling convention (= __cdecl on x64).
-//
-// ImageStruct must match the layout the DLL expects: 40 bytes on x64,
-// 8-byte aligned. We use #pragma pack(8) to be safe.
+using namespace winrt;
+using namespace Windows::Foundation;
+using namespace Windows::Foundation::Collections;
+using namespace Windows::Graphics::Imaging;
+using namespace Windows::Media::Ocr;
+using namespace Windows::Storage;
+using namespace Windows::Storage::Streams;
 
-#pragma pack(push, 8)
-struct ImageStruct {
-    int32_t  type;        // = 3 (BGRA image type)
-    int32_t  width;
-    int32_t  height;
-    int32_t  reserved;    // = 0
-    int64_t  step_size;   // bytes per row = width * 4
-    uint8_t* data_ptr;    // BGRA pixel buffer
-};
-#pragma pack(pop)
-
-// Model key (from oneocr.py — a hardcoded 26-char password baked into the DLL).
-static const char MODEL_KEY[] = "kj)TGtrK>f]b[Piow.gU+nC@s\"\"\"\"\"\"4";
-
-// Function pointer types for the DLL exports.
-typedef int64_t (*CreateOcrInitOptions_t)             (int64_t* out);
-typedef int64_t (*OcrInitOptionsSetUseModelDelayLoad_t)(int64_t opts, char flag);
-typedef int64_t (*CreateOcrPipeline_t)                (const char* model_path, const char* model_key, int64_t opts, int64_t* out);
-typedef int64_t (*CreateOcrProcessOptions_t)          (int64_t* out);
-typedef int64_t (*RunOcrPipeline_t)                   (int64_t pipeline, ImageStruct* img, int64_t proc_opts, int64_t* out_result);
-typedef int64_t (*GetOcrLineCount_t)                  (int64_t result, int64_t* out);
-typedef int64_t (*GetOcrLine_t)                       (int64_t result, int64_t idx, int64_t* out);
-typedef int64_t (*GetOcrLineContent_t)                (int64_t line, char** out);
-typedef void    (*ReleaseOcrResult_t)                 (int64_t);
-typedef void    (*ReleaseOcrInitOptions_t)            (int64_t);
-typedef void    (*ReleaseOcrPipeline_t)               (int64_t);
-typedef void    (*ReleaseOcrProcessOptions_t)         (int64_t);
-
-// ── Loaded function pointers ────────────────────────────────
-static HMODULE                            g_oneocrDll = nullptr;
-static CreateOcrInitOptions_t             pCreateOcrInitOptions = nullptr;
-static OcrInitOptionsSetUseModelDelayLoad_t pOcrInitOptionsSetUseModelDelayLoad = nullptr;
-static CreateOcrPipeline_t                pCreateOcrPipeline = nullptr;
-static CreateOcrProcessOptions_t          pCreateOcrProcessOptions = nullptr;
-static RunOcrPipeline_t                   pRunOcrPipeline = nullptr;
-static GetOcrLineCount_t                  pGetOcrLineCount = nullptr;
-static GetOcrLine_t                       pGetOcrLine = nullptr;
-static GetOcrLineContent_t                pGetOcrLineContent = nullptr;
-static ReleaseOcrResult_t                 pReleaseOcrResult = nullptr;
-static ReleaseOcrInitOptions_t            pReleaseOcrInitOptions = nullptr;
-static ReleaseOcrPipeline_t               pReleaseOcrPipeline = nullptr;
-static ReleaseOcrProcessOptions_t         pReleaseOcrProcessOptions = nullptr;
-
-// ── UTF-8 <-> wide string conversions ───────────────────────
+// ── UTF-8 ↔ wide string conversion (WinRT uses HSTRINGs / wstring_view) ──
 static std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return L"";
     int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
@@ -116,188 +86,9 @@ static std::string WideToUtf8(const std::wstring& w) {
     return s;
 }
 
-// ── Locate oneocr files ─────────────────────────────────────
-// Search order (first hit wins):
-//   1. <exeDir>/                                  (preferred — portable)
-//   2. <exeDir>/oneocr/
-//   3. <exeDir>/models/oneocr/
-//   4. %USERPROFILE%/.config/oneocr/              (oneocr.py default)
-static std::wstring FindOneocrDir() {
-    wchar_t exePath[MAX_PATH];
-    DWORD n = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return L"";
-    std::wstring exeDir(exePath, n);
-    size_t pos = exeDir.find_last_of(L"\\/");
-    if (pos != std::wstring::npos) exeDir = exeDir.substr(0, pos);
-
-    const std::wstring candidates[] = {
-        exeDir,
-        exeDir + L"\\oneocr",
-        exeDir + L"\\models\\oneocr",
-    };
-    for (const auto& dir : candidates) {
-        std::wstring dllPath = dir + L"\\oneocr.dll";
-        DWORD attr = GetFileAttributesW(dllPath.c_str());
-        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            return dir;
-        }
-    }
-
-    // Fallback to user-config dir (matches oneocr.py default).
-    wchar_t* userProfile = _wgetenv(L"USERPROFILE");
-    if (userProfile) {
-        std::wstring cfgDir = std::wstring(userProfile) + L"\\.config\\oneocr";
-        DWORD attr = GetFileAttributesW((cfgDir + L"\\oneocr.dll").c_str());
-        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            return cfgDir;
-        }
-    }
-
-    return L"";
-}
-
-// ── Load oneocr.dll and resolve exports ─────────────────────
-static bool LoadOneocr() {
-    std::wstring dir = FindOneocrDir();
-    if (dir.empty()) {
-        std::cerr << "[oneocr] ERROR: oneocr.dll not found." << std::endl;
-        std::cerr << "[oneocr] Run scripts/get_oneocr.ps1 to install OCR support," << std::endl;
-        std::cerr << "[oneocr] or copy oneocr.dll + oneocr.onemodel + onnxruntime.dll" << std::endl;
-        std::cerr << "[oneocr] from the Windows 11 Snipping Tool into the app folder." << std::endl;
-        return false;
-    }
-
-    // Make sure oneocr.dll can locate onnxruntime.dll in the same folder.
-    // SetDllDirectoryW adds dir to the DLL search path for dependent DLLs.
-    SetDllDirectoryW(dir.c_str());
-
-    // SECURITY: Use LoadLibraryExW with LOAD_WITH_ALTERED_SEARCH_PATH and
-    // the FULL ABSOLUTE PATH to oneocr.dll. This prevents DLL hijacking
-    // where a malicious oneocr.dll placed in the current working directory
-    // (or another search-path location) would be loaded instead of the
-    // legitimate one. LOAD_WITH_ALTERED_SEARCH_PATH makes the DLL's own
-    // directory the primary search location for its dependencies (like
-    // onnxruntime.dll). See MISSED-3 in the review report.
-    std::wstring dllPath = dir + L"\\oneocr.dll";
-    g_oneocrDll = LoadLibraryExW(
-        dllPath.c_str(),
-        nullptr,
-        LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!g_oneocrDll) {
-        DWORD err = GetLastError();
-        std::cerr << "[oneocr] LoadLibraryExW failed for oneocr.dll (error " << err << ")." << std::endl;
-        if (err == 126 /* ERROR_MOD_NOT_FOUND */) {
-            std::cerr << "[oneocr] onnxruntime.dll is probably missing from the same folder." << std::endl;
-        }
-        SetDllDirectoryW(nullptr);
-        return false;
-    }
-
-    pCreateOcrInitOptions              = (CreateOcrInitOptions_t)             GetProcAddress(g_oneocrDll, "CreateOcrInitOptions");
-    pOcrInitOptionsSetUseModelDelayLoad= (OcrInitOptionsSetUseModelDelayLoad_t)GetProcAddress(g_oneocrDll, "OcrInitOptionsSetUseModelDelayLoad");
-    pCreateOcrPipeline                 = (CreateOcrPipeline_t)                GetProcAddress(g_oneocrDll, "CreateOcrPipeline");
-    pCreateOcrProcessOptions           = (CreateOcrProcessOptions_t)          GetProcAddress(g_oneocrDll, "CreateOcrProcessOptions");
-    pRunOcrPipeline                    = (RunOcrPipeline_t)                   GetProcAddress(g_oneocrDll, "RunOcrPipeline");
-    pGetOcrLineCount                   = (GetOcrLineCount_t)                  GetProcAddress(g_oneocrDll, "GetOcrLineCount");
-    pGetOcrLine                        = (GetOcrLine_t)                       GetProcAddress(g_oneocrDll, "GetOcrLine");
-    pGetOcrLineContent                 = (GetOcrLineContent_t)                GetProcAddress(g_oneocrDll, "GetOcrLineContent");
-    pReleaseOcrResult                  = (ReleaseOcrResult_t)                 GetProcAddress(g_oneocrDll, "ReleaseOcrResult");
-    pReleaseOcrInitOptions             = (ReleaseOcrInitOptions_t)            GetProcAddress(g_oneocrDll, "ReleaseOcrInitOptions");
-    pReleaseOcrPipeline                = (ReleaseOcrPipeline_t)               GetProcAddress(g_oneocrDll, "ReleaseOcrPipeline");
-    pReleaseOcrProcessOptions          = (ReleaseOcrProcessOptions_t)         GetProcAddress(g_oneocrDll, "ReleaseOcrProcessOptions");
-
-    if (!pCreateOcrInitOptions || !pCreateOcrPipeline || !pRunOcrPipeline ||
-        !pGetOcrLineCount || !pGetOcrLine || !pGetOcrLineContent ||
-        !pReleaseOcrResult || !pReleaseOcrPipeline || !pReleaseOcrInitOptions) {
-        std::cerr << "[oneocr] oneocr.dll is missing required exports (incompatible version?)." << std::endl;
-        FreeLibrary(g_oneocrDll);
-        g_oneocrDll = nullptr;
-        SetDllDirectoryW(nullptr);
-        return false;
-    }
-
-    return true;
-}
-
-// ── Load image as BGRA via WIC ──────────────────────────────
-struct BgraImage {
-    int32_t width = 0;
-    int32_t height = 0;
-    std::vector<uint8_t> data;  // BGRA, stride = width*4
-};
-
-static bool LoadImageBgra(const std::wstring& path, BgraImage& out) {
-    IWICImagingFactory* factory = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-    if (FAILED(hr) || !factory) return false;
-
-    IWICBitmapDecoder* decoder = nullptr;
-    hr = factory->CreateDecoderFromFilename(path.c_str(), nullptr,
-        GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
-    if (FAILED(hr) || !decoder) { factory->Release(); return false; }
-
-    IWICBitmapFrameDecode* frame = nullptr;
-    hr = decoder->GetFrame(0, &frame);
-    decoder->Release();
-    if (FAILED(hr) || !frame) { factory->Release(); return false; }
-
-    UINT w = 0, h = 0;
-    frame->GetSize(&w, &h);
-    if (w == 0 || h == 0) { frame->Release(); factory->Release(); return false; }
-
-    // Enforce the same limits as oneocr.py: 50..10000 px per side.
-    if (w > 10000 || h > 10000) { frame->Release(); factory->Release(); return false; }
-    if (w < 50   || h < 50)     { frame->Release(); factory->Release(); return false; }
-
-    IWICFormatConverter* converter = nullptr;
-    hr = factory->CreateFormatConverter(&converter);
-    if (FAILED(hr) || !converter) { frame->Release(); factory->Release(); return false; }
-
-    // GUID_WICPixelFormat32bppPBGRA = premultiplied BGRA — exactly what oneocr expects.
-    hr = converter->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    frame->Release();
-    if (FAILED(hr)) { converter->Release(); factory->Release(); return false; }
-
-    const size_t stride = (size_t)w * 4;
-    out.width  = (int32_t)w;
-    out.height = (int32_t)h;
-    out.data.assign(stride * h, 0);
-
-    hr = converter->CopyPixels(nullptr, (UINT)stride, (UINT)out.data.size(), out.data.data());
-    converter->Release();
-    factory->Release();
-
-    if (FAILED(hr)) { out.data.clear(); return false; }
-    return true;
-}
-
-// ── Run OCR on a single file ────────────────────────────────
-// ── Validate ImageStruct BEFORE calling oneocr.dll ──────────
-// Returns true if the struct is safe to pass to oneocr.dll.
-// Catches the "I forgot to set type=3" / "step_size wrong" / "null
-// data_ptr" mistakes that would otherwise cause an access violation
-// inside the DLL.
-static bool ValidateImageStruct(const ImageStruct* img) {
-    if (!img)                                   { std::cerr << "[oneocr] Validate: null ptr\n";          return false; }
-    if (img->type != 3)                         { std::cerr << "[oneocr] Validate: type != 3 (got " << img->type << ")\n"; return false; }
-    if (img->width  < 50 || img->width  > 10000){ std::cerr << "[oneocr] Validate: width out of range\n"; return false; }
-    if (img->height < 50 || img->height > 10000){ std::cerr << "[oneocr] Validate: height out of range\n";return false; }
-    if (img->reserved != 0)                     { std::cerr << "[oneocr] Validate: reserved != 0\n";     return false; }
-    if (img->step_size <= 0 ||
-        img->step_size < (int64_t)img->width * 3 ||
-        img->step_size > (int64_t)img->width * 8) {
-        std::cerr << "[oneocr] Validate: step_size " << img->step_size
-                  << " out of range for width " << img->width << "\n";
-        return false;
-    }
-    if (!img->data_ptr)                         { std::cerr << "[oneocr] Validate: data_ptr null\n";     return false; }
-    return true;
-}
-
-// ── SEH translator: convert Win32 SEH → C++ exception ───────
-// Lets our try/catch blocks catch access violations and similar.
+// ── SEH translator: convert Win32 SEH → C++ exception ──────
+// Lets our try/catch blocks catch access violations and similar that
+// can be raised by lower-level image decoding paths.
 static void OcrSehTranslator(unsigned int code, EXCEPTION_POINTERS* ep) {
     void* addr = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionAddress : nullptr;
     std::ostringstream oss;
@@ -306,26 +97,41 @@ static void OcrSehTranslator(unsigned int code, EXCEPTION_POINTERS* ep) {
     throw std::runtime_error(oss.str());
 }
 
-// ── SEH-isolated oneocr.dll call ────────────────────────────
-// MSVC cannot mix __try/__except with C++ object destructors in
-// the same function, so the actual oneocr call lives here in a
-// helper that has no C++ objects with destructors.
-// Returns 0 on success, non-zero on SEH exception.
-static int RunOcrPipelineSeh(int64_t pipeline, ImageStruct* is,
-                             int64_t procOpts, int64_t* result) {
-    __try {
-        int64_t status = pRunOcrPipeline(pipeline, is, procOpts, result);
-        return (int)status;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -0x10000;  // sentinel: SEH exception
-    }
+// ── Best-effort logging only — the OS still terminates the process ──
+static LONG NTAPI VectoredHandler(EXCEPTION_POINTERS* ep) {
+    (void)ep;
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
-// Returns recognized text. Errors are returned as "[ERROR: ...]" strings
-// (the main app treats any line starting with '[' as a failure marker).
-static std::string OcrFile(int64_t pipeline, int64_t procOpts, const std::string& path) {
-    // Skip files > 20 MB (low-RAM protection — same as the previous helper).
+// ── Resolve the OCR engine to use ───────────────────────────
+//   1. Try the user's profile OCR languages (Settings → Time &
+//      Language → Language → Optical character recognition).
+//   2. If none installed, fall back to the first available
+//      recognizer language.
+//   3. If no OCR language packs are installed at all, return empty
+//      and the caller will surface a clear setup message.
+static OcrEngine CreateEngine() {
+    // Try the user's profile (multi-language, auto-detect script).
+    OcrEngine engine = OcrEngine::TryCreateFromUserProfileLanguages();
+    if (engine) return engine;
+
+    // Fall back to the first available recognizer language.
+    auto langs = OcrEngine::AvailableRecognizerLanguages();
+    for (uint32_t i = 0; i < langs.Size(); ++i) {
+        engine = OcrEngine::TryCreateFromLanguage(langs.GetAt(i));
+        if (engine) return engine;
+    }
+    return nullptr;
+}
+
+// ── Run OCR on a single file ────────────────────────────────
+// Returns the recognized text. On failure, returns a string starting
+// with "[" — the main app treats any line starting with '[' as a
+// failure marker.
+static std::string OcrFile(const OcrEngine& engine, const std::string& path) {
     std::wstring wpath = Utf8ToWide(path);
+
+    // Skip files > 20 MB — low-RAM protection.
     WIN32_FILE_ATTRIBUTE_DATA fad;
     if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
         ULARGE_INTEGER size;
@@ -334,149 +140,114 @@ static std::string OcrFile(int64_t pipeline, int64_t procOpts, const std::string
         if (size.QuadPart > 20LL * 1024 * 1024) {
             return "[SKIPPED: file too large (>20MB)]";
         }
+    } else {
+        return "[ERROR: file not found or inaccessible]";
     }
 
-    BgraImage img;
-    if (!LoadImageBgra(wpath, img)) {
-        return "[ERROR: failed to load image]";
-    }
+    try {
+        // Open the file via StorageFile::GetFileFromPathAsync — the official
+        // WinRT way to reference a file by absolute path.
+        StorageFile file = StorageFile::GetFileFromPathAsync(wpath).get();
 
-    ImageStruct is{};
-    is.type      = 3;
-    is.width     = img.width;
-    is.height    = img.height;
-    is.reserved  = 0;
-    is.step_size = (int64_t)img.width * 4;
-    is.data_ptr  = img.data.data();
+        // Decode into a SoftwareBitmap in BGRA8 premultiplied format.
+        // BitmapDecoder handles PNG / JPEG / TIFF / BMP / GIF / WebP / HEIF.
+        BitmapDecoder decoder = BitmapDecoder::CreateAsync(file).get();
+        SoftwareBitmap bitmap = decoder.GetSoftwareBitmapAsync(
+            BitmapPixelFormat::Bgra8,
+            BitmapAlphaMode::Premultiplied).get();
 
-    // Validate BEFORE calling oneocr.dll — catches pointer/size bugs
-    // that would otherwise cause an access violation inside the DLL.
-    if (!ValidateImageStruct(&is)) {
-        return "[ERROR: ImageStruct validation failed]";
-    }
-
-    int64_t result = 0;
-    // SEH-isolated call: a crash inside oneocr.dll is reported as
-    // status = -0x10000 instead of killing the helper process.
-    int64_t status = RunOcrPipelineSeh(pipeline, &is, procOpts, &result);
-
-    if (status == -0x10000) {
-        return "[ERROR: SEH exception in RunOcrPipeline]";
-    }
-    if (status != 0 || result == 0) {
-        return "[ERROR: RunOcrPipeline failed (status " + std::to_string(status) + ")]";
-    }
-
-    int64_t lineCount = 0;
-    pGetOcrLineCount(result, &lineCount);
-
-    std::string text;
-    text.reserve(256);
-    for (int64_t i = 0; i < lineCount; ++i) {
-        int64_t line = 0;
-        if (pGetOcrLine(result, i, &line) != 0 || line == 0) continue;
-
-        char* content = nullptr;
-        if (pGetOcrLineContent(line, &content) == 0 && content != nullptr) {
-            text.append(content);
-            text.push_back('\n');
+        if (bitmap == nullptr) {
+            return "[ERROR: failed to decode image]";
         }
+
+        // Run OCR. RecognizeAsync returns an IAsyncOperation<OcrResult>;
+        // .get() blocks until completion (cooperative await on WinRT thread pool).
+        OcrResult result = engine.RecognizeAsync(bitmap).get();
+
+        std::string text = winrt::to_string(result.Text());
+
+        // Append per-line text for richer output (line breaks preserved).
+        // The .Text() accessor already joins lines with \r\n — we just
+        // normalize to \n for cross-platform stdout parsing.
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (char c : text) {
+            if (c != '\r') normalized.push_back(c);
+        }
+        return normalized;
+    } catch (const hresult_error& e) {
+        std::string msg = "[ERROR: " + winrt::to_string(e.message()) + "]";
+        return msg;
+    } catch (const std::bad_alloc&) {
+        return "[ERROR: out of memory]";
+    } catch (const std::exception& e) {
+        return std::string("[ERROR: ") + e.what() + "]";
+    } catch (...) {
+        return "[ERROR: unknown]";
     }
-
-    pReleaseOcrResult(result);
-    return text;
-}
-
-// ── SEH filter: turn crashes into error messages ────────────
-// If oneocr.dll dereferences a bad pointer (rare), we want the helper
-// to keep running for the remaining files rather than dying silently.
-static LONG NTAPI VectoredHandler(EXCEPTION_POINTERS* ep) {
-    // We only log; we don't actually recover — the OS will terminate this process.
-    // But the main app monitors via QProcess and will treat a crash exit as a failure
-    // for that one batch, then continue running normally.
-    (void)ep;
-    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 // ── Main ────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <image_path> [<image_path> ...]" << std::endl;
+        std::cerr << "Usage: " << argv[0]
+                  << " <image_path> [<image_path> ...]" << std::endl;
         return 1;
     }
 
-    // Compile-time verification of ImageStruct layout (oneocr.dll ABI).
-    static_assert(sizeof(ImageStruct) == 32,
-        "ImageStruct must be exactly 32 bytes on x64 (matches oneocr.dll ABI)");
-    static_assert(alignof(ImageStruct) == 8,
-        "ImageStruct must be 8-byte aligned (matches oneocr.dll ABI)");
-
-    // Install the SEH translator — converts Win32 structured exceptions
+    // Install SEH translator — converts Win32 structured exceptions
     // (access violations, stack overflows) into catchable C++ exceptions.
-    // Without this, a single bad image inside oneocr.dll would kill the
-    // entire helper process and abort the whole batch.
     _set_se_translator(OcrSehTranslator);
 
-    // Install vectored exception handler (best-effort logging only —
-    // catches exceptions that escape the translator, e.g. stack overflow).
+    // Best-effort vectored handler for exceptions that escape the translator
+    // (e.g. stack overflow).
     AddVectoredExceptionHandler(0, VectoredHandler);
 
-    // COM (MTA) is needed for WIC image loading. NOT for oneocr.dll itself
-    // (which is plain C and needs no apartment).
-    HRESULT coInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-
-    if (!LoadOneocr()) {
-        if (SUCCEEDED(coInit)) CoUninitialize();
+    // Initialize WinRT apartment. Multi-threaded (MTA) is correct for a
+    // console helper that does CPU-bound async work and waits on it.
+    try {
+        init_apartment(apartment_type::multi_threaded);
+    } catch (const hresult_error& e) {
+        std::cerr << "[OCR] Failed to initialize WinRT: "
+                  << winrt::to_string(e.message()) << std::endl;
         return 1;
     }
 
-    // Create init options.
-    int64_t initOpts = 0;
-    if (pCreateOcrInitOptions(&initOpts) != 0 || initOpts == 0) {
-        std::cerr << "[oneocr] CreateOcrInitOptions failed." << std::endl;
-        if (g_oneocrDll) FreeLibrary(g_oneocrDll);
-        SetDllDirectoryW(nullptr);
-        if (SUCCEEDED(coInit)) CoUninitialize();
+    // Create the OCR engine. If the user has no OCR language packs
+    // installed (common on Windows N / LTSC), exit with a clear message
+    // so the main app can surface setup instructions.
+    OcrEngine engine = nullptr;
+    try {
+        engine = CreateEngine();
+    } catch (const hresult_error& e) {
+        std::cerr << "[OCR] Engine creation failed: "
+                  << winrt::to_string(e.message()) << std::endl;
+        uninit_apartment();
+        return 1;
+    } catch (...) {
+        std::cerr << "[OCR] Engine creation failed (unknown)." << std::endl;
+        uninit_apartment();
         return 1;
     }
 
-    // Disable model delay-load so we fail fast if the model file is missing
-    // (rather than failing on the first OCR call).
-    if (pOcrInitOptionsSetUseModelDelayLoad) {
-        pOcrInitOptionsSetUseModelDelayLoad(initOpts, 0);
-    }
-
-    // Find the model file path.
-    std::wstring dir = FindOneocrDir();
-    std::wstring modelPathW = dir + L"\\oneocr.onemodel";
-
-    // Verify the model file exists — fail with a clear message if not.
-    if (GetFileAttributesW(modelPathW.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::cerr << "[oneocr] oneocr.onemodel not found at: "
-                  << WideToUtf8(modelPathW) << std::endl;
-        std::cerr << "[oneocr] Re-run scripts/get_oneocr.ps1 to install the model." << std::endl;
-        if (pReleaseOcrInitOptions) pReleaseOcrInitOptions(initOpts);
-        if (g_oneocrDll) FreeLibrary(g_oneocrDll);
-        SetDllDirectoryW(nullptr);
-        if (SUCCEEDED(coInit)) CoUninitialize();
+    if (!engine) {
+        std::cerr << "[OCR] No OCR language packs are installed." << std::endl;
+        std::cerr << "[OCR] Install via: Settings > Time & Language > Language" << std::endl;
+        std::cerr << "[OCR]   > Add a language > Optical character recognition." << std::endl;
+        std::cerr << "[OCR] Then restart DocuSearch." << std::endl;
+        uninit_apartment();
         return 1;
     }
 
-    std::string modelPath = WideToUtf8(modelPathW);
-
-    int64_t pipeline = 0;
-    if (pCreateOcrPipeline(modelPath.c_str(), MODEL_KEY, initOpts, &pipeline) != 0 || pipeline == 0) {
-        std::cerr << "[oneocr] CreateOcrPipeline failed (wrong model key or corrupted model?)." << std::endl;
-        if (pReleaseOcrInitOptions) pReleaseOcrInitOptions(initOpts);
-        if (g_oneocrDll) FreeLibrary(g_oneocrDll);
-        SetDllDirectoryW(nullptr);
-        if (SUCCEEDED(coInit)) CoUninitialize();
-        return 1;
-    }
-
-    int64_t procOpts = 0;
-    if (pCreateOcrProcessOptions) {
-        pCreateOcrProcessOptions(&procOpts);
+    // Log which language is active (helps with debugging).
+    try {
+        auto lang = engine.RecognizerLanguage();
+        std::cerr << "[OCR] Engine ready — language: "
+                  << winrt::to_string(lang.DisplayName())
+                  << " (" << winrt::to_string(lang.LanguageTag()) << ")"
+                  << std::endl;
+    } catch (...) {
+        // Best-effort — don't fail on logging.
     }
 
     // Process each file. Per-file try/catch keeps one bad image from
@@ -487,7 +258,7 @@ int main(int argc, char* argv[]) {
         std::string text;
 
         try {
-            text = OcrFile(pipeline, procOpts, path);
+            text = OcrFile(engine, path);
         } catch (const std::bad_alloc&) {
             text = "[ERROR: out of memory]";
             Sleep(2000);  // back off before next file
@@ -511,13 +282,11 @@ int main(int argc, char* argv[]) {
     }
 
     // Cleanup.
-    if (pReleaseOcrProcessOptions && procOpts) pReleaseOcrProcessOptions(procOpts);
-    if (pReleaseOcrPipeline && pipeline)       pReleaseOcrPipeline(pipeline);
-    if (pReleaseOcrInitOptions && initOpts)    pReleaseOcrInitOptions(initOpts);
-
-    if (g_oneocrDll) FreeLibrary(g_oneocrDll);
-    SetDllDirectoryW(nullptr);
-    if (SUCCEEDED(coInit)) CoUninitialize();
+    try {
+        uninit_apartment();
+    } catch (...) {
+        // Best-effort — process is exiting anyway.
+    }
 
     return anySuccess ? 0 : 1;
 }

@@ -70,7 +70,10 @@ docusearch_add_test(tst_FileRepository)
 docusearch_add_test(tst_FtsTokenizer)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
-# Verifies the oneocr.dll ImageStruct ABI + helper exe crash safety.
+# Verifies the Windows.Media.Ocr helper exe crash safety. Tests that the
+# helper exits cleanly on missing files / corrupt images without
+# crashing (which would otherwise kill the main DocuSearch app via
+# QProcess::state detection).
 if(MSVC)
     add_executable(tst_OcrHelper tst_OcrHelper.cpp)
     target_include_directories(tst_OcrHelper PRIVATE

@@ -25,10 +25,10 @@ There are no macOS or Linux builds at this time.
 
 ### Q: What are the system requirements?
 
-- Windows 10/11 64-bit
+- Windows 10 1809+ / Windows 11 — 64-bit only
 - 4 GB RAM minimum (8 GB recommended for large folders)
 - 500 MB free disk space (plus space for your indexed files)
-- Microsoft Snipping Tool installed (for OCR support — see below)
+- At least one OCR language pack installed (for OCR support — see below)
 
 ### Q: How is DocuSearch different from Windows Search?
 
@@ -36,7 +36,8 @@ There are no macOS or Linux builds at this time.
 - DocuSearch extracts text from PDFs, DOCX, XLSX, PPTX natively
   (Windows Search relies on iFilters which are often missing).
 - DocuSearch runs **OCR on scanned PDFs and images** using the
-  same engine as the Windows 11 Snipping Tool.
+  official Windows.Media.Ocr API (the same engine that powers
+  Windows Search and the Snipping Tool).
 - DocuSearch supports **advanced search syntax** (phrases, boolean,
   field filters).
 - DocuSearch has **tags, notes, favorites, saved searches**.
@@ -45,16 +46,29 @@ There are no macOS or Linux builds at this time.
 
 ## OCR
 
-### Q: Why do I need to run `get_oneocr.ps1` for OCR?
+### Q: How does OCR work in DocuSearch?
 
-The `oneocr.dll`, `oneocr.onemodel`, and `onnxruntime.dll` files are
-Microsoft proprietary binaries that ship with the Windows 11 Snipping
-Tool. DocuSearch **cannot redistribute them legally**, so each user
-installs them from their own locally-installed Snipping Tool.
+DocuSearch uses **Windows.Media.Ocr** — the officially-supported
+WinRT OCR API built into Windows 10 1809+ and Windows 11. This is
+the same OCR engine that powers Windows Search, the Snipping Tool,
+and the Photos app.
 
-The `get_oneocr.ps1` script automates this — it locates your Snipping
-Tool installation and copies the three files into the DocuSearch
-folder.
+No DLLs to install. No scripts to run. No licensing risk — it's
+the public, royalty-free OCR API that any Windows app (commercial
+included) can use.
+
+### Q: Do I need to install anything for OCR?
+
+In most cases, **no**. Windows 10/11 ships with the OCR engine
+preinstalled. The only requirement is at least one OCR language
+pack, which comes with most consumer Windows installs.
+
+If OCR shows "Click to setup" in the status bar:
+1. Open Settings → Time & Language → Language & Region
+2. Add a language with the "Optical character recognition" option
+3. Restart DocuSearch
+
+That's it — no PowerShell scripts, no DLL extraction.
 
 ### Q: Can I use DocuSearch without OCR?
 
@@ -67,17 +81,23 @@ Only scanned PDFs and images require OCR.
 
 ### Q: What languages does OCR support?
 
-The oneocr model auto-detects:
-- English
-- Chinese (Simplified & Traditional)
-- Korean
-- Japanese
+Windows.Media.Ocr supports 25+ languages including:
+- English (US, UK, AU, CA, IN)
+- Chinese (Simplified, Traditional — HK, TW)
+- Japanese, Korean
+- German, French, Spanish, Italian, Portuguese
+- Russian, Polish, Czech, Hungarian
+- Arabic, Hebrew, Hindi, Thai, Vietnamese
+- And many more
+
+The helper auto-detects the document language from your Windows
+profile languages — no manual language selection needed.
 
 ### Q: OCR is slow. Is that normal?
 
-OCR is computationally expensive. A single page typically takes 1-3
-seconds; a 10-page PDF takes 10-30 seconds. This is normal for any
-OCR engine running locally on a CPU.
+OCR is computationally expensive. A single page typically takes
+1-3 seconds; a 10-page PDF takes 10-30 seconds. This is normal for
+any OCR engine running locally on a CPU.
 
 If OCR is consistently very slow:
 - Close other CPU-heavy applications
@@ -88,21 +108,22 @@ If OCR is consistently very slow:
 ### Q: OCR returned empty text for a clearly readable image. Why?
 
 Possible causes:
-1. Image is smaller than 50×50 pixels (oneocr's minimum).
-2. Image is larger than 10000×10000 pixels (oneocr's maximum).
-3. Image is mostly decorative (gradient, blurry, low contrast).
-4. Text in the image is rotated 90°/180° — oneocr handles small
-   rotations but not extreme angles.
-5. Image is a screenshot of code with very thin fonts — try
+1. Image is smaller than 50×50 pixels (Windows.Media.Ocr's minimum).
+2. Image is mostly decorative (gradient, blurry, low contrast).
+3. Text in the image is rotated 90°/180° — Windows.Media.Ocr handles
+   small rotations but not extreme angles.
+4. Image is a screenshot of code with very thin fonts — try
    increasing the DPI/resolution.
 
-### Q: Can I use a different OCR engine (Tesseract, etc.)?
+### Q: Can I use a different OCR engine (Tesseract, PaddleOCR, etc.)?
 
-The source code is open — you can integrate any OCR engine you like.
-The current implementation calls oneocr.dll via a separate helper
-process (`docusearch_ocr_helper.exe`). Replacing it would mean
-rewriting that helper to call Tesseract or another engine.
-
+Yes, the source code is open. The current implementation calls
+`Windows.Media.Ocr` via a separate helper process
+(`docusearch_ocr_helper.exe`). Replacing it would mean rewriting
+that helper to call another OCR engine's C API (e.g. Tesseract's
+`TessBaseAPI::Recognize`). The `WindowsOcrEngine` class in
+`src/ocr/WindowsOcrEngine.h` is the integration point — implement
+it for your preferred engine and inject it into `OcrWorkerPool`.
 ---
 
 ## Search
@@ -121,11 +142,21 @@ Most common causes:
 
 ### Q: Why does search highlighting not work?
 
-Search highlighting was **disabled** in a recent build because it
-was crashing on large documents. A crash-safe highlighter has been
-implemented but is currently **off by default**. It will be enabled
-in a future release once we're confident it doesn't reintroduce
-crashes.
+It does. Search highlighting is **on by default** — when you run a
+search and click a result, every search term in the extracted-text
+pane is highlighted in yellow so you can scan to the relevant
+paragraphs quickly.
+
+Highlighting uses `QTextEdit::ExtraSelection` (a visual overlay that
+doesn't modify the document), so it's crash-safe on documents of any
+size up to 200,000 characters. Above that limit, highlighting is
+skipped silently to protect low-RAM machines.
+
+If you don't see highlights:
+1. You may not have selected a result yet (highlighting only appears
+   after clicking a result so the extracted-text pane is populated).
+2. You may be on the AI Summary / Highlights / Related tab — switch
+   back to the **Extracted Text** tab to see the yellow marks.
 
 ### Q: Can I search for files in a specific folder?
 
@@ -242,12 +273,17 @@ Yes, but performance may be poor. Network file enumeration is much
 slower than local. If you must index a network share, map it to a
 drive letter first.
 
-### Q: Is the OCR model key safe to hardcode?
+### Q: Is the OCR engine safe to use?
 
-Yes — see [docs/OCR_LICENSING.md](docs/OCR_LICENSING.md) for the
-full explanation. The key is a public sample from Microsoft's
-oneocr.py reference implementation. It is not machine-specific,
-not rate-limited, not logged, and not used for any cloud service.
+Yes — DocuSearch uses **Windows.Media.Ocr**, the officially-supported
+WinRT OCR API built into Windows 10 1809+. This is the same OCR
+engine that powers Windows Search and the Snipping Tool. It is
+licensed for any Windows app, including commercial software — see
+[docs/OCR_LICENSING.md](docs/OCR_LICENSING.md) for the full
+explanation.
+
+The OCR runs entirely on your machine. No data is sent to the
+internet. No telemetry, no crash reports, no phone-home behavior.
 
 ---
 

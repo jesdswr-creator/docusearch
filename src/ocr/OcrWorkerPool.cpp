@@ -147,10 +147,10 @@ void OcrWorkerPool::workerLoop(int workerId) {
     // output (or anywhere else on this thread) would crash the process.
     installSehTranslator();
 
-    // oneocr.dll engine — local, free, no setup needed beyond get_oneocr.ps1.
+    // Windows.Media.Ocr engine — local, free, ships with Windows 10/11.
     WindowsOcrEngine engine;
     if (!engine.init()) {
-        DS_ERROR("OCR", QString("Worker %1: oneocr init failed; exiting").arg(workerId));
+        DS_ERROR("OCR", QString("Worker %1: Windows.Media.Ocr init failed; exiting").arg(workerId));
         return;
     }
 

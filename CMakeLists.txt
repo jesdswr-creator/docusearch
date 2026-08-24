@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.0.0
+    VERSION 1.1.0
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -31,7 +31,7 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     # /EHa (instead of /EHsc) is REQUIRED for _set_se_translator() to
     # actually catch SEH exceptions in C++ try/catch blocks. Without it,
-    # access violations inside Poppler/zlib/oneocr.dll still bypass our
+    # access violations inside Poppler/zlib/Windows.Media.Ocr still bypass our
     # catch handlers and terminate the process. See src/core/SehTranslator.h.
     add_compile_options(/permissive- /W3 /utf-8 /EHa /Zc:__cplusplus)
     add_link_options(/LARGEADDRESSAWARE)
@@ -41,11 +41,16 @@ endif()
 # Find dependencies
 # ============================================================
 
-# Options to disable Tesseract/Poppler entirely (they cause API issues
-# with some vcpkg versions). With both OFF, the app still works — just
-# without OCR and without PDF text extraction (PDFs flag as needsOcr).
-option(DOCUSEARCH_ENABLE_TESSERACT "Link Tesseract OCR engine" ON)
+# Options to disable Poppler entirely (it causes API issues with some
+# vcpkg versions). With Poppler OFF, the app still works — just without
+# PDF text extraction (PDFs flag as needsOcr and go through Windows.Media.Ocr instead).
+# OCR is provided by Windows.Media.Ocr (WinRT) — no build-time deps, ships with the OS.
 option(DOCUSEARCH_ENABLE_POPPLER   "Link Poppler for PDF text extraction" ON)
+
+# NOTE: Tesseract is no longer used. The DOCUSEARCH_ENABLE_TESSERACT option
+# (present in older versions) is a no-op. OCR is provided by Windows.Media.Ocr
+# (the official WinRT OCR API) loaded at runtime via a separate helper
+# exe (docusearch_ocr_helper).
 
 # Qt 6
 find_package(Qt6 REQUIRED COMPONENTS
@@ -67,11 +72,9 @@ if(NOT SQLite3_FOUND)
     set(SQLITE3_BUNDLED TRUE)
 endif()
 
-# Tesseract + Leptonica — REMOVED.
-# OCR is now handled by oneocr.dll (from the Windows 11 Snipping Tool),
-# loaded at runtime via a separate helper exe (docusearch_ocr_helper).
-# This removes ~40 MB from the build and eliminates
-# the crash-prone Tesseract/Leptonica DLLs.
+# OCR — Windows.Media.Ocr (WinRT, ships with Windows 10+), called at runtime
+# via a separate helper exe (docusearch_ocr_helper). No build-time OCR
+# dependency, no redistributed DLLs, no model files. No licensing risk.
 
 # ============================================================
 # Semantic Search (BGE Small EN v1.5 via ONNX Runtime)
@@ -111,46 +114,41 @@ endif()
 find_package(ZLIB REQUIRED)
 
 # ============================================================
-# OCR Helper — oneocr.dll (native, from Win11 Snipping Tool)
+# OCR Helper — Windows.Media.Ocr (official WinRT OCR API)
 # ============================================================
-# Standalone console exe that loads oneocr.dll via LoadLibrary and
-# calls its C-ABI exports. No WinRT, no apartment threading, no async
-# IAsyncOperation — so it cannot trigger the WinRT crashes we were
-# seeing on low-RAM Windows systems.
+# Standalone console exe that uses C++/WinRT to call
+# Windows.Media.Ocr.OcrEngine.RecognizeAsync — the same OCR engine
+# that powers Windows Search, Snipping Tool, and the Photos app.
 #
-# The DLL + model files (oneocr.dll, oneocr.onemodel, onnxruntime.dll)
-# are NOT redistributed with this build. Users obtain them from their
-# locally-installed Snipping Tool via scripts/get_oneocr.ps1 and place
-# them next to docusearch.exe at runtime.
+# This is the officially-supported, royalty-free OCR API for any
+# Windows app (commercial included — see docs/OCR_LICENSING.md).
 #
-# This target needs only the Windows SDK (WIC for image decoding) — no
-# cppwinrt.exe, no C++/WinRT headers, no coroutine support.
+# Architecture notes:
+#   • runtimeobject.lib pulls in /INCLUDE:WINRT_CRT_MAIN which conflicts
+#     with Qt's WIN32 entry point. We link it ONLY in the helper exe
+#     target (a plain console app — no Qt entry point conflict).
+#   • C++/WinRT headers ship with the Windows 10 SDK 17763+. No need
+#     to invoke cppwinrt.exe — the Windows SDK is sufficient.
+#   • windowsapp.lib provides the unified delay-load thunks for all
+#     Windows.* APIs and is the recommended way to consume WinRT.
+#
+# Nothing else needs to ship with this helper — no DLLs, no model
+# files, no install scripts. Windows.Media.Ocr is part of the OS.
 
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
 if(MSVC)
     set_property(TARGET docusearch_ocr_helper PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    # ole32 (CoCreateInstance) + windowscodecs (WIC) are the only Win32 libs needed.
-    target_link_libraries(docusearch_ocr_helper PRIVATE ole32 windowscodecs)
+    # windowsapp.lib = unified WinRT delay-load thunks (recommended).
+    # runtimeobject.lib = WinRT apartment init + RoGetActivationFactory.
+    target_link_libraries(docusearch_ocr_helper PRIVATE
+        windowsapp runtimeobject)
     target_compile_options(docusearch_ocr_helper PRIVATE
-        /std:c++20 /W3 /permissive- /utf-8 /EHa
+        /std:c++20 /W3 /permissive- /utf-8 /EHa /Zc:__cplusplus /await
     )
-endif()
-
-# Optionally copy oneocr files into the build output, if the developer
-# has placed them under third_party/oneocr/. This is a convenience for
-# local builds — end users install them via scripts/get_oneocr.ps1.
-set(ONEOCR_SRC_DIR ${CMAKE_SOURCE_DIR}/third_party/oneocr)
-if(EXISTS "${ONEOCR_SRC_DIR}/oneocr.dll")
-    message(STATUS "oneocr.dll found in third_party/oneocr/ — will copy to build output")
-    foreach(oneocr_file oneocr.dll oneocr.onemodel onnxruntime.dll)
-        if(EXISTS "${ONEOCR_SRC_DIR}/${oneocr_file}")
-            add_custom_command(TARGET docusearch_ocr_helper POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${ONEOCR_SRC_DIR}/${oneocr_file}"
-                        "$<TARGET_FILE_DIR:docusearch_ocr_helper>/${oneocr_file}")
-        endif()
-    endforeach()
+    target_compile_definitions(docusearch_ocr_helper PRIVATE
+        NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS
+    )
 endif()
 
 # ============================================================
@@ -254,7 +252,6 @@ set(APP_SOURCES
     src/ui/TagsNotesPane.cpp
     src/ui/IndexingProgress.cpp
     src/ui/SettingsDialog.cpp
-    src/ui/SearchResultsHighlighter.cpp
     src/ui/SwitchControl.cpp
     src/ui/MainWindow.cpp
     # entry
@@ -313,7 +310,6 @@ set(APP_HEADERS
     src/ui/TagsNotesPane.h
     src/ui/IndexingProgress.h
     src/ui/SettingsDialog.h
-    src/ui/SearchResultsHighlighter.h
     src/ui/SwitchControl.h
     src/ui/MainWindow.h
 )
@@ -366,7 +362,9 @@ target_link_libraries(DocuSearch PRIVATE
     dbghelp        # MiniDumpWriteDump for crash handler
 )
 
-# OCR: No RapidOcr link needed — uses Windows OCR via PowerShell
+# OCR: No link needed — Windows.Media.Ocr is consumed via the separate
+# docusearch_ocr_helper.exe target (see add_executable above). The helper
+# links runtimeobject.lib + windowsapp.lib; the main Qt app does NOT.
 
 if(POPPLER_FOUND)
     target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
@@ -448,19 +446,12 @@ if(WIN32)
         dwmapi     # DwmSetWindowAttribute (Win11 Mica backdrop)
         propsys    # IPropertyStore for jump-list tasks
         comctl32   # Common Controls v6 (manifest-driven)
-        # NOTE: runtimeobject.lib is NOT linked here because it contains
-        # /INCLUDE:WINRT_CRT_MAIN which conflicts with Qt's WIN32 entry
-        # point. WindowsOcrEngine.cpp loads the WinRT functions dynamically
-        # via LoadLibrary("api-ms-win-core-winrt-l1-1-0.dll").
+        # NOTE: runtimeobject.lib is NOT linked to the main Qt app.
+        # It pulls in /INCLUDE:WINRT_CRT_MAIN which conflicts with Qt's
+        # WIN32 entry point (LNK2019: unresolved external symbol main).
+        # All WinRT calls live in the separate docusearch_ocr_helper.exe
+        # target — a plain console exe where WINRT_CRT_MAIN fits cleanly.
     )
-    # Enable Windows OCR via raw COM ABI + dynamic loading.
-    # Windows OCR is DISABLED for now — the WinRT ABI headers
-    # auto-link runtimeobject.lib which conflicts with Qt's WIN32
-    # entry point (LNK2019: unresolved external symbol main).
-    # Will re-enable using a separate DLL plugin approach later.
-    # if(MSVC)
-    #     target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_WINDOWS_OCR=1)
-    # endif()
 endif()
 
 # Install targets (for packaging)

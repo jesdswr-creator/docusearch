@@ -85,7 +85,7 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
         "Extracts text from scanned PDFs and images using AI.\n"
         "Click this if the extracted text is empty or garbled —\n"
         "it means the document is a scanned image, not born-digital.\n"
-        "The OCR engine (oneocr.dll) runs in a separate process\n"
+        "The OCR engine (Windows.Media.Ocr) runs in a separate process\n"
         "and cannot crash the main app.");
     ocrBtn_->setText("OCR");
 
