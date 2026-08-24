@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocuSearch — Offline Intelligent Document Search & OCR</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/600.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/700.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/500.css">
+<style>
+/* ============ FLUENT DESIGN TOKENS ============ */
+:root{
+  --font:'Inter','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;
+  --mono:'JetBrains Mono','Cascadia Code',Consolas,monospace;
+}
+html[data-theme="dark"]{
+  --mica:#1c1c1c; --surface:#262626; --card:#2d2d2d; --card-2:#333;
+  --text:#f5f5f5; --subtle:#a9a9a9; --faint:#7d7d7d;
+  --border:rgba(255,255,255,.085); --border-strong:rgba(255,255,255,.16);
+  --hover:rgba(255,255,255,.055); --press:rgba(255,255,255,.09);
+  --accent:#4cc2ff; --accent-strong:#67d4ff; --accent-soft:rgba(76,194,255,.14);
+  --mark-bg:rgba(76,194,255,.28); --mark-tx:#bfe9ff;
+  --paper:#f7f4ec; --paper-tx:#2a2a2a;
+  --ok:#6ccb9f; --warn:#ffcf6b; --danger:#ff99a4;
+  --shadow:0 8px 28px rgba(0,0,0,.45); --shadow-sm:0 2px 8px rgba(0,0,0,.35);
+  --sidebar-bg:rgba(30,30,30,.72); --acrylic-blur:blur(22px) saturate(150%);
+  --scroll:rgba(255,255,255,.22);
+}
+html[data-theme="light"]{
+  --mica:#f2f1ee; --surface:#faf9f7; --card:#ffffff; --card-2:#f4f4f4;
+  --text:#1b1b1b; --subtle:#5c5c5c; --faint:#8a8a8a;
+  --border:rgba(0,0,0,.08); --border-strong:rgba(0,0,0,.16);
+  --hover:rgba(0,0,0,.045); --press:rgba(0,0,0,.08);
+  --accent:#0067c0; --accent-strong:#005a9e; --accent-soft:rgba(0,103,192,.10);
+  --mark-bg:#ffe9a8; --mark-tx:#5c4300;
+  --paper:#ffffff; --paper-tx:#222;
+  --ok:#0f7b4a; --warn:#8a5b00; --danger:#c42b1c;
+  --shadow:0 10px 30px rgba(0,0,0,.14); --shadow-sm:0 2px 8px rgba(0,0,0,.10);
+  --sidebar-bg:rgba(250,249,247,.75); --acrylic-blur:blur(22px) saturate(150%);
+  --scroll:rgba(0,0,0,.25);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--font); background:var(--mica); color:var(--text);
+  overflow:hidden; font-size:13px; -webkit-font-smoothing:antialiased;
+  transition:background .3s,color .3s;
+}
+body::before{ /* mica ambient tint */
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background:
+    radial-gradient(900px 500px at 85% -10%, var(--accent-soft), transparent 60%),
+    radial-gradient(700px 420px at -10% 110%, var(--accent-soft), transparent 55%);
+  opacity:.7;
+}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+button{font-family:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,textarea,select{font-family:inherit;color:inherit}
+mark{background:var(--mark-bg);color:var(--mark-tx);border-radius:3px;padding:0 2px;font-weight:600}
+svg{display:block;flex:none}
+
+.app{position:relative;z-index:1;height:100vh;display:grid;grid-template-rows:44px 58px minmax(0,1fr) 34px}
+
+/* ============ TITLE BAR ============ */
+.titlebar{display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.logo-badge{width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,#0078d4,#00b7c3);display:grid;place-items:center;box-shadow:var(--shadow-sm)}
+.app-name{font-weight:700;font-size:13px;letter-spacing:.2px}
+.app-sub{color:var(--faint);font-size:11.5px;margin-left:2px}
+.win-pill{margin-left:12px;display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);padding:3px 9px;border-radius:999px}
+.win-pill i{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.win-ctrls{margin-left:auto;display:flex}
+.win-ctrls button{width:46px;height:44px;display:grid;place-items:center;color:var(--subtle);transition:background .15s,color .15s}
+.win-ctrls button:hover{background:var(--hover);color:var(--text)}
+.win-ctrls button.close:hover{background:#c42b1c;color:#fff}
+
+/* ============ TOOLBAR ============ */
+.toolbar{display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.icon-btn{width:36px;height:36px;border-radius:7px;display:grid;place-items:center;color:var(--subtle);transition:background .15s,color .15s;position:relative}
+.icon-btn:hover{background:var(--hover);color:var(--text)}
+.icon-btn:active{background:var(--press)}
+.search-wrap{flex:1;max-width:760px;position:relative}
+.search-box{display:flex;align-items:center;gap:9px;height:38px;padding:0 6px 0 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--card);transition:border-color .2s, box-shadow .2s}
+.search-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.search-box svg{color:var(--faint)}
+.search-box input{flex:1;border:none;outline:none;background:transparent;font-size:13px;height:100%}
+.search-box input::placeholder{color:var(--faint)}
+.kbd{font-family:var(--mono);font-size:10px;color:var(--faint);border:1px solid var(--border-strong);border-radius:5px;padding:3px 6px;background:var(--card-2)}
+.search-clear{width:26px;height:26px;border-radius:5px;display:none;place-items:center;color:var(--faint)}
+.search-clear:hover{background:var(--hover);color:var(--text)}
+.search-clear.show{display:grid}
+/* syntax helper */
+.syntax-panel{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:10px;display:none}
+.syntax-panel.open{display:block;animation:drop .18s ease}
+@keyframes drop{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.syntax-panel h5{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--faint);margin:2px 4px 8px}
+.syn-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.syn-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;text-align:left;transition:background .12s}
+.syn-item:hover{background:var(--hover)}
+.syn-item code{font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--accent-soft);padding:2px 7px;border-radius:5px;white-space:nowrap}
+.syn-item span{font-size:11.5px;color:var(--subtle)}
+.tb-sep{width:1px;height:22px;background:var(--border-strong);margin:0 4px}
+.tb-btn{display:flex;align-items:center;gap:7px;height:36px;padding:0 13px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--subtle);transition:background .15s,color .15s}
+.tb-btn:hover{background:var(--hover);color:var(--text)}
+.tb-btn.primary{background:var(--accent);color:#fff}
+html[data-theme="dark"] .tb-btn.primary{color:#003049}
+.tb-btn.primary:hover{background:var(--accent-strong)}
+.tb-btn.primary:disabled{opacity:.6;cursor:default}
+
+/* ============ MAIN GRID ============ */
+.main{display:grid;grid-template-columns:250px minmax(0,1fr) 400px;min-height:0}
+
+/* ---- sidebar ---- */
+.sidebar{background:var(--sidebar-bg);backdrop-filter:var(--acrylic-blur);border-right:1px solid var(--border);overflow-y:auto;padding:12px 10px 14px;display:flex;flex-direction:column;gap:2px}
+.sb-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin:14px 8px 6px}
+.sb-label:first-child{margin-top:2px}
+.sb-item{display:flex;align-items:center;gap:10px;width:100%;padding:7px 9px;border-radius:7px;font-size:12.5px;color:var(--subtle);position:relative;transition:background .13s,color .13s;text-align:left}
+.sb-item:hover{background:var(--hover);color:var(--text)}
+.sb-item.active{background:var(--accent-soft);color:var(--text);font-weight:600}
+.sb-item.active::before{content:"";position:absolute;left:-4px;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--accent)}
+.sb-item svg{color:var(--faint)}
+.sb-item.active svg{color:var(--accent)}
+.sb-item .cnt{margin-left:auto;font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+.sb-item .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.sb-item .fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-card{margin:16px 4px 2px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--card);box-shadow:var(--shadow-sm)}
+.sb-card h4{font-size:11.5px;font-weight:700;display:flex;align-items:center;gap:7px}
+.sb-card p{font-size:11px;color:var(--subtle);margin:7px 0 10px;line-height:1.5}
+.sb-card .row{display:flex;gap:6px}
+.mini-btn{flex:1;height:28px;border-radius:6px;border:1px solid var(--border-strong);font-size:11px;font-weight:600;color:var(--subtle);transition:all .15s}
+.mini-btn:hover{background:var(--hover);color:var(--text)}
+
+/* ---- results ---- */
+.results{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--border)}
+.results-head{display:flex;align-items:center;gap:10px;padding:12px 18px 8px}
+.results-head h2{font-size:14px;font-weight:700}
+.results-head .meta{font-size:11.5px;color:var(--faint)}
+.sort-wrap{margin-left:auto;display:flex;align-items:center;gap:8px}
+.sort-wrap label{font-size:11px;color:var(--faint)}
+.sort-wrap select{background:var(--card);border:1px solid var(--border-strong);color:var(--text);font-size:11.5px;border-radius:6px;padding:5px 8px;outline:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 10px}
+.chips:empty{display:none}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);padding:4px 9px;border-radius:999px}
+.chip button{display:grid;place-items:center;width:14px;height:14px;border-radius:50%;color:var(--accent)}
+.chip button:hover{background:color-mix(in srgb,var(--accent) 25%,transparent)}
+.results-list{flex:1;overflow-y:auto;padding:2px 12px 18px}
+.result{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:13px;padding:12px 12px;border-radius:9px;cursor:pointer;border:1px solid transparent;transition:background .14s,border-color .14s;animation:rise .25s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.result:hover{background:var(--hover)}
+.result.selected{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+.r-icon{width:44px;height:52px;border-radius:6px;background:var(--card);border:1px solid var(--border);display:grid;place-items:center;box-shadow:var(--shadow-sm)}
+.r-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:13px;font-weight:600}
+.r-title .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46ch}
+.badge{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:2.5px 7px;border-radius:5px}
+.badge.ocr{color:var(--accent);background:var(--accent-soft)}
+.badge.dup{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+.badge.fav{color:var(--warn)}
+.r-path{font-size:10.5px;color:var(--faint);font-family:var(--mono);margin:3px 0 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r-snip{font-size:12px;color:var(--subtle);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.r-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+.star-btn{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--faint);transition:all .15s}
+.star-btn:hover{background:var(--press);color:var(--warn)}
+.star-btn.on{color:var(--warn)}
+.empty{padding:70px 20px;text-align:center;color:var(--subtle)}
+.empty .big{font-size:40px;margin-bottom:12px}
+.empty h3{font-size:15px;color:var(--text);margin-bottom:6px}
+
+/* ---- preview ---- */
+.preview{background:var(--surface);overflow-y:auto;display:flex;flex-direction:column}
+.pv-head{padding:14px 16px 10px;border-bottom:1px solid var(--border);display:flex;gap:11px;align-items:flex-start}
+.pv-head .r-icon{width:40px;height:48px}
+.pv-title{font-size:13px;font-weight:700;line-height:1.35;word-break:break-all}
+.pv-path{font-size:10px;color:var(--faint);font-family:var(--mono);margin-top:4px}
+.pv-actions{margin-left:auto;display:flex;gap:4px}
+.pv-tabs{display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid var(--border)}
+.pv-tab{padding:8px 13px;font-size:12px;font-weight:600;color:var(--subtle);border-radius:7px 7px 0 0;position:relative;transition:color .15s}
+.pv-tab:hover{color:var(--text);background:var(--hover)}
+.pv-tab.active{color:var(--text)}
+.pv-tab.active::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:3px;border-radius:3px;background:var(--accent)}
+.pv-body{padding:16px;display:flex;flex-direction:column;gap:16px}
+.paper{background:var(--paper);color:var(--paper-tx);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;position:relative}
+.paper img{width:100%;display:block}
+.ocr-overlay{position:absolute;left:8%;right:8%;top:14%;height:9%;border:2px solid var(--accent);border-radius:4px;background:var(--accent-soft);animation:scan 2.4s ease-in-out infinite}
+@keyframes scan{0%,100%{opacity:.9}50%{opacity:.35}}
+.ocr-tag{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#8fd8ff;font-size:9.5px;font-weight:700;letter-spacing:.6px;padding:4px 8px;border-radius:5px;backdrop-filter:blur(6px)}
+.paper-text{padding:22px 24px;font-size:11.5px;line-height:1.7}
+.paper-text h4{font-family:var(--mono);font-size:12px;letter-spacing:1px;text-align:center;margin-bottom:14px}
+.paper-text p{margin-bottom:10px}
+.paper-text mark{background:#ffe9a8;color:#5c4300}
+.pv-sec h5{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin-bottom:9px}
+.meta-grid{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;font-size:11.5px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:13px 14px}
+.meta-grid dt{color:var(--faint)}
+.meta-grid dd{color:var(--text);font-weight:500;word-break:break-all}
+.meta-grid dd.mono{font-family:var(--mono);font-size:10.5px}
+.tag-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:999px;background:var(--card);border:1px solid var(--border-strong);color:var(--subtle)}
+.tag button{color:var(--faint);display:grid;place-items:center}
+.tag button:hover{color:var(--danger)}
+.tag-add{background:transparent;border:1px dashed var(--border-strong);color:var(--faint);border-radius:999px;padding:4px 10px;font-size:11px;outline:none;width:110px}
+.tag-add:focus{border-color:var(--accent);color:var(--text)}
+.notes-area{width:100%;min-height:76px;resize:vertical;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:11px 12px;font-size:12px;line-height:1.6;outline:none;color:var(--text);transition:border-color .2s}
+.notes-area:focus{border-color:var(--accent)}
+.save-flash{font-size:10.5px;color:var(--ok);font-weight:600;opacity:0;transition:opacity .3s;margin-left:8px}
+.save-flash.show{opacity:1}
+
+/* ============ STATUS BAR ============ */
+.statusbar{display:flex;align-items:center;gap:16px;padding:0 14px;background:var(--surface);border-top:1px solid var(--border);font-size:11px;color:var(--subtle);font-family:var(--mono)}
+.st-item{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.st-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);animation:pulse 2.4s infinite}
+.st-right{margin-left:auto;display:flex;gap:16px;align-items:center}
+.prog{width:150px;height:4px;border-radius:4px;background:var(--press);overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .3s}
+
+/* ============ TOASTS ============ */
+.toasts{position:fixed;right:18px;bottom:46px;z-index:200;display:flex;flex-direction:column;gap:10px}
+.toast{width:330px;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:13px 14px;display:flex;gap:11px;align-items:flex-start;animation:toastIn .3s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
+.toast.out{opacity:0;transform:translateX(30px);transition:all .3s}
+.toast .t-ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none}
+.toast h6{font-size:12.5px;font-weight:700;margin-bottom:3px}
+.toast p{font-size:11.5px;color:var(--subtle);line-height:1.5}
+
+/* ============ RESPONSIVE ============ */
+@media (max-width:1280px){.main{grid-template-columns:230px minmax(0,1fr) 350px}}
+@media (max-width:1080px){.main{grid-template-columns:230px minmax(0,1fr)}.preview{display:none}}
+@media (max-width:820px){
+  .main{grid-template-columns:minmax(0,1fr)}
+  .sidebar{position:fixed;left:0;top:102px;bottom:34px;width:270px;z-index:90;transform:translateX(-105%);transition:transform .25s ease;box-shadow:var(--shadow)}
+  body.sb-open .sidebar{transform:none}
+  .app-sub,.win-pill{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- TITLE BAR -->
+  <header class="titlebar">
+    <div class="logo-badge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><circle cx="11" cy="12" r="3.4" stroke="#fff" fill="none"/><path d="m13.6 14.6 2.4 2.4"/></svg>
+    </div>
+    <span class="app-name">DocuSearch</span>
+    <span class="app-sub">Offline Intelligent Document Search &amp; OCR</span>
+    <span class="win-pill"><i></i>100% OFFLINE</span>
+    <div class="win-ctrls">
+      <button title="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.2"><path d="M1 6h10"/></svg></button>
+      <button title="Maximize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5"/></svg></button>
+      <button class="close" title="Close"><svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.2"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9"/></svg></button>
+    </div>
+  </header>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <button class="icon-btn" id="sbToggle" title="Toggle sidebar" style="display:none">
+      <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="search-wrap">
+      <div class="search-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="searchInput" type="text" placeholder='Search 12,847 documents…  e.g. "bridge inspection" type:pdf folder:Railway' autocomplete="off" spellcheck="false">
+        <button class="search-clear" id="searchClear" title="Clear"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.6"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9"/></svg></button>
+        <span class="kbd">Ctrl K</span>
+      </div>
+      <div class="syntax-panel" id="syntaxPanel">
+        <h5>Advanced query syntax — SQLite FTS5 + BM25</h5>
+        <div class="syn-grid">
+          <button class="syn-item" data-q='"inspection report"'><code>"…"</code><span>Exact phrase</span></button>
+          <button class="syn-item" data-q="bridge AND corrosion"><code>AND / OR / NOT</code><span>Boolean operators</span></button>
+          <button class="syn-item" data-q="type:pdf"><code>type:pdf</code><span>Filter by file type</span></button>
+          <button class="syn-item" data-q="folder:Railway"><code>folder:Railway</code><span>Filter by indexed folder</span></button>
+          <button class="syn-item" data-q="tag:invoice"><code>tag:invoice</code><span>Filter by tag</span></button>
+          <button class="syn-item" data-q="date:>2024-01-01"><code>date:>2024-01-01</code><span>Filter by date</span></button>
+        </div>
+      </div>
+    </div>
+    <button class="tb-btn primary" id="extractBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg>
+      Extract Content
+    </button>
+    <button class="tb-btn" id="addFolderBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg>
+      Add Folder
+    </button>
+    <div class="tb-sep"></div>
+    <button class="icon-btn" id="backupBtn" title="Backup / restore index">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+    </button>
+    <button class="icon-btn" id="themeBtn" title="Toggle dark / light theme">
+      <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <button class="icon-btn" title="Settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+    </button>
+  </div>
+
+  <!-- MAIN -->
+  <main class="main">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <section class="results">
+      <div class="results-head">
+        <h2 id="resTitle">All Documents</h2>
+        <span class="meta" id="resMeta"></span>
+        <div class="sort-wrap">
+          <label for="sortSel">Sort</label>
+          <select id="sortSel">
+            <option value="relevance">Relevance (BM25)</option>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="size">Largest first</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="results-list" id="resultsList"></div>
+    </section>
+
+    <aside class="preview" id="preview"></aside>
+  </main>
+
+  <!-- STATUS BAR -->
+  <footer class="statusbar" id="statusbar"></footer>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ================= DATA ================= */
+const SCAN_IMG = "https://image.qwenlm.ai/public_source/b8380edf-c14b-443e-997a-33ecf15d105a/12fd9688b-8f8c-48cd-92bb-03ddb40c65c8.png";
+const MB = 1048576;
+const DOCS = [
+ {id:1,name:"Railway_Bridge_Inspection_2024.pdf",type:"pdf",folder:"Railway",path:"C:\\Documents\\Railway",bytes:4.2*MB,modified:"2024-11-02",created:"2024-11-02",tags:["railway","inspection","2024"],fav:true,ocr:true,pages:14,img:true,dup:false,hash:"9f2c41ab77e20bd3a5c8814fd2e77a91c04b6d35aa9e1f07d2c63b4e8a10f5d2",
+  snippet:"Annual structural assessment of the Elm Creek railway bridge. Visual inspection revealed minor corrosion on bearing plates; ultrasonic thickness measurements within tolerance. Track alignment verified.",
+  content:["RAILWAY BRIDGE INSPECTION REPORT — Structure #RC-114, Elm Creek mainline. Annual structural assessment performed 28 Oct 2024 under clear weather conditions.","Visual inspection revealed minor surface corrosion on bearing plates at piers 2 and 3. Ultrasonic thickness measurements remain within tolerance (mean 11.8 mm, spec ≥ 11.0 mm).","Track alignment and ballast profile verified. Recommended action: re-coat bearing plates during the spring maintenance window; next full inspection due Q4 2025."]},
+ {id:2,name:"Railway_Signaling_Manual_v7.pdf",type:"pdf",folder:"Railway",path:"C:\\Documents\\Railway",bytes:18.6*MB,modified:"2024-08-19",created:"2023-02-11",tags:["railway","signaling","manual"],fav:false,ocr:false,pages:212,img:false,dup:false,hash:"3d81c0aa12ff90be6741c3a5e0d2f8b4aa91c77e25d60b3f9c4e8a21d07b6e53",
+  snippet:"Block signaling procedures, interlocking logic and fail-safe relay circuits for mainline railway operations. Revision 7 updates track circuit clearance rules and inspection checklists.",
+  content:["CHAPTER 4 — BLOCK SIGNALING PROCEDURES. This manual defines block signaling procedures, interlocking logic and fail-safe relay circuits for mainline railway operations.","Revision 7 updates track circuit clearance rules, aspect sequencing on junction approaches, and the periodic inspection checklist for relay rooms.","All signal maintenance must be logged in the fault register within 24 hours of completion."]},
+ {id:3,name:"Invoice_2024-0341_Ballast.pdf",type:"pdf",folder:"Scans",path:"C:\\Documents\\Scans",bytes:1.1*MB,modified:"2024-09-30",created:"2024-09-30",tags:["invoice","2024"],fav:false,ocr:true,pages:1,img:false,dup:false,hash:"77aa19c03be55d1f8c20e4a91b6d3f02c88e51a4d9b70c6e23f1a8d40b2c9917",
+  snippet:"Scanned invoice from Ballast Supplies Ltd. OCR extracted line items: crushed granite ballast 40 t, delivery to Elm Creek yard, net total $6,480.00, payment terms 30 days.",
+  content:["INVOICE 2024-0341 — Ballast Supplies Ltd. Ship-to: Northline Railway Corp., Elm Creek yard.","Line items: crushed granite ballast, 40 t @ $148/t; freight and delivery $560.00. Net total $6,480.00. Payment terms 30 days.","OCR confidence 97.4% — processed by Windows.Media.Ocr (en)."]},
+ {id:4,name:"Track_Maintenance_Schedule.xlsx",type:"xlsx",folder:"Railway",path:"C:\\Documents\\Railway",bytes:0.4*MB,modified:"2024-12-01",created:"2024-01-05",tags:["railway","maintenance"],fav:true,ocr:false,pages:3,img:false,dup:false,hash:"c41b2e90d77f03a5b6c81d2e94f0a35b7e22d90c1a8b4f6e35c0d7a92b1e8804",
+  snippet:"Worksheet listing 214 track maintenance tasks with priority, assigned crew and completion dates across the northern railway district. Pivot summary by month and by gang.",
+  content:["Sheet 1 — TASK REGISTER. 214 track maintenance tasks with priority, assigned crew and completion dates across the northern railway district.","Sheet 2 — PIVOT SUMMARY. Monthly completion rate 92%; 17 tasks carried over to the winter window.","Sheet 3 — CREW ROSTER and certification expiry dates."]},
+ {id:5,name:"Scanned_Contract_NDA_Signature.png",type:"png",folder:"Scans",path:"C:\\Documents\\Scans",bytes:2.8*MB,modified:"2024-06-14",created:"2024-06-14",tags:["contract","legal"],fav:false,ocr:true,pages:1,img:true,dup:false,hash:"5e0d1f7a92c33b84e61a70c9d4b2f85a30c66e19b8d24a7f05c3e91d84a7b260",
+  snippet:"OCR from scanned signature page: mutual non-disclosure agreement between Northline Railway Corp. and the contractor regarding bridge inspection data and defect records.",
+  content:["MUTUAL NON-DISCLOSURE AGREEMENT — Page 9 of 9. Parties: Northline Railway Corp. and Meridian Inspection Services LLC.","Purpose: exchange of bridge inspection data, structural defect records and remediation cost estimates.","Executed 14 June 2024. OCR layer generated automatically at index time (Windows.Media.Ocr, en)."]},
+ {id:6,name:"Q3_Financial_Report.docx",type:"docx",folder:"Finance",path:"D:\\Finance",bytes:0.9*MB,modified:"2024-10-11",created:"2024-10-02",tags:["finance","report"],fav:false,ocr:false,pages:22,img:false,dup:false,hash:"a19c7e40b2d88f35c60e17b9d4a23f8c55b09d2e7f14c6a83b5e0d19f27a84cb",
+  snippet:"Revenue increased 12% quarter-over-quarter; operating costs for railway maintenance declined after the inspection program was optimized. Full-year guidance reaffirmed.",
+  content:["Q3 FY2024 FINANCIAL REPORT — Executive summary. Revenue increased 12% quarter-over-quarter to $48.2M.","Operating costs for railway maintenance declined 6% after the inspection program was optimized and duplicate work orders were eliminated.","Full-year guidance reaffirmed; capex focused on signal upgrades and archive digitization."]},
+ {id:7,name:"Budget_FY2025.xlsx",type:"xlsx",folder:"Finance",path:"D:\\Finance",bytes:0.6*MB,modified:"2024-11-20",created:"2024-09-01",tags:["finance","2024"],fav:false,ocr:false,pages:5,img:false,dup:false,hash:"8b2f6d1c40a9e3577c0d2b8e51f4a96d33e7c05b9a12d8f46e0c3a71d5b9e280",
+  snippet:"Allocates funding for bridge inspection, signal upgrades and OCR digitization of the legacy railway paper archive. Contingency held at 8% of total capex.",
+  content:["FY2025 BUDGET — Draft v4. Allocates funding for bridge inspection ($1.9M), signal upgrades ($3.4M) and OCR digitization of the legacy railway paper archive ($420k).","Contingency held at 8% of total capex. Headcount plan unchanged."]},
+ {id:8,name:"Project_Proposal_Draft.pptx",type:"pptx",folder:"Projects",path:"D:\\Projects",bytes:6.4*MB,modified:"2024-12-09",created:"2024-11-28",tags:["proposal"],fav:false,ocr:false,pages:18,img:false,dup:false,hash:"e63d0c9a25f7b14880c2a5d91b7e4f3a66c18d0e5b94f27a30d6c81e94b5a7f2",
+  snippet:"Slide deck proposing an offline document search rollout for the engineering division; includes inspection workflow diagrams and a privacy-first architecture slide.",
+  content:["SLIDE 1 — Proposal: offline full-text search for the engineering division. No cloud dependency; data never leaves the machine.","SLIDE 6 — Inspection workflow: scan → OCR → index → search in under 4 seconds per document.","SLIDE 12 — Privacy-first architecture: SQLite FTS5, SHA-256 dedupe, hourly auto-scan."]},
+ {id:9,name:"Meeting_Notes_Board_Oct.docx",type:"docx",folder:"Finance",path:"D:\\Finance",bytes:0.2*MB,modified:"2024-10-25",created:"2024-10-25",tags:["minutes"],fav:false,ocr:false,pages:4,img:false,dup:false,hash:"12f8b3c7d90e45a6b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4",
+  snippet:"Board minutes: reviewed railway bridge inspection findings, approved budget for corrosion remediation on bearing plates, noted duplicate archive copies to be merged.",
+  content:["MINUTES — Board meeting 25 Oct 2024. The board reviewed railway bridge inspection findings for structure RC-114.","Approved budget for corrosion remediation on bearing plates; noted duplicate archive copies to be merged after SHA-256 verification."]},
+ {id:10,name:"Employee_Handbook_2023.pdf",type:"pdf",folder:"HR",path:"C:\\Documents\\HR",bytes:3.1*MB,modified:"2023-05-02",created:"2023-05-02",tags:["hr","policy"],fav:false,ocr:false,pages:64,img:false,dup:true,hash:"d4e5f6a7b8c90123456789abcdef0123456789abcdef0123456789abcdef0123",
+  snippet:"Company policies, leave, and code of conduct. Duplicate detected: identical SHA-256 hash to the copy stored in the HR archive share.",
+  content:["EMPLOYEE HANDBOOK 2023 — Policies, leave entitlements and code of conduct.","Section 7 — Records retention: inspection reports are retained 10 years.","Duplicate file detected by SHA-256 content hash; consider merging copies."]},
+ {id:11,name:"Site_Photo_Platform_3.jpg",type:"jpg",folder:"Scans",path:"C:\\Documents\\Scans",bytes:3.6*MB,modified:"2024-07-08",created:"2024-07-08",tags:["railway","photo"],fav:false,ocr:true,pages:1,img:true,dup:false,hash:"0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef0123456789",
+  snippet:"OCR from platform signage photo: 'Mind the gap — Platform 3, Elm Creek railway station.' Inspection stencil dated 2024-06 visible on the column base.",
+  content:["IMAGE OCR — Signage text: 'Mind the gap. Platform 3. Elm Creek railway station.'","Inspection stencil on column base reads 2024-06. Text extracted via Windows.Media.Ocr at index time."]}
+];
+const SAVED = [
+ {name:"Railway 2024 docs", q:"railway", nav:{kind:"all"}},
+ {name:"Scanned & OCR'd files", q:"type:pdf ocr", nav:{kind:"all"}},
+ {name:"Finance reports", q:"", nav:{kind:"folder", value:"Finance"}}
+];
+
+/* ================= STATE ================= */
+const state = { query:"railway inspection", nav:{kind:"all"}, sort:"relevance", selected:1, tab:"preview", extracting:false, scanSecs:42*60+15, lastScan:"18 min ago" };
+
+/* ================= HELPERS ================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtSize = b => b>=MB ? (b/MB).toFixed(1)+" MB" : Math.round(b/1024)+" KB";
+const fmtDate = d => new Date(d).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+function parseQuery(q){
+  const fields={types:[],folders:[],tags:[],ocr:false}; const words=[];
+  q.split(/\s+/).filter(Boolean).forEach(t=>{
+    if(/^type:/i.test(t)) fields.types.push(t.slice(5).toLowerCase());
+    else if(/^folder:/i.test(t)) fields.folders.push(t.slice(7).toLowerCase());
+    else if(/^tag:/i.test(t)) fields.tags.push(t.slice(4).toLowerCase());
+    else if(/^ocr$/i.test(t)||/^is:ocr$/i.test(t)) fields.ocr=true;
+    else if(/^date:/i.test(t)) fields.date=t.slice(5);
+    else if(!/^["']/.test(t)||t.length>2) words.push(t.replace(/["']/g,"").toLowerCase());
+  });
+  return {fields,words};
+}
+function hl(text,q){
+  const {words}=parseQuery(q);
+  const safe=esc(text);
+  if(!words.length) return safe;
+  const re=new RegExp("("+words.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","gi");
+  return safe.replace(re,"<mark>$1</mark>");
+}
+function scoreDoc(d,words){
+  let s=0;
+  words.forEach(w=>{
+    if(d.name.toLowerCase().includes(w)) s+=6;
+    if(d.snippet.toLowerCase().includes(w)) s+=3;
+    if(d.tags.some(t=>t.includes(w))) s+=2;
+    if(d.content.join(" ").toLowerCase().includes(w)) s+=1;
+  });
+  return s;
+}
+function filteredDocs(){
+  const {fields,words}=parseQuery(state.query);
+  let list=DOCS.filter(d=>{
+    const n=state.nav;
+    if(n.kind==="fav"&&!d.fav) return false;
+    if(n.kind==="dup"&&!d.dup) return false;
+    if(n.kind==="recent") return true;
+    if(n.kind==="type"&&d.type!==n.value) return false;
+    if(n.kind==="folder"&&d.folder!==n.value) return false;
+    if(n.kind==="tag"&&!d.tags.includes(n.value)) return false;
+    return true;
+  });
+  if(fields.types.length) list=list.filter(d=>fields.types.includes(d.type));
+  if(fields.folders.length) list=list.filter(d=>fields.folders.some(f=>d.folder.toLowerCase().includes(f)));
+  if(fields.tags.length) list=list.filter(d=>fields.tags.some(t=>d.tags.some(x=>x.includes(t))));
+  if(fields.ocr) list=list.filter(d=>d.ocr);
+  if(fields.date&&/^>/.test(fields.date)){const cut=fields.date.slice(1);list=list.filter(d=>d.modified>cut);}
+  if(words.length){
+    list=list.filter(d=>{
+      const hay=(d.name+" "+d.snippet+" "+d.tags.join(" ")+" "+d.folder+" "+d.content.join(" ")).toLowerCase();
+      return words.every(w=>hay.includes(w));
+    });
+  }
+  const s=state.sort;
+  if(s==="relevance") list.sort((a,b)=>scoreDoc(b,words)-scoreDoc(a,words)||b.modified.localeCompare(a.modified));
+  if(s==="newest") list.sort((a,b)=>b.modified.localeCompare(a.modified));
+  if(s==="oldest") list.sort((a,b)=>a.modified.localeCompare(b.modified));
+  if(s==="size") list.sort((a,b)=>b.bytes-a.bytes);
+  if(s==="name") list.sort((a,b)=>a.name.localeCompare(b.name));
+  if(state.nav.kind==="recent") list=list.slice(0,5);
+  return list;
+}
+const TYPE_META={pdf:{c:"#d93025",l:"PDF"},docx:{c:"#185abd",l:"DOC"},xlsx:{c:"#107c41",l:"XLS"},pptx:{c:"#c43e1c",l:"PPT"},png:{c:"#7719aa",l:"IMG"},jpg:{c:"#7719aa",l:"IMG"}};
+function fileIcon(t,w){
+  const m=TYPE_META[t]||{c:"#767676",l:"FILE"}; w=w||26;
+  return '<svg width="'+w+'" height="'+(w*44/36)+'" viewBox="0 0 36 44"><path d="M3 4a3 3 0 0 1 3-3h18l10 10v29a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z" fill="'+m.c+'"/><path d="M24 1l10 10h-8a2 2 0 0 1-2-2z" fill="rgba(255,255,255,.4)"/><text x="18" y="31" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#fff">'+m.l+'</text></svg>';
+}
+const IC={
+ star:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
+ starF:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
+ home:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>',
+ clock:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
+ dup:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+ folder:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+ tag:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M20.6 13.4 12 22 2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor"/></svg>',
+ save:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
+ open:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>',
+ locate:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="14" r="2.5"/></svg>'
+};
+
+/* ================= SIDEBAR ================= */
+function renderSidebar(){
+  const cnt={all:DOCS.length,fav:DOCS.filter(d=>d.fav).length,dup:DOCS.filter(d=>d.dup).length};
+  const folders={},types={},tags={};
+  DOCS.forEach(d=>{folders[d.folder]=(folders[d.folder]||0)+1;types[d.type]=(types[d.type]||0)+1;d.tags.forEach(t=>tags[t]=(tags[t]||0)+1);});
+  const act=(k,v)=>state.nav.kind===k&&(!v||state.nav.value===v)?"active":"";
+  let h='<div class="sb-label">Library</div>';
+  h+='<button class="sb-item '+act("all")+'" data-nav="all">'+IC.home+'<span>All Documents</span><span class="cnt">'+cnt.all+'</span></button>';
+  h+='<button class="sb-item '+act("fav")+'" data-nav="fav">'+IC.star+'<span>Favorites</span><span class="cnt">'+cnt.fav+'</span></button>';
+  h+='<button class="sb-item '+act("recent")+'" data-nav="recent">'+IC.clock+'<span>Recently Modified</span></button>';
+  h+='<button class="sb-item '+act("dup")+'" data-nav="dup">'+IC.dup+'<span>Duplicates</span><span class="cnt">'+cnt.dup+'</span></button>';
+  h+='<div class="sb-label">Indexed Folders</div>';
+  Object.keys(folders).sort().forEach(f=>{h+='<button class="sb-item '+act("folder",f)+'" data-nav="folder" data-val="'+f+'">'+IC.folder+'<span class="fname">'+f+'</span><span class="cnt">'+folders[f]+'</span></button>';});
+  h+='<div class="sb-label">File Types</div>';
+  Object.keys(types).sort().forEach(t=>{h+='<button class="sb-item '+act("type",t)+'" data-nav="type" data-val="'+t+'"><span style="display:grid;place-items:center;width:15px">'+fileIcon(t,11)+'</span><span>'+(TYPE_META[t]?TYPE_META[t].l.toUpperCase():t.toUpperCase())+'</span><span class="cnt">'+types[t]+'</span></button>';});
+  h+='<div class="sb-label">Tags</div>';
+  const tagColors=["#4cc2ff","#6ccb9f","#ffcf6b","#ff99a4","#b18aff","#7ad7f0","#ffd7a1"];
+  Object.keys(tags).sort().forEach((t,i)=>{h+='<button class="sb-item '+act("tag",t)+'" data-nav="tag" data-val="'+t+'"><span class="dot" style="background:'+tagColors[i%tagColors.length]+'"></span><span>#'+t+'</span><span class="cnt">'+tags[t]+'</span></button>';});
+  h+='<div class="sb-label">Saved Searches</div>';
+  SAVED.forEach((s,i)=>{h+='<button class="sb-item" data-saved="'+i+'">'+IC.save+'<span class="fname">'+s.name+'</span></button>';});
+  h+='<div class="sb-card"><h4>'+IC.dup.replace('width="15"','width="13"').replace('height="15"','height="13"')+' Index Health</h4><p>12,847 files · 23.4 GB scanned<br>FTS5 index 84 MB · SHA-256 dedupe on<br>Auto-scan every 60 min</p><div class="row"><button class="mini-btn" id="sbBackup">Backup</button><button class="mini-btn" id="sbRestore">Restore</button></div></div>';
+  $("#sidebar").innerHTML=h;
+}
+
+/* ================= RESULTS ================= */
+const TITLES={all:"All Documents",fav:"Favorites",recent:"Recently Modified",dup:"Duplicates"};
+function renderResults(){
+  const list=filteredDocs();
+  const {fields,words}=parseQuery(state.query);
+  const n=state.nav;
+  $("#resTitle").textContent = n.kind==="all" ? (words.length||fields.types.length||fields.folders.length||fields.tags.length||fields.ocr ? "Search Results" : "All Documents") : (TITLES[n.kind]||n.value);
+  $("#resMeta").textContent = list.length+" result"+(list.length===1?"":"s")+(state.query.trim()?" · "+(0.02+Math.random()*0.05).toFixed(2)+"s":"");
+  let chips="";
+  if(n.kind!=="all") chips+='<span class="chip">'+esc(TITLES[n.kind]||n.value)+'<button data-clearnav="1" title="Clear">✕</button></span>';
+  fields.types.forEach(t=>chips+='<span class="chip">type:'+esc(t)+'<button data-clearfield="type:'+t+'" title="Clear">✕</button></span>');
+  fields.folders.forEach(t=>chips+='<span class="chip">folder:'+esc(t)+'<button data-clearfield="folder:'+t+'" title="Clear">✕</button></span>');
+  fields.tags.forEach(t=>chips+='<span class="chip">tag:'+esc(t)+'<button data-clearfield="tag:'+t+'" title="Clear">✕</button></span>');
+  if(fields.ocr) chips+='<span class="chip">OCR only<button data-clearfield="ocr" title="Clear">✕</button></span>';
+  $("#chips").innerHTML=chips;
+
+  if(!list.length){
+    $("#resultsList").innerHTML='<div class="empty"><div class="big">🔍</div><h3>No results found</h3><p>Try different keywords, or check that the folder is indexed.<br>Tip: use <b>type:pdf</b>, <b>folder:Railway</b> or <b>tag:invoice</b> to narrow down.</p></div>';
+    return;
+  }
+  $("#resultsList").innerHTML=list.map((d,i)=>{
+    const badges=(d.ocr?'<span class="badge ocr">OCR</span>':"")+(d.dup?'<span class="badge dup">Duplicate</span>':"")+(d.fav?'<span class="badge fav">'+IC.starF+'</span>':"");
+    return '<div class="result'+(d.id===state.selected?" selected":"")+'" data-id="'+d.id+'" style="animation-delay:'+(i*0.03)+'s">'
+      +'<div class="r-icon">'+fileIcon(d.type)+'</div>'
+      +'<div style="min-width:0"><div class="r-title"><span class="nm">'+hl(d.name,state.query)+'</span>'+badges+'</div>'
+      +'<div class="r-path">'+esc(d.path)+'\\'+esc(d.name)+'</div>'
+      +'<div class="r-snip">'+hl(d.snippet,state.query)+'</div></div>'
+      +'<div class="r-meta"><button class="star-btn'+(d.fav?" on":"")+'" data-star="'+d.id+'" title="Favorite">'+(d.fav?IC.starF:IC.star)+'</button><span>'+fmtDate(d.modified)+'</span><span>'+fmtSize(d.bytes)+'</span></div>'
+      +'</div>';
+  }).join("");
+}
+
+/* ================= PREVIEW ================= */
+function renderPreview(){
+  const d=DOCS.find(x=>x.id===state.selected);
+  if(!d){$("#preview").innerHTML='<div class="empty"><div class="big">📄</div><h3>Nothing selected</h3><p>Select a result to preview it.</p></div>';return;}
+  const tab=state.tab;
+  let body="";
+  if(tab==="preview"){
+    body+='<div class="paper">'+(d.img
+      ? '<img src="'+SCAN_IMG+'" alt="scanned page"><span class="ocr-tag">OCR LAYER · WINDOWS.MEDIA.OCR</span><div class="ocr-overlay"></div>'
+      : '<div class="paper-text"><h4>'+esc(d.name.split(/[._]/)[0].toUpperCase())+'</h4>'+d.content.map(p=>"<p>"+hl(p,state.query)+"</p>").join("")+'</div>')+'</div>';
+  } else if(tab==="text"){
+    body+='<div class="paper"><div class="paper-text"><h4>EXTRACTED TEXT — '+d.pages+' PAGE'+(d.pages>1?"S":"")+'</h4>'+d.content.map(p=>"<p>"+hl(p,state.query)+"</p>").join("")+(d.ocr?'<p style="opacity:.55;font-size:10px">— OCR confidence '+(93+(d.id%6))+'.'+(d.id%10)+'% · engine Windows.Media.Ocr ('+(d.type==="png"||d.type==="jpg"?"image":"en")+')</p>':"")+'</div></div>';
+  } else {
+    body+='<dl class="meta-grid">'
+      +'<dt>Type</dt><dd>'+d.type.toUpperCase()+(d.ocr?" · OCR'd":"")+'</dd>'
+      +'<dt>Size</dt><dd>'+fmtSize(d.bytes)+' · '+d.pages+' page'+(d.pages>1?"s":"")+'</dd>'
+      +'<dt>Modified</dt><dd>'+fmtDate(d.modified)+'</dd>'
+      +'<dt>Location</dt><dd class="mono">'+esc(d.path)+'\\'+esc(d.name)+'</dd>'
+      +'<dt>SHA-256</dt><dd class="mono">'+d.hash.slice(0,32)+'…</dd>'
+      +'<dt>OCR engine</dt><dd>'+(d.ocr?"Windows.Media.Ocr (WinRT)":"—")+'</dd>'
+      +'<dt>BM25 rank</dt><dd>#'+(1+DOCS.indexOf(d))+' in current result set</dd>'
+      +'<dt>Duplicate</dt><dd>'+(d.dup?"Yes — identical SHA-256 in index":"No")+'</dd>'
+      +'</dl>';
+  }
+  $("#preview").innerHTML=
+    '<div class="pv-head"><div class="r-icon">'+fileIcon(d.type,24)+'</div>'
+    +'<div style="min-width:0"><div class="pv-title">'+esc(d.name)+'</div><div class="pv-path">'+esc(d.path)+'</div></div>'
+    +'<div class="pv-actions"><button class="icon-btn" data-act="open" title="Open with default app">'+IC.open+'</button><button class="icon-btn" data-act="locate" title="Show in folder">'+IC.locate+'</button><button class="icon-btn'+(d.fav?" on":"")+'" data-act="star" title="Favorite" style="'+(d.fav?"color:var(--warn)":"")+'">'+(d.fav?IC.starF:IC.star)+'</button></div></div>'
+    +'<div class="pv-tabs">'
+    +'<button class="pv-tab'+(tab==="preview"?" active":"")+'" data-tab="preview">Preview</button>'
+    +'<button class="pv-tab'+(tab==="text"?" active":"")+'" data-tab="text">Extracted Text</button>'
+    +'<button class="pv-tab'+(tab==="details"?" active":"")+'" data-tab="details">Details</button></div>'
+    +'<div class="pv-body">'+body
+    +'<div class="pv-sec"><h5>Tags <span class="save-flash" id="tagFlash">added ✓</span></h5><div class="tag-row">'+d.tags.map(t=>'<span class="tag">#'+esc(t)+'<button data-rmtag="'+esc(t)+'" title="Remove">✕</button></span>').join("")+'<input class="tag-add" id="tagAdd" placeholder="+ add tag"></div></div>'
+    +'<div class="pv-sec"><h5>Notes <span class="save-flash" id="noteFlash">saved ✓</span></h5><textarea class="notes-area" id="notesArea" placeholder="Add a private note — stored locally in the index…">'+esc(d.notes||"")+'</textarea></div>'
+    +'</div>';
+}
+
+/* ================= STATUS BAR ================= */
+function renderStatus(){
+  const m=Math.floor(state.scanSecs/60), s=String(state.scanSecs%60).padStart(2,"0");
+  if(state.extracting){
+    $("#statusbar").innerHTML='<span class="st-item"><span class="st-dot" style="background:var(--warn);box-shadow:0 0 6px var(--warn)"></span>Extracting content… '+state.exDone+'/12 files · OCR '+(state.exOcr||0)+'/3</span><span class="prog"><i style="width:'+(state.exDone/12*100)+'%"></i></span><span class="st-right"><span>SQLite FTS5 · BM25</span><span>v1.3.0</span></span>';
+  } else {
+    $("#statusbar").innerHTML='<span class="st-item"><span class="st-dot"></span>Offline — your data never leaves this machine</span><span class="st-item">12,847 files indexed</span><span class="st-item">FTS5 84 MB</span><span class="st-item">OCR: Windows.Media.Ocr</span><span class="st-right"><span>Last scan '+state.lastScan+'</span><span>Auto-scan in '+m+':'+s+'</span><span>v1.3.0</span></span>';
+  }
+}
+
+/* ================= TOASTS ================= */
+function toast(title,msg,color,icon){
+  const el=document.createElement("div");
+  el.className="toast";
+  el.innerHTML='<div class="t-ic" style="background:color-mix(in srgb,'+color+' 15%,transparent);color:'+color+'">'+icon+'</div><div><h6>'+title+'</h6><p>'+msg+'</p></div>';
+  $("#toasts").appendChild(el);
+  setTimeout(()=>{el.classList.add("out");setTimeout(()=>el.remove(),320);},4200);
+}
+
+/* ================= EVENTS ================= */
+$("#sidebar").addEventListener("click",e=>{
+  const saved=e.target.closest("[data-saved]");
+  if(saved){const s=SAVED[+saved.dataset.saved];state.nav={...s.nav};state.query=s.q;$("#searchInput").value=s.q;$("#searchClear").classList.toggle("show",!!s.q);renderAll();toast("Saved search applied","“"+s.name+"” — filters restored from your local profile.","var(--accent)",IC.save);return;}
+  if(e.target.closest("#sbBackup")){toast("Backup created","docusearch-backup-2024-12-18.zip — database, tags, notes & saved searches.","var(--ok)",IC.save);return;}
+  if(e.target.closest("#sbRestore")){toast("Restore","Choose a backup archive to restore the index from.","var(--accent)",IC.save);return;}
+  const item=e.target.closest("[data-nav]");
+  if(item){state.nav={kind:item.dataset.nav,value:item.dataset.val||null};renderAll();}
+});
+$("#resultsList").addEventListener("click",e=>{
+  const star=e.target.closest("[data-star]");
+  if(star){const d=DOCS.find(x=>x.id===+star.dataset.star);d.fav=!d.fav;renderSidebar();renderResults();renderPreview();return;}
+  const row=e.target.closest("[data-id]");
+  if(row){state.selected=+row.dataset.id;state.tab="preview";renderResults();renderPreview();}
+});
+$("#chips").addEventListener("click",e=>{
+  const cn=e.target.closest("[data-clearnav]");
+  if(cn){state.nav={kind:"all"};renderAll();return;}
+  const cf=e.target.closest("[data-clearfield]");
+  if(cf){state.query=state.query.split(/\s+/).filter(t=>t!==cf.dataset.clearfield&&!(cf.dataset.clearfield==="ocr"&&/^ocr$/i.test(t))).join(" ").trim();$("#searchInput").value=state.query;$("#searchClear").classList.toggle("show",!!state.query);renderAll();}
+});
+$("#preview").addEventListener("click",e=>{
+  const t=e.target.closest("[data-tab]");
+  if(t){state.tab=t.dataset.tab;renderPreview();return;}
+  const a=e.target.closest("[data-act]");
+  if(a){const d=DOCS.find(x=>x.id===state.selected);
+    if(a.dataset.act==="open") toast("Opening file",d.name+" — launched with the default Windows handler (mock).","var(--accent)",IC.open);
+    if(a.dataset.act==="locate") toast("Show in folder","Explorer → "+d.path+" (mock).","var(--accent)",IC.locate);
+    if(a.dataset.act==="star"){d.fav=!d.fav;renderSidebar();renderResults();renderPreview();}
+    return;}
+  const rm=e.target.closest("[data-rmtag]");
+  if(rm){const d=DOCS.find(x=>x.id===state.selected);d.tags=d.tags.filter(t=>t!==rm.dataset.rmtag);renderSidebar();renderPreview();}
+});
+$("#preview").addEventListener("keydown",e=>{
+  if(e.target.id==="tagAdd"&&e.key==="Enter"){
+    const v=e.target.value.trim().toLowerCase().replace(/^#/,"");
+    if(v){const d=DOCS.find(x=>x.id===state.selected);if(!d.tags.includes(v))d.tags.push(v);renderSidebar();renderPreview();const f=$("#tagFlash");if(f)f.classList.add("show");setTimeout(()=>{const g=$("#tagFlash");if(g)g.classList.remove("show");},1200);const inp=$("#tagAdd");if(inp)inp.focus();}
+  }
+});
+$("#preview").addEventListener("input",e=>{
+  if(e.target.id==="notesArea"){const d=DOCS.find(x=>x.id===state.selected);d.notes=e.target.value;const f=$("#noteFlash");if(f){f.classList.add("show");clearTimeout(f._t);f._t=setTimeout(()=>f.classList.remove("show"),1100);}}
+});
+const input=$("#searchInput");
+input.addEventListener("input",()=>{state.query=input.value;$("#searchClear").classList.toggle("show",!!input.value);renderResults();renderPreview();});
+input.addEventListener("focus",()=>$("#syntaxPanel").classList.add("open"));
+input.addEventListener("blur",()=>setTimeout(()=>$("#syntaxPanel").classList.remove("open"),160));
+$("#syntaxPanel").addEventListener("mousedown",e=>{
+  const b=e.target.closest("[data-q]");
+  if(b){e.preventDefault();const q=b.dataset.q;state.query=state.query?state.query+" "+q:q;input.value=state.query;$("#searchClear").classList.add("show");input.focus();renderResults();renderPreview();}
+});
+$("#searchClear").addEventListener("click",()=>{input.value="";state.query="";$("#searchClear").classList.remove("show");renderResults();renderPreview();input.focus();});
+$("#sortSel").addEventListener("change",e=>{state.sort=e.target.value;renderResults();});
+document.addEventListener("keydown",e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();input.focus();input.select();}
+  if(e.key==="Escape"&&document.activeElement===input){input.blur();$("#syntaxPanel").classList.remove("open");}
+});
+$("#themeBtn").addEventListener("click",()=>{
+  const html=document.documentElement;
+  const next=html.dataset.theme==="dark"?"light":"dark";
+  html.dataset.theme=next;
+  $("#iconMoon").style.display=next==="dark"?"block":"none";
+  $("#iconSun").style.display=next==="light"?"block":"none";
+  toast("Theme switched","Fluent "+(next==="dark"?"dark":"light")+" theme applied — per-monitor DPI crisp rendering.","var(--accent)",IC.star);
+});
+$("#addFolderBtn").addEventListener("click",()=>toast("Add Folder to Index","Native folder picker (mock). New folders are scanned immediately, then hourly.","var(--accent)",IC.folder));
+$("#backupBtn").addEventListener("click",()=>toast("Backup created","docusearch-backup-2024-12-18.zip — includes database, tags, notes, saved searches.","var(--ok)",IC.save));
+$("#extractBtn").addEventListener("click",()=>{
+  if(state.extracting)return;
+  state.extracting=true;state.exDone=0;state.exOcr=0;
+  $("#extractBtn").disabled=true;
+  renderStatus();
+  const iv=setInterval(()=>{
+    state.exDone++;
+    if([4,8,12].includes(state.exDone))state.exOcr++;
+    if(state.exDone>=12){
+      clearInterval(iv);state.extracting=false;state.lastScan="just now";state.scanSecs=3600;$("#extractBtn").disabled=false;
+      renderStatus();
+      toast("Content extraction complete","12 files processed · 3 scanned pages OCR'd via Windows.Media.Ocr · FTS5 index updated.","var(--ok)",'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>');
+    } else renderStatus();
+  },300);
+});
+const mq=window.matchMedia("(max-width:820px)");
+function mqSync(){$("#sbToggle").style.display=mq.matches?"grid":"none";if(!mq.matches)document.body.classList.remove("sb-open");}
+mq.addEventListener("change",mqSync);mqSync();
+$("#sbToggle").addEventListener("click",()=>document.body.classList.toggle("sb-open"));
+setInterval(()=>{if(!state.extracting){state.scanSecs--;if(state.scanSecs<0)state.scanSecs=3600;renderStatus();}},1000);
+
+/* ================= INIT ================= */
+function renderAll(){renderSidebar();renderResults();renderPreview();}
+input.value=state.query;$("#searchClear").classList.add("show");
+renderAll();renderStatus();
+setTimeout(()=>toast("Welcome to DocuSearch","Index is up to date — 12,847 files, 84 MB FTS5. Completely offline, no telemetry.","var(--ok)",'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2 3 7v6c0 5 4 8 9 9 5-1 9-4 9-9V7z"/></svg>'),700);
+</script>
+</body>
+</html>

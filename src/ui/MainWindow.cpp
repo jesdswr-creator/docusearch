@@ -847,32 +847,41 @@ void MainWindow::buildStatusBar() {
 
 void MainWindow::applyTheme() {
     // ════════════════════════════════════════════════════════════════
-    // "Pastel Pop Pro" — 4 swappable palettes, refined Win11 design.
-    //   0 = Lavender (light)   — soft purple-blue accents
-    //   1 = Mint     (light)   — emerald-teal accents
-    //   2 = Peach    (light)   — coral-orange accents
-    //   3 = Midnight (dark)    — deep indigo + neon-blue accents
+    // Fluent Design — 2 swappable palettes (light + dark).
+    //   0 = Fluent Light   — warm mica #f2f1ee + accent #0067c0 (Win11 blue)
+    //   1 = Fluent Dark    — dark mica #1c1c1c + accent #4cc2ff (Win11 cyan)
     //
-    // Refinements over the original Pastel Pop:
-    //   • Subtle gradient accents on primary CTAs (search, add folder)
-    //   • Refined typography hierarchy (500/600/700/800 used strategically)
-    //   • Smoother hover states (subtle color lift, no jarring darkening)
-    //   • Better elevation via subtle gradient backgrounds + inset borders
-    //   • Thinner semi-transparent scrollbars (auto-reveal on hover)
-    //   • Polished status bar with gradient pill on OCR indicator
-    //   • Refined progress bar with gradient chunk
-    //   • Better tooltips (rounded, subtle border, elevated)
-    //   • True dark mode (Midnight) with elevated surface tiers
+    // Based on docs/ui-design-reference.html (Fluent Design tokens).
+    // Replaces the previous 4-palette Pastel Pop system — that design
+    // felt too "kid-friendly" for a $9.99 commercial product.
+    //
+    // The new palette uses the same field names as the previous Pastel
+    // Pop (bg / surface / primary / etc.) so the existing QSS structure
+    // continues to work — only the color values changed.
     // ════════════════════════════════════════════════════════════════
 
-    // Fixed candy accents — slightly desaturated in dark mode for less
-    // glare on the elevated dark surfaces.
+    // ════════════════════════════════════════════════════════════════
+    // Fluent Design — 2 swappable palettes (light + dark).
+    //   0 = Fluent Light   — warm mica #f2f1ee + accent #0067c0 (Win11 blue)
+    //   1 = Fluent Dark    — dark mica #1c1c1c + accent #4cc2ff (Win11 cyan)
+    //
+    // Based on docs/ui-design-reference.html (Fluent Design tokens).
+    // Replaces the previous 4-palette Pastel Pop system — that design
+    // felt too "kid-friendly" for a $9.99 commercial product.
+    //
+    // The new palette uses the same field names as the previous Pastel
+    // Pop (bg / surface / primary / etc.) so the existing QSS structure
+    // continues to work — only the color values changed.
+    // ════════════════════════════════════════════════════════════════
+
+    // Fluent accent-styled candy colors for file-type icons. Slightly
+    // different per palette for readability on the contrasting surfaces.
     QString cPdf, cDocx, cXlsx, cMd, cTxt;
     QString success, warn, pink, orange, sky, violet;
     QString cPdfBg, cDocxBg, cXlsxBg, cMdBg, cTxtBg;
     QString tooltipBg, tooltipText;
 
-    // Swappable palette tokens
+    // Fluent palette tokens (same names as before so QSS works unchanged).
     QString bg, surface, surface2, surface3, field, border, border2, hover, hoverSoft, text, muted;
     QString primary, primaryStrong, primarySoft, primaryBorder, primaryGlow;
     QString shadow, elevation1, elevation2;
@@ -880,59 +889,63 @@ void MainWindow::applyTheme() {
     bool isDark = false;
 
     switch (pastelTheme_) {
-        case 1: // Mint (light)
-            bg = "#f1faf6"; surface = "#ffffff"; surface2 = "#f8fcfa"; surface3 = "#f0f8f3";
-            field = "#fdfffe"; border = "#dcefe5"; border2 = "#c5e3d2"; hover = "#e9f7f0"; hoverSoft = "#f3fbf7";
-            text = "#1f3a32"; muted = "#6b8580";
-            primary = "#209972"; primaryStrong = "#177d5c"; primarySoft = "#e0f6ec";
-            primaryBorder = "#b5e6d2"; primaryGlow = "#3fbf8f";
-            shadow = "#1a2a2410"; elevation1 = "#ffffff"; elevation2 = "#f5fbf8";
-            tooltipBg = "#1f3a32"; tooltipText = "#ffffff";
-            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
-            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
-            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
-            themeLabel = "Mint";
-            break;
-        case 2: // Peach (light)
-            bg = "#fff6f1"; surface = "#ffffff"; surface2 = "#fffbf8"; surface3 = "#fff2eb";
-            field = "#fffefd"; border = "#f8e3d7"; border2 = "#f0c9b3"; hover = "#fdefe6"; hoverSoft = "#fef7f0";
-            text = "#3a1f12"; muted = "#8a6555";
-            primary = "#e0684c"; primaryStrong = "#c9553b"; primarySoft = "#ffe9e0";
-            primaryBorder = "#ffcdbb"; primaryGlow = "#ff8c69";
-            shadow = "#3a1f1210"; elevation1 = "#ffffff"; elevation2 = "#fff5ef";
-            tooltipBg = "#3a1f12"; tooltipText = "#ffffff";
-            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
-            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
-            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
-            themeLabel = "Peach";
-            break;
-        case 3: // Midnight (dark)
+        case 1: // Fluent Dark
             isDark = true;
-            bg = "#0a0a12"; surface = "#13131e"; surface2 = "#1a1a28"; surface3 = "#222234";
-            field = "#1a1a28"; border = "#2a2a3d"; border2 = "#3a3a52"; hover = "#252538"; hoverSoft = "#1d1d2e";
-            text = "#e8e8f0"; muted = "#8a8aa0";
-            primary = "#6c7cf5"; primaryStrong = "#8b8fff"; primarySoft = "#252548";
-            primaryBorder = "#3a3a72"; primaryGlow = "#a5b4ff";
-            shadow = "#00000040"; elevation1 = "#1a1a28"; elevation2 = "#222234";
-            tooltipBg = "#1a1a28"; tooltipText = "#e8e8f0";
-            // Candy accents slightly desaturated for dark-mode readability
-            cPdf="#f87171"; cDocx="#60a5fa"; cXlsx="#34d399"; cMd="#c084fc"; cTxt="#22d3ee";
-            cPdfBg="#3d1818"; cDocxBg="#172554"; cXlsxBg="#0f3d2e"; cMdBg="#3b1a5e"; cTxtBg="#0d3b45";
-            success="#4ade80"; warn="#fb923c"; pink="#f472b6"; orange="#fb923c"; sky="#38bdf8"; violet="#a78bfa";
-            themeLabel = "Midnight";
+            // Direct from docs/ui-design-reference.html dark tokens.
+            bg        = "#1c1c1c";   // --mica
+            surface   = "#262626";   // --surface
+            surface2  = "#2d2d2d";   // --card
+            surface3  = "#333333";   // --card-2
+            field     = "#2d2d2d";   // --card
+            border    = "#2e2e2e";   // rgba(255,255,255,.085) ≈ #2e2e2e on #1c1c1c
+            border2   = "#3a3a3a";   // rgba(255,255,255,.16)
+            hover     = "#2d2d2d";   // rgba(255,255,255,.055)
+            hoverSoft = "#2a2a2a";
+            text      = "#f5f5f5";
+            muted     = "#a9a9a9";
+            primary        = "#4cc2ff";   // --accent (Win11 cyan)
+            primaryStrong  = "#67d4ff";   // --accent-strong
+            primarySoft    = "#1f2d3a";   // rgba(76,194,255,.14)
+            primaryBorder  = "#3a6477";   // rgba(76,194,255,.30)
+            primaryGlow    = "#4cc2ff";
+            shadow     = "#00000099";    // 0 8px 28px rgba(0,0,0,.45)
+            elevation1 = "#2d2d2d";
+            elevation2 = "#333333";
+            tooltipBg  = "#1c1c1c";
+            tooltipText = "#f5f5f5";
+            // File-type accent colors — kept punchy on dark surfaces.
+            cPdf="#ff99a4"; cDocx="#67d4ff"; cXlsx="#6ccb9f"; cMd="#b18aff"; cTxt="#7ad7f0";
+            cPdfBg="#3d1f24"; cDocxBg="#1f2d3a"; cXlsxBg="#1f3d2a"; cMdBg="#2d1f3d"; cTxtBg="#1f3d40";
+            success="#6ccb9f"; warn="#ffcf6b"; pink="#ff99a4"; orange="#ffcf6b"; sky="#4cc2ff"; violet="#b18aff";
+            themeLabel = "Dark";
             break;
-        default: // Lavender (light, index 0)
-            bg = "#f5f6ff"; surface = "#ffffff"; surface2 = "#fafbff"; surface3 = "#eef0fe";
-            field = "#fdfeff"; border = "#e4e7f8"; border2 = "#ccd4ff"; hover = "#eef0fe"; hoverSoft = "#f5f6ff";
-            text = "#1f1f3a"; muted = "#6b6f8a";
-            primary = "#6c7cf5"; primaryStrong = "#5563e8"; primarySoft = "#eaedff";
-            primaryBorder = "#ccd4ff"; primaryGlow = "#8b9aff";
-            shadow = "#1f1f3a10"; elevation1 = "#ffffff"; elevation2 = "#fafbff";
-            tooltipBg = "#1f1f3a"; tooltipText = "#ffffff";
-            cPdf="#ef4444"; cDocx="#3b82f6"; cXlsx="#10b981"; cMd="#a855f7"; cTxt="#06b6d4";
-            cPdfBg="#fee2e2"; cDocxBg="#dbeafe"; cXlsxBg="#d1fae5"; cMdBg="#f3e8ff"; cTxtBg="#cffafe";
-            success="#16a34a"; warn="#ea580c"; pink="#ec4899"; orange="#f97316"; sky="#0ea5e9"; violet="#8b5cf6";
-            themeLabel = "Lavender";
+        default: // Fluent Light (index 0)
+            // Direct from docs/ui-design-reference.html light tokens.
+            bg        = "#f2f1ee";   // --mica (warm light gray)
+            surface   = "#faf9f7";   // --surface
+            surface2  = "#ffffff";   // --card
+            surface3  = "#f4f4f4";    // --card-2
+            field     = "#ffffff";
+            border    = "#e1e0dc";    // rgba(0,0,0,.08)
+            border2   = "#d0cfc9";    // rgba(0,0,0,.16)
+            hover     = "#eceae5";    // rgba(0,0,0,.045)
+            hoverSoft = "#f0eeea";
+            text      = "#1b1b1b";
+            muted     = "#5c5c5c";
+            primary        = "#0067c0";   // --accent (Win11 blue)
+            primaryStrong  = "#005a9e";   // --accent-strong
+            primarySoft    = "#e0eef7";   // rgba(0,103,192,.10)
+            primaryBorder  = "#9ec5e0";   // rgba(0,103,192,.30)
+            primaryGlow    = "#0067c0";
+            shadow     = "#00000033";    // 0 10px 30px rgba(0,0,0,.14)
+            elevation1 = "#ffffff";
+            elevation2 = "#f4f4f4";
+            tooltipBg  = "#1b1b1b";
+            tooltipText = "#ffffff";
+            cPdf="#c42b1c"; cDocx="#0067c0"; cXlsx="#0f7b4a"; cMd="#8a5b00"; cTxt="#005a9e";
+            cPdfBg="#fde0dc"; cDocxBg="#dbeaf6"; cXlsxBg="#d6ecd9"; cMdBg="#f4e6cc"; cTxtBg="#d6e8f4";
+            success="#0f7b4a"; warn="#8a5b00"; pink="#c42b1c"; orange="#8a5b00"; sky="#0067c0"; violet="#6d4ea6";
+            themeLabel = "Light";
             break;
     }
 
@@ -979,7 +992,11 @@ void MainWindow::applyTheme() {
     QString s = QStringLiteral(R"(
 QWidget {
     color: @text@;
-    font-family: 'Segoe UI Variable Text','Segoe UI','Nunito',sans-serif;
+    /* Segoe UI Variable Text ships with Windows 11. Falls back to Segoe UI
+       on Win10 and to system sans-serif elsewhere. Inter (the design
+       reference's primary font) is not bundled — users can install it
+       themselves for a closer match but the experience is the same. */
+    font-family: 'Segoe UI Variable Text','Segoe UI','Inter',sans-serif;
     font-size: 13px;
     font-weight: 500;
 }
@@ -3599,11 +3616,10 @@ void MainWindow::onOpenSettings() {
 
 void MainWindow::onToggleTheme() {
     try {
-        // Cycle: Lavender (0) → Mint (1) → Peach (2) → Midnight (3) → Lavender (0)
-        // Midnight is the dark mode palette — gives users a real dark
-        // option without needing a separate UI toggle.
-        pastelTheme_ = (pastelTheme_ + 1) % 4;
-        QString names[] = {"Lavender", "Mint", "Peach", "Midnight"};
+        // Fluent Design — toggle between Light (0) and Dark (1) only.
+        // Was previously cycling 4 Pastel Pop themes — too many options.
+        pastelTheme_ = (pastelTheme_ + 1) % 2;
+        QString names[] = {"Light", "Dark"};
         saveSettings();
         applyTheme();
         statusBar()->showMessage(QString("Theme: %1").arg(names[pastelTheme_]), 2000);

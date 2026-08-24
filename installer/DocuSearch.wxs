@@ -34,7 +34,7 @@
 
   <?define ProductName       = "DocuSearch" ?>
   <?define ProductPublisher  = "DocuSearch" ?>
-  <?define ProductVersion    = "1.1.0.0" ?>
+  <?define ProductVersion    = "1.3.0.0" ?>
   <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
 
   <Package
