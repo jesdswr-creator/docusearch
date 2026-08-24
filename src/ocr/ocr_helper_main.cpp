@@ -38,10 +38,11 @@
 // ── C++/WinRT (ships with Windows 10 SDK 17763+ — no cppwinrt.exe needed) ──
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Globalization.h>          // Language::DisplayName / LanguageTag
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
 #include <winrt/Windows.Storage.h>
-#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Storage.Streams.h>        // IRandomAccessStream (for BitmapDecoder::CreateAsync)
 
 #include <windows.h>
 #include <eh.h>
@@ -149,9 +150,13 @@ static std::string OcrFile(const OcrEngine& engine, const std::string& path) {
         // WinRT way to reference a file by absolute path.
         StorageFile file = StorageFile::GetFileFromPathAsync(wpath).get();
 
+        // Open a read stream — BitmapDecoder::CreateAsync takes
+        // IRandomAccessStream, not StorageFile.
+        IRandomAccessStream stream = file.OpenReadAsync().get();
+
         // Decode into a SoftwareBitmap in BGRA8 premultiplied format.
         // BitmapDecoder handles PNG / JPEG / TIFF / BMP / GIF / WebP / HEIF.
-        BitmapDecoder decoder = BitmapDecoder::CreateAsync(file).get();
+        BitmapDecoder decoder = BitmapDecoder::CreateAsync(stream).get();
         SoftwareBitmap bitmap = decoder.GetSoftwareBitmapAsync(
             BitmapPixelFormat::Bgra8,
             BitmapAlphaMode::Premultiplied).get();
