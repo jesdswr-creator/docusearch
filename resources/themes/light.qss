@@ -1,10 +1,10 @@
 /* DocuSearch - Light theme ("Daylight") override hooks.
-   ⚠ SOURCE OF TRUTH: the authoritative QSS is generated inside
-   MainWindow::applyTheme() (src/ui/MainWindow.cpp) with @token@
-   substitution and applied via qApp->setStyleSheet().
-   This file ships only as an optional user/IT override hook — any rules
-   uncommented below are appended AFTER the built-in sheet.
-   To customise, mirror the selectors used in MainWindow::applyTheme(). */
+   ⚠ SOURCE OF TRUTH: the authoritative master sheet is
+   resources/themes/base.qss (compiled in as :/themes/base.qss), loaded
+   by MainWindow::applyTheme(), which substitutes @token@ palette values
+   and applies it via qApp->setStyleSheet(). Rules uncommented below are
+   appended after that built-in sheet.
+   To customise, mirror the selectors used in resources/themes/base.qss. */
 
 /*
 QMainWindow { background-color: #f6f7f9; }

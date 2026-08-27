@@ -56,5 +56,6 @@
         <file>icons/lucide/folder-open.svg</file>
         <file>icons/lucide/sparkles.svg</file>
         <file>icons/lucide/palette.svg</file>
+        <file>themes/base.qss</file>
     </qresource>
 </RCC>

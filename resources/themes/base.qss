@@ -1,0 +1,700 @@
+/* DocuSearch v1.5 "Modern Professional" master stylesheet.
+ *
+ * ── SOURCE OF TRUTH ─────────────────────────────────────────────
+ * This sheet is compiled into the binary as :/themes/base.qss and
+ * loaded by MainWindow::applyTheme() (src/ui/MainWindow.cpp), which
+ * substitutes the token placeholders below with the active theme's
+ * palette values, then applies it via qApp->setStyleSheet().
+ *
+ * Kept out of C++ source on purpose: MSVC error C2026 ("string too
+ * big") aborts compilation when a single string literal exceeds
+ * 65,535 bytes — a limit raw-string stylesheets can bump into once
+ * design refreshes start layering rules. Data files have no such
+ * ceiling, so the stylesheet lives here from now on.
+ *
+ * Token syntax: '@' + name + '@' — bg, surface, surface2, surface3,
+ * field, border, border2, hover, hoverSoft, text, muted, btnText,
+ * primary, primaryStrong, primarySoft, primaryBorder, primaryGlow,
+ * tooltipBg, tooltipText, success, warn, pink, orange, sky, violet,
+ * elevation1. See the substitution map in applyTheme() for the full set.
+ * Per-user/IT overrides: themes/light.qss, themes/dark.qss stubs.
+ */
+
+QWidget {
+    color: @text@;
+    /* Segoe UI Variable Text ships with Windows 11. Falls back to Segoe UI
+       on Win10 and to system sans-serif elsewhere. Inter (the design
+       reference's primary font) is not bundled — users can install it
+       themselves for a closer match but the experience is the same. */
+    font-family: 'Segoe UI Variable Text','Segoe UI','Inter',sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+}
+QMainWindow { background: @bg@; }
+
+/* ── Title bar — flat chrome shell, hairline seam ── */
+QWidget#topMenuBar {
+    background: @surface2@;
+    border-bottom: 1px solid @border@;
+}
+
+/* ── Status bar — pill-style status indicators ── */
+QStatusBar {
+    background: @surface2@;
+    border-top: 1px solid @border@;
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 600;
+}
+QStatusBar::item { border: none; }
+QStatusBar QLabel { color: @muted@; padding: 0 6px; }
+
+/* ── Search box — refined focus ring ── */
+QLineEdit {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    selection-background-color: @primary@;
+    selection-color: #ffffff;
+}
+QLineEdit:hover { border-color: @primaryBorder@; }
+QLineEdit:focus {
+    border: 1px solid @primary@;
+    background: @surface@;
+}
+QLineEdit:disabled {
+    background: @hoverSoft@;
+    color: @muted@;
+    border-color: @border@;
+}
+
+/* ── Primary button — confident accent fill, dark-or-light ink per theme ──
+   A transparent 1px base border reserves space so the :focus ring swaps
+   color without any geometry shift. Hover lifts via @primaryGlow@ which
+   stays legible against both ink choices in either mode. */
+QPushButton {
+    background: @primary@;
+    color: @btnText@;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 7px 15px;
+    font-weight: 600;
+    font-size: 13px;
+}
+QPushButton:hover {
+    background: @primaryGlow@;
+}
+QPushButton:pressed { background: @primaryStrong@; }
+QPushButton:focus { border-color: @primaryBorder@; }
+QPushButton:disabled { background: @border2@; color: @muted@; }
+
+/* ── Title bar window buttons (min/max/close) ──
+   Surface-tinted background with subtle inset border for a "button on
+   a chrome bar" look. Close hover = bright red with smooth transition. */
+QPushButton#titleBtn {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: 0; margin: 2px;
+}
+QPushButton#titleBtn:hover {
+    background: @hover@;
+    border-color: @primaryBorder@;
+}
+QPushButton#titleBtn:pressed { background: @primarySoft@; }
+QPushButton#closeBtn {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: 0; margin: 2px;
+}
+QPushButton#closeBtn:hover { background: #ef4444; border-color: #ef4444; }
+QPushButton#closeBtn:pressed { background: #dc2626; border-color: #dc2626; }
+
+/* ── App logo — accent-colored rounded square with subtle gradient ── */
+QLabel#appLogo {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 @primary@, stop:1 @primaryStrong@);
+    border-radius: 9px;
+}
+
+/* ── Metadata edit button — accent gradient ── */
+QPushButton#editBtn {
+    background: @primary@;
+    color: #ffffff; border: none;
+    border-radius: 8px; padding: 6px; min-width: 28px; min-height: 28px;
+}
+QPushButton#editBtn:hover {
+    background: @primaryStrong@;
+}
+QPushButton#editBtn:pressed { background: @primaryStrong@; }
+
+/* ── Secondary/ghost buttons (Open, Theme) — surface bg, refined hover ── */
+QPushButton#openLocationBtn, QPushButton#themeToggleBtn {
+    background: @surface@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 8px; padding: 0 12px;
+    font-size: 12px; font-weight: 700;
+}
+QPushButton#openLocationBtn:hover, QPushButton#themeToggleBtn:hover {
+    background: @hoverSoft@;
+    border-color: @primaryBorder@;
+    color: @primaryStrong@;
+}
+QPushButton#openLocationBtn:disabled, QPushButton#themeToggleBtn:disabled {
+    color: @muted@; background: @surface@;
+}
+
+/* ── AI control widget (slider pill, label, state text) ── */
+QWidget#aiControl { background: transparent; border: none; }
+QLabel#aiLabel { color: @pink@; font-weight: 800; font-size: 12px; background: transparent; }
+QLabel#aiState { color: @muted@; font-weight: 800; font-size: 11px; min-width: 24px; background: transparent; }
+
+/* ── Results list — card-style with hover lift ── */
+QWidget#resultsPanel { background: @bg@; }
+QListWidget#resultsList {
+    background: transparent;
+    border: none;
+    outline: 0;
+    padding: 4px 8px;
+}
+QListWidget#resultsList::item {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 3px 0;
+}
+QListWidget#resultsList::item:hover {
+    background: @elevation1@;
+    border-color: @primaryBorder@;
+}
+QListWidget#resultsList::item:selected {
+    background: @primarySoft@;
+    border: 1px solid @primaryBorder@;
+    border-left: 4px solid @primary@;
+    color: @primaryStrong@;
+}
+
+/* ── Top menu (pills) ── subtle hover, no stuck highlight ── */
+QListWidget#topMenuList { background: transparent; border: none; outline: none; }
+QListWidget#topMenuList::item {
+    padding: 6px 15px; border-radius: 999px; margin: 2px;
+    font-size: 12px; font-weight: 700; color: @muted@;
+}
+QListWidget#topMenuList::item:selected { background: transparent; color: @muted@; }
+QListWidget#topMenuList::item:hover { background: @hover@; color: @text@; }
+QListWidget#topMenuList::item:selected:hover { background: @hover@; color: @text@; }
+
+/* ── Tabs — refined active/inactive contrast ── */
+QTabWidget::pane {
+    border: 1px solid @border@;
+    border-radius: 12px;
+    background: @surface@;
+}
+QTabBar::tab {
+    background: @surface2@;
+    padding: 8px 16px;
+    border: 1px solid @border@;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    color: @muted@;
+    font-weight: 700;
+}
+QTabBar::tab:hover { background: @hover@; color: @text@; }
+QTabBar::tab:selected { background: @surface@; color: @primaryStrong@; font-weight: 800; }
+
+/* ── Text areas — softer borders, refined focus ── */
+QTextEdit, QPlainTextEdit, QTextBrowser {
+    background: @surface@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 12px;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    selection-background-color: @primary@;
+    selection-color: #ffffff;
+}
+QTextEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus {
+    border: 1px solid @primaryBorder@;
+}
+
+/* ── Group boxes — accent header strip ── */
+QGroupBox {
+    border: 1px solid @border@;
+    border-radius: 14px;
+    margin-top: 12px;
+    padding: 12px;
+    padding-top: 22px;
+    background: @surface@;
+    font-weight: 700;
+    color: @primaryStrong@;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+    background: @surface@;
+    color: @primaryStrong@;
+}
+
+/* ── Progress bar — gradient chunk with rounded ends ── */
+QProgressBar {
+    border: none;
+    border-radius: 4px;
+    background: @hover@;
+    text-align: center;
+    color: transparent;
+    min-height: 6px;
+    max-height: 6px;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 @primary@, stop:1 @primaryGlow@);
+    border-radius: 4px;
+    margin: 0;
+}
+
+/* ── Scrollbars — thinner, semi-transparent, hover-reveal ── */
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 4px 2px 4px 0;
+}
+QScrollBar::handle:vertical {
+    background: @border2@;
+    border-radius: 4px;
+    min-height: 32px;
+}
+QScrollBar::handle:vertical:hover {
+    background: @muted@;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:pressed {
+    background: @primary@;
+}
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0 2px 4px 0;
+}
+QScrollBar::handle:horizontal {
+    background: @border2@;
+    border-radius: 4px;
+    min-width: 32px;
+}
+QScrollBar::handle:horizontal:hover { background: @muted@; }
+QScrollBar::handle:horizontal:pressed { background: @primary@; }
+
+/* ── Inputs — refined focus ring ── */
+QSpinBox, QDoubleSpinBox, QComboBox {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
+    border-color: @primaryBorder@;
+}
+QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid @primary@;
+    background: @surface@;
+}
+QComboBox { padding-right: 28px; }
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
+QComboBox::down-arrow { image: url(:/icons/chevron-down.png); width: 12px; height: 12px; }
+QComboBox::down-arrow:hover { image: url(:/icons/chevron-down-strong.png); }
+QComboBox::down-arrow:disabled { image: url(:/icons/chevron-down.png); }
+
+/* ── Combobox popup — pill-style hover, refined elevation ── */
+QComboBox QAbstractItemView {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    outline: 0;
+    padding: 6px;
+    selection-background-color: @primarySoft@;
+    selection-color: @primaryStrong@;
+    background-color: @surface@;
+}
+QComboBox QAbstractItemView::item {
+    padding: 8px 14px;
+    min-height: 24px;
+    border-radius: 6px;
+    background: transparent;
+    color: @text@;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: @hover@;
+    color: @text@;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+}
+
+/* Generic QListView fallback — refined card style */
+QListView {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    outline: 0;
+    padding: 4px;
+}
+QListView::item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-weight: 500;
+}
+QListView::item:hover { background: @hover@; }
+QListView::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+    font-weight: 600;
+}
+
+/* ── Checkboxes / radios — accent fill, refined border ── */
+QCheckBox, QRadioButton { color: @text@; spacing: 8px; font-weight: 500; }
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid @border2@;
+    background: @field@;
+}
+QRadioButton::indicator { border-radius: 8px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {
+    border-color: @primaryBorder@;
+}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background: @primary@;
+    border-color: @primary@;
+}
+
+/* ── Metadata panel — elevated card with subtle dividers ── */
+QWidget#metadataPanel {
+    background: @surface@;
+    border-left: 1px solid @border@;
+}
+QWidget#metadataSection {
+    background: transparent;
+    border-bottom: 1px solid @hover@;
+    padding: 4px 0;
+}
+QWidget#metadataSection:last-child { border-bottom: none; }
+QLabel#metadataTitle {
+    color: @text@;
+    font-weight: 800;
+    font-size: 13px;
+    background: transparent;
+}
+QLabel#metaLabel {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    min-width: 92px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+QLabel#metaValue {
+    color: @text@;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+
+/* ── Sliders — gradient sub-page for progress feel ── */
+QSlider::groove:horizontal {
+    background: @border@;
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: @surface@;
+    border: 2px solid @primary@;
+    width: 14px; height: 14px;
+    margin: -6px 0;
+    border-radius: 8px;
+}
+QSlider::handle:horizontal:hover {
+    background: @primary@;
+    border-color: @primaryStrong@;
+}
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 @primary@, stop:1 @primaryGlow@);
+    border-radius: 2px;
+}
+
+/* ── Menus — refined elevation, pill hover ── */
+QMenu {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 8px 22px 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+QMenu::item:hover { background: @hover@; }
+QMenu::item:disabled { color: @muted@; }
+QMenu::separator {
+    height: 1px;
+    background: @border@;
+    margin: 4px 8px;
+}
+
+/* ── Tooltips — elevated with subtle border ── */
+QToolTip {
+    background: @tooltipBg@;
+    color: @tooltipText@;
+    border: 1px solid @border2@;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* ── Splitters — transparent, just a hair-thin divider on hover ── */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 1px; }
+QSplitter::handle:vertical { height: 1px; }
+QSplitter::handle:hover { background: @primarySoft@; }
+
+/* ── Labels — refined hierarchy ── */
+QLabel#indexedInfo {
+    color: @primaryStrong@;
+    font-size: 11px;
+    font-weight: 700;
+    background: @primarySoft@;
+    border: 1px solid @primaryBorder@;
+    border-radius: 999px;
+    padding: 3px 12px;
+}
+QLabel#statusReady {
+    color: @primary@;
+    font-weight: 700;
+}
+QLabel#statusInfo {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 500;
+}
+QLabel#ocrStatus {
+    color: @warn@;
+    font-weight: 700;
+    font-size: 11px;
+}
+QLabel#titleBarText {
+    color: @text@;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.2px;
+}
+
+/* ── OCR status indicator pill ──
+   The status dot + label use dynamic `status` property (ready/setup).
+   A soft pill background + colored dot gives a modern look. */
+QWidget#ocrStatusWidget {
+    background: @hoverSoft@;
+    border: 1px solid @border@;
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+QLabel#ocrDot[status="ready"] {
+    background: @success@;
+    border-radius: 4px;
+    min-width: 8px; min-height: 8px;
+    max-width: 8px; max-height: 8px;
+}
+QLabel#ocrDot[status="setup"] {
+    background: @warn@;
+    border-radius: 4px;
+    min-width: 8px; min-height: 8px;
+    max-width: 8px; max-height: 8px;
+}
+QLabel#ocrStatus[status="ready"] { color: @success@; }
+QLabel#ocrStatus[status="setup"] { color: @warn@; }
+
+/* ── Sidebar — subtle elevated card background ── */
+QWidget#sidebar {
+    background: @surface2@;
+    border-right: 1px solid @border@;
+}
+QListWidget#sidebar {
+    background: transparent;
+    border: none;
+    outline: 0;
+    padding: 8px 6px;
+}
+QListWidget#sidebar::item {
+    padding: 9px 14px;
+    border: none;
+    border-radius: 8px;
+    margin: 1px 0;
+    color: @muted@;
+    font-weight: 600;
+    font-size: 13px;
+}
+QListWidget#sidebar::item:hover {
+    background: @hover@;
+    color: @text@;
+}
+QListWidget#sidebar::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+    font-weight: 700;
+    border-left: 3px solid @primary@;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Component completeness pass — v1.5 "Modern Professional" refresh.
+   Every widget below exists at runtime but previously had NO rule
+   here: tag pills all rendered as solid primary-blue chips, the
+   status dot was an unstyled gray square, and the viewer / extract
+   drawer / search bar fell back to bare generic styles. Giving each
+   one an intentional treatment is what separates a themed demo
+   from a shippable product.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Pane containers — share the window canvas so splitters read as seams */
+QWidget#centralWidget, QWidget#filePreviewPane, QWidget#previewPane,
+QWidget#resultsPane, QWidget#metadataPane,
+QWidget#tagsNotesPane, QWidget#tagsNotesPanel { background: @bg@; }
+
+/* ── Frameless titlebar container (defensive: legacy name) ── */
+QWidget#titleBar { background: @surface2@; border-bottom: 1px solid @border@; }
+QLabel#titleLabel { font-weight: 800; font-size: 13px; background: transparent; }
+
+/* ── Search bar — chrome shell + prominent command-field ── */
+QWidget#searchBarArea { background: @surface2@; border-bottom: 1px solid @border@; }
+QLineEdit#searchInput {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 13px; font-weight: 500;
+    selection-background-color: @primary@; selection-color: @btnText@;
+}
+QLineEdit#searchInput:hover { border-color: @primaryBorder@; }
+QLineEdit#searchInput:focus { border: 1px solid @primary@; background: @surface@; }
+
+/* Sort dropdown reads as a compact filter chip, not a form control */
+QComboBox#sortSelect { padding: 4px 26px 4px 12px; font-size: 12px; }
+
+/* ── Document viewer ── */
+QWidget#viewerPanel { background: @surface@; }
+QWidget#viewerHeader { background: @surface2@; border-bottom: 1px solid @border@; }
+QLabel#viewerTitle {
+    font-size: 13px; font-weight: 700; color: @text@;
+    background: transparent;
+}
+QTextEdit#documentPage {
+    /* The paper sheet stays physical-light in BOTH modes on purpose:
+       reading surfaces do not invert with chrome — like every PDF viewer. */
+    background: #fbf9f4; color: #26303d;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 24px 28px;
+}
+QTextEdit#documentPage:focus { border: 1px solid @primaryBorder@; }
+
+/* ── Extracted-content drawer under the viewer ── */
+QWidget#extractedPanel { background: @surface2@; border-top: 1px solid @border@; }
+QWidget#extractedTabHeader { background: transparent; border-bottom: 1px solid @border@; }
+QPushButton#extractedTab {
+    background: transparent; color: @muted@;
+    border: none; border-bottom: 2px solid transparent;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 14px;
+    font-size: 12px; font-weight: 600;
+}
+QPushButton#extractedTab:hover { color: @text@; background: @hover@; }
+QPushButton#extractedTab:checked {
+    color: @primaryStrong@;
+    border-bottom: 2px solid @primary@;
+    background: transparent;
+}
+/* Open/Copy/Download inherit the accent-fill QPushButton recipe above.
+   OCR gets its own semantic-green treatment instead of echoing blue. */
+QTextEdit#extractedContent { background: @surface@; border-radius: 0; border: none; }
+QPushButton#ocrBtn { background: @success@; color: @btnText@; }
+QPushButton#ocrBtn:hover { border-color: @primaryBorder@; }
+
+/* ── Ghost icon buttons (More and friends) ── */
+QPushButton#moreActionBtn {
+    background: transparent; color: @muted@;
+    border: none; border-radius: 8px; padding: 2px;
+    min-width: 28px; min-height: 28px; max-width: 28px; max-height: 28px;
+}
+QPushButton#moreActionBtn:hover { background: @hover@; color: @text@; }
+
+/* ── Metadata tidy-ups ── */
+QLabel#metaIconLabel { background: transparent; }
+
+/* ── Tags & notes ── */
+QLabel#tagsHeader, QLabel#notesHeader {
+    font-size: 12px; font-weight: 700; color: @muted@;
+    letter-spacing: 0.4px; background: transparent;
+}
+QWidget#notesSection { background: transparent; }
+QTextEdit#notesContent {
+    background: @field@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+QTextEdit#notesContent:focus { border: 1px solid @primaryBorder@; }
+QLabel#notesModified { font-size: 10.5px; color: @muted@; background: transparent; }
+QPushButton#addTagBtn {
+    background: transparent; color: @muted@;
+    border: 1px dashed @border2@;
+    border-radius: 999px; padding: 3px 11px;
+    font-size: 11px; font-weight: 600;
+}
+QPushButton#addTagBtn:hover {
+    color: @primaryStrong@;
+    border: 1px solid @primaryBorder@;
+    background: transparent;
+}
+
+/* Tag pills — were falling through to the solid-accent QPushButton rule,
+   so ALL four classes rendered identical primary-blue. Now each class is
+   a soft tinted chip whose wash stays legible in both modes; ID
+   specificity keeps their bg stable against the generic :hover fill. */
+QPushButton#tagBlue   { background: rgba(96,165,250,0.22); color: @sky@; }
+QPushButton#tagGreen  { background: rgba(62,207,142,0.20); color: @success@; }
+QPushButton#tagYellow { background: rgba(245,191,79,0.22); color: @warn@; }
+QPushButton#tagPurple { background: rgba(177,138,255,0.22); color: @violet@; }
+QPushButton#tagBlue:hover, QPushButton#tagGreen:hover,
+QPushButton#tagYellow:hover, QPushButton#tagPurple:hover {
+    border-color: @primaryBorder@;
+}
+
+/* ── Sidebar index meter row ── */
+QWidget#indexedStatus { background: transparent; border-top: 1px solid @border@; }
+
+/* Status dot until dynamic state recolors it */
+QLabel#statusDot {
+    background: @success@; border-radius: 4px;
+    min-width: 8px; min-height: 8px; max-width: 8px; max-height: 8px;
+}
+
+/* Keyboard focus visibility for result rows */
+QListWidget#resultsList::item:focus { border-color: @primaryBorder@; }
