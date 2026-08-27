@@ -61,3 +61,11 @@ build-output.log
 ci-logs*/
 __pycache__/
 *.pyc
+
+# ── Repo hygiene (v1.5 cleanup): never track agent/workspace artifacts ──
+skills/
+worklog.md
+.env
+TEST-RESULTS*.txt
+tool-results/
+upload/
