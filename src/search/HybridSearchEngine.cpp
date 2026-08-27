@@ -70,8 +70,13 @@ float HybridSearchEngine::computeAiWeight(const QString& query) const {
     if (hasQuotedPhrase) return std::min(base, 0.20f);
     // Natural language questions → more AI.
     if (isNaturalLanguage && wordCount > 4) return std::min(base + 0.20f, 0.60f);
-    // Very short queries (1-2 words) → keyword is better.
-    if (wordCount <= 2) return std::min(base, 0.25f);
+    // Short queries (1-2 words): these dominate live-search as the user
+    // types, and the old 0.25 cap made the RRF deltas (~0.004) too small
+    // to produce any perceivable reordering — the single biggest reason
+    // toggling AI felt like a no-op. 0.35 keeps keyword relevance primary
+    // while letting chunk-level semantic matches genuinely reshuffle the
+    // tail of the result list.
+    if (wordCount <= 2) return std::min(base, 0.35f);
     return base;
 }
 
@@ -193,17 +198,20 @@ std::vector<HybridResult> HybridSearchEngine::search(
             float kwRrf  = (kwRank  < 999) ? (1.0f - aiWeight) / (K + kwRank)  : 0.0f;
             float semRrf = (semRank < 999) ? aiWeight           / (K + semRank) : 0.0f;
 
-            // Semantic-only results (not in keyword list) must clear a
-            // modest similarity bar to be included. BGE-small-en v1.5
-            // typically returns 0.45-0.60 for genuinely related docs —
-            // the OLD 0.75 cutoff filtered those out entirely, which is
-            // why AI felt dead. Phase 2 lowers this to 0.50.
+            // Semantic-only results (not in keyword list) must clear the
+            // configured similarity bar to be included. This now follows
+            // m_threshold (user-tunable via Settings, default 0.40 seeded
+            // in SemanticSettings). The previous HARDCODED 0.50 gate sat
+            // ABOVE the configured 0.40 threshold, so the DB happily
+            // returned hits the fusion layer then threw away — a classic
+            // "AI feels dead" bug: semantic-only finds were silently
+            // dropped no matter what the user configured.
             if (kwRank >= 999 && semRank < 999) {
                 float semSim = 0.0f;
                 for (const auto& sh : semanticHits) {
                     if (sh.fileId == fileId) { semSim = sh.similarity; break; }
                 }
-                if (semSim < 0.50f) {
+                if (semSim < m_threshold) {
                     continue;  // skip — not similar enough to surface standalone
                 }
             }

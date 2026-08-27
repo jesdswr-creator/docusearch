@@ -107,6 +107,15 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     hLay->addWidget(sortBox_);
     v->addWidget(header);
 
+    // ---- AI contribution summary pill (hidden until a hybrid search
+    //      reports how AI shaped the results) ----
+    aiSummaryLbl_ = new QLabel(this);
+    aiSummaryLbl_->setObjectName("aiSummaryPill");
+    aiSummaryLbl_->setTextFormat(Qt::RichText);
+    aiSummaryLbl_->setWordWrap(true);
+    aiSummaryLbl_->setVisible(false);
+    v->addWidget(aiSummaryLbl_);
+
     // ---- Results list ----
     list_ = new QListWidget(this);
     list_->setObjectName("resultsList");
@@ -170,6 +179,18 @@ void ResultsPane::clear() {
     list_->clear();
     current_.clear();
     countLbl_->setText("(0)");
+    setAiSummary(QString());
+}
+
+void ResultsPane::setAiSummary(const QString& text) {
+    if (!aiSummaryLbl_) return;
+    if (text.isEmpty()) {
+        aiSummaryLbl_->setVisible(false);
+        aiSummaryLbl_->clear();
+    } else {
+        aiSummaryLbl_->setText(text);
+        aiSummaryLbl_->setVisible(true);
+    }
 }
 
 qint64 ResultsPane::selectedFileId() const {

@@ -179,13 +179,13 @@ QListWidget#resultsList::item:selected {
     color: @primaryStrong@;
 }
 
-/* ── Top menu (pills) ── subtle hover, no stuck highlight ── */
+/* ── Top menu — momentary ACTION buttons (no tab selection state) ── */
 QListWidget#topMenuList { background: transparent; border: none; outline: none; }
 QListWidget#topMenuList::item {
-    padding: 6px 15px; border-radius: 999px; margin: 2px;
-    font-size: 12px; font-weight: 700; color: @muted@;
+    padding: 6px 14px; border-radius: 8px; margin: 2px 1px;
+    font-size: 12px; font-weight: 600; color: @muted@;
 }
-QListWidget#topMenuList::item:selected { background: transparent; color: @muted@; }
+QListWidget#topMenuList::item:selected { background: transparent; color: @text@; }
 QListWidget#topMenuList::item:hover { background: @hover@; color: @text@; }
 QListWidget#topMenuList::item:selected:hover { background: @hover@; color: @text@; }
 
@@ -573,10 +573,61 @@ QListWidget#sidebar::item:selected {
    from a shippable product.
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Pane containers — share the window canvas so splitters read as seams */
-QWidget#centralWidget, QWidget#filePreviewPane, QWidget#previewPane,
-QWidget#resultsPane, QWidget#metadataPane,
-QWidget#tagsNotesPane, QWidget#tagsNotesPanel { background: @bg@; }
+/* ── Pane distinction — three clearly separate columns ──
+   Previously every pane shared the window canvas color, so the 1px
+   splitter seams were the only boundary and the three columns melted
+   into one undifferentiated surface. Now:
+     left  (Results)  = elevated card surface @surface@
+     middle (Viewer)  = quiet canvas @bg@, document paper floats on it
+     right (Details)  = tinted chrome rail @surface2@
+   + hairline edge on the inner side of each flank + 6px splitter
+   handles (invisible until hover) for a clean grab affordance. */
+QWidget#centralWidget, QWidget#filePreviewPane, QWidget#previewPane {
+    background: @bg@;
+}
+QWidget#resultsPane {
+    background: @surface@;
+    border-right: 1px solid @border@;
+}
+QWidget#metadataPane, QWidget#metadataPanel {
+    background: @surface2@;
+    border-left: 1px solid @border@;
+}
+QWidget#tagsNotesPane, QWidget#tagsNotesPanel {
+    background: transparent;  /* inherit the details-rail tint */
+}
+
+/* ── Splitter handles — invisible seam, hover reveal ── */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:hover { background: @primarySoft@; }
+QSplitter::handle:pressed { background: @primaryBorder@; }
+
+/* ── Menu brand wordmark + separator ── */
+QWidget#menuBrand { background: transparent; }
+QLabel#brandName {
+    background: transparent;
+    color: @text@;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+}
+QFrame#menuBrandSep {
+    background: @border@;
+    border: none;
+    max-width: 1px;
+}
+
+/* ── AI contribution summary pill (above results list) ── */
+QLabel#aiSummaryPill {
+    background: @primarySoft@;
+    border: 1px solid @primaryBorder@;
+    border-radius: 8px;
+    color: @text@;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 12px;
+    margin: 0 12px 8px 12px;
+}
 
 /* ── Frameless titlebar container (defensive: legacy name) ── */
 QWidget#titleBar { background: @surface2@; border-bottom: 1px solid @border@; }

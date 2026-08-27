@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.5.0";  // v1.5: Modern Professional UI refresh (Daylight + Midnight)
+constexpr const char* kAppVersion     = "1.5.1";  // v1.5.1: splash redesign, pane distinction, menu rework, AI visibility
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

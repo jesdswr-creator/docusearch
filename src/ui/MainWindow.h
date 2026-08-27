@@ -83,6 +83,7 @@ private slots:
     void onToggleTheme();
     void onSemanticToggled(bool checked);
     void onBgeReady();
+    void onBgeFailed();
     void onBgeEmbeddingProgress(int current, int total);
     void onBgeEmbeddingFinished(int success, int fail);
     void onStartIndexing();
@@ -192,6 +193,17 @@ public:
     std::unique_ptr<BgeService>        bgeService_;
     std::unique_ptr<HybridSearchEngine> hybridSearch_;
     bool            semanticEnabled_     = false;
+    bool            aiBackfillRunning_   = false;  // batch embed in flight
+
+    // Scan SearchIndex for files with no BgeEmbeddings row and queue a
+    // batch (capped) on the background BGE worker. Called when the BGE
+    // service becomes ready AND whenever the user switches AI on, so the
+    // embedding backlog drains without any manual user action. Follow-up
+    // batches are chained from onBgeEmbeddingFinished until drained.
+    void ensureEmbeddingsBackfill();
+
+    // Persistent status chip text for the AI control (state + counts).
+    void setAiChip(const QString& text, bool active);
 
     // Right panel
     QSplitter*      rightSplitter_        = nullptr;  // metadata | tags/notes (vertical)

@@ -41,6 +41,13 @@ public:
     void appendResults(const QList<SearchHit>& hits);
     void clear();
 
+    // Persistent one-line summary of how AI shaped the CURRENT result set
+    // (e.g. "AI contributed to 7 of 21 results - 3 found by AI alone").
+    // Shown as a tinted pill under the header; hidden when text is empty.
+    // This makes the AI contribution visible without digging through the
+    // transient status-bar toast.
+    void setAiSummary(const QString& text);
+
     qint64 selectedFileId() const;
     QString selectedPath() const;
 
@@ -59,6 +66,7 @@ private:
     QListWidget* list_       = nullptr;
     QLabel*      titleLbl_   = nullptr;
     QLabel*      countLbl_   = nullptr;
+    QLabel*      aiSummaryLbl_ = nullptr;
     QComboBox*   sortBox_    = nullptr;
     QList<SearchHit> current_;
 

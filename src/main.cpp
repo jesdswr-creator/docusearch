@@ -60,9 +60,11 @@ int main(int argc, char* argv[]) {
     // splash screen, the user double-clicks the exe and sees nothing
     // for several seconds — feels broken.
     //
-    // Splash pixmap: a 440x280 rounded card in pastel primary with the
-    // DocuSearch icon + wordmark, on a transparent background. The
-    // transparent canvas means no edge bleed against the desktop.
+    // Splash pixmap: 960x600 (2x for crisp scaled displays) rounded card
+    // in the v1.5 Midnight palette — navy gradient, indigo glow, app icon,
+    // wordmark + tagline, sparkle accents. Transparent canvas around the
+    // card means no edge bleed against the desktop. Regenerate with
+    // scripts/make_splash.py.
     QPixmap splashPixmap(":/icons/splash.png");
     if (splashPixmap.isNull()) {
         // Fallback to the app icon if the splash PNG failed to load.

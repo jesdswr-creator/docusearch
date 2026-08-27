@@ -66,6 +66,7 @@
 #include <QFutureWatcher>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QFrame>
 #include <QLabel>
 #include <QPixmap>
 #include <QFuture>
@@ -550,18 +551,42 @@ void MainWindow::buildCentral() {
     centerLay->setSpacing(0);
 
     // ── Top menu bar (replaces the old left sidebar) ──────────
-    // A horizontal strip with nav buttons + indexed-status badge.
+    // [brand] | [nav action buttons] .......... [index badge]
+    // NOTE: there is intentionally NO "Search" item — the search view IS
+    // the home page (the big command field sits directly below this
+    // strip), so a clickable Search tab was dead chrome. Every remaining
+    // item is an ACTION that opens a dialog and returns to the search
+    // view, so the strip keeps no selection state.
     sidebar_ = new QWidget(centerWidget);
     sidebar_->setObjectName("topMenuBar");
     sidebar_->setFixedHeight(40);
     auto* menuBarLay = new QHBoxLayout(sidebar_);
-    menuBarLay->setContentsMargins(8, 0, 8, 0);
-    menuBarLay->setSpacing(4);
+    menuBarLay->setContentsMargins(12, 0, 8, 0);
+    menuBarLay->setSpacing(6);
 
-    // Use a QButtonGroup for mutual-exclusion nav buttons.
-    // We re-use sidebarList_ as a QListWidget for state-tracking
-    // (so existing onSidebarClicked logic keeps working) but
-    // display it as a horizontal button strip.
+    // Brand anchor: quiet wordmark only — the frameless title bar directly
+    // above already carries the 28px app glyph, so a second icon here
+    // would be duplicative.
+    auto* brand = new QWidget(sidebar_);
+    brand->setObjectName("menuBrand");
+    auto* brandLay = new QHBoxLayout(brand);
+    brandLay->setContentsMargins(0, 0, 2, 0);
+    brandLay->setSpacing(0);
+    auto* brandName = new QLabel("DocuSearch", brand);
+    brandName->setObjectName("brandName");
+    brandLay->addWidget(brandName);
+    menuBarLay->addWidget(brand);
+
+    auto* brandSep = new QFrame(sidebar_);
+    brandSep->setObjectName("menuBrandSep");
+    brandSep->setFrameShape(QFrame::VLine);
+    brandSep->setFixedHeight(18);
+    menuBarLay->addWidget(brandSep);
+
+    // Action buttons rendered as a horizontal strip. We re-use
+    // sidebarList_ as a QListWidget for state-tracking (so existing
+    // onSidebarClicked logic keeps working) but display it as a flat
+    // button row with no persistent selection.
     sidebarList_ = new QListWidget(sidebar_);
     sidebarList_->setObjectName("topMenuList");
     sidebarList_->setViewMode(QListView::ListMode);
@@ -572,23 +597,19 @@ void MainWindow::buildCentral() {
     sidebarList_->setFixedHeight(36);
     sidebarList_->setSelectionMode(QAbstractItemView::SingleSelection);
     sidebarList_->setFocusPolicy(Qt::NoFocus);
-    // topMenuList styling handled by global QSS in applyTheme()
-    // (amber accent on selected, dim on unselected). Don't set an inline
-    // stylesheet here — it would override the theme.
+    // topMenuList styling handled by global QSS in applyTheme().
+    // Items are momentary actions: after each click we clear selection,
+    // so nothing here should ever look like a selected "page".
     const QStringList navLabels = {
-        "Search", "Duplicates",
-        "Stats", "Settings", "Help", "About"
+        "Duplicates", "Stats", "Settings", "Help", "About"
     };
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
-        // Wider items so "Settings" (8 chars) fits at 10pt font.
-        item->setSizeHint(QSize(110, 28));
+        item->setSizeHint(QSize(96, 28));
         item->setTextAlignment(Qt::AlignCenter);
     }
-    if (sidebarList_->count() > 0) {
-        sidebarList_->setCurrentRow(0);
-    }
+    // No initial selection — the strip is action buttons, not tabs.
     menuBarLay->addWidget(sidebarList_, 1);
 
     // Compact indexed-status badge on the right side of the menu bar.
@@ -622,7 +643,7 @@ void MainWindow::buildCentral() {
     // 3-way splitter: results | viewer | (metadata+tags)
     mainSplitter_ = new QSplitter(Qt::Horizontal, centerWidget);
     mainSplitter_->setObjectName("mainSplitter");
-    mainSplitter_->setHandleWidth(1);
+    mainSplitter_->setHandleWidth(6);  // themed in QSS: invisible until hover
     mainSplitter_->setChildrenCollapsible(false);
     centerLay->addWidget(mainSplitter_, 1);
 
@@ -666,7 +687,7 @@ void MainWindow::buildCentral() {
 
     rightSplitter_ = new QSplitter(Qt::Vertical, rightPanelWrap);
     rightSplitter_->setObjectName("rightSplitter");
-    rightSplitter_->setHandleWidth(1);
+    rightSplitter_->setHandleWidth(6);
     rightSplitter_->setChildrenCollapsible(false);
 
     metadataPane_ = new MetadataPane(rightSplitter_);
@@ -1040,16 +1061,13 @@ void MainWindow::refreshAllIcons() {
     QColor textColor = qApp->palette().color(QPalette::Text);
     QColor whiteText("#ffffff");
 
-    // ---- Sidebar icons (each with a distinct color for premium feel) ----
+    // ---- Menu strip icons (aligned with the 5 action items) ----
+    // Order must match navLabels: Duplicates, Stats, Settings, Help, About.
     const QStringList navIcons = {
-        "search", "bookmark", "tag", "sticky-note",
-        "bar-chart-3", "settings", "help-circle", "info"
+        "duplicate", "bar-chart-3", "settings", "help-circle", "info"
     };
-    // Distinct colors for each nav item: blue, purple, green, yellow,
-    // indigo, orange, gray, teal, pink
     const QStringList navColors = {
-        "#2563eb", "#7c3aed", "#059669", "#d97706",
-        "#4f46e5", "#ea580c", "#6b7280", "#0d9488", "#db2777"
+        "#7c3aed", "#059669", "#ea580c", "#2563eb", "#0891b2"
     };
     for (int i = 0; i < sidebarList_->count() && i < navIcons.size(); ++i) {
         auto* item = sidebarList_->item(i);
@@ -1223,9 +1241,27 @@ void MainWindow::onSearch(const QString& query) {
                     .arg(aiContribCount)
                     .arg(aiOnlyCount)
                     .arg(t.elapsed()));
+            // Persistent summary pill directly above the results list —
+            // the status-bar toast disappears, this stays until the next
+            // search so users can actually SEE what AI did.
+            if (aiContribCount > 0) {
+                resultsPane_->setAiSummary(QString(
+                    "<b>AI contributed to %1 of %2 results</b>%3")
+                    .arg(aiContribCount)
+                    .arg(merged.size())
+                    .arg(aiOnlyCount > 0
+                        ? QString(" - %1 found by AI alone (no keyword match)").arg(aiOnlyCount)
+                        : QString()));
+            } else {
+                resultsPane_->setAiSummary(QString(
+                    "AI is on but found nothing semantically close enough to "
+                    "re-rank for this query - try a natural-language phrase "
+                    "like \"how to file a reimbursement claim\"."));
+            }
         } else {
             // Keyword-only search (existing behavior).
             resultsPane_->setResults(hits);
+            resultsPane_->setAiSummary(QString());
             statusBar()->showMessage(QString("%1 result%2 in %3 ms")
                                      .arg(hits.size())
                                      .arg(hits.size() == 1 ? "" : "s")
@@ -1476,13 +1512,13 @@ void MainWindow::onSidebarClicked(int row) {
     auto* item = sidebarList_->item(row);
     if (!item) return;
     const QString page = item->data(Qt::UserRole).toString();
+    // Momentary-action strip: run the action, then clear selection so
+    // the search view (the only page) remains the resting state.
+    sidebarList_->setCurrentRow(-1);
     if (page == "Settings") {
         onOpenSettings();
-        // Revert to "Search" so the user lands back on the search page.
-        sidebarList_->setCurrentRow(0);
     } else if (page == "About") {
         onAbout();
-        sidebarList_->setCurrentRow(0);
     } else if (page == "Help") {
         QMessageBox::information(this, "How to Search",
             "<h3>Search Syntax</h3>"
@@ -1508,15 +1544,12 @@ void MainWindow::onSidebarClicked(int row) {
                     QFile f(Config::instance().dbPath());
                     return Utils::formatFileSize(f.exists() ? f.size() : 0);
                 }()));
-        sidebarList_->setCurrentRow(0);
     } else if (page == "Duplicates") {
         onDetectDuplicates();
-        sidebarList_->setCurrentRow(0);
     }
-    // "Search" stays as the current page.
-    // Saved/Tags/Notes were removed from the menu — they're accessible
-    // directly: Saved Searches via the search bar dropdown, Tags/Notes
-    // in the right panel when a file is selected.
+    // Strip shows actions only — Saved/Tags/Notes are reachable directly:
+    // Saved Searches via the search bar dropdown, Tags/Notes in the right
+    // panel when a file is selected.
 }
 
 void MainWindow::refreshPreviewForSelectedFile() {
@@ -2218,7 +2251,14 @@ void MainWindow::initializeSemanticSearch() {
                 this, &MainWindow::onBgeEmbeddingFinished);
 
         QtConcurrent::run([this, dbPath, modelPath]() {
-            bgeService_->initialize(dbPath, modelPath);
+            const bool ok = bgeService_->initialize(dbPath, modelPath);
+            if (!ok) {
+                // initialize() only emits ready() on success — surface the
+                // failure so the UI can explain WHY AI is unavailable
+                // instead of leaving a forever-disabled silent switch.
+                QMetaObject::invokeMethod(this, "onBgeFailed",
+                                          Qt::QueuedConnection);
+            }
         });
 
         DS_INFO("BGE", "AI semantic search subsystem initializing in background...");
@@ -2248,15 +2288,7 @@ void MainWindow::onSemanticToggled(bool checked) {
     }
     semanticEnabled_ = checked;
     if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
-    if (aiStateLbl_) {
-        aiStateLbl_->setText(checked ? "ON" : "OFF");
-        // Color the state label: primaryStrong when on, muted when off.
-        const auto& tp = Theme::active();
-        const QString col = checked ? tp.primaryStrong : tp.muted;
-        aiStateLbl_->setStyleSheet(QString(
-            "background:transparent; color:%1; font-weight:800; font-size:11px; min-width:24px;")
-            .arg(col));
-    }
+    setAiChip(checked ? "ON" : "OFF", checked);
 
     // CRITICAL FIX: When user toggles AI ON, scan for indexed files that
     // don't have BGE embeddings yet and auto-queue them on the background
@@ -2270,58 +2302,19 @@ void MainWindow::onSemanticToggled(bool checked) {
     // way to retroactively embed files indexed before the fix.
     if (checked && bgeService_ && bgeService_->isReady()) {
         const auto stats = bgeService_->getStats();
-        // Cheap heuristic: query the Files table for any files that have
-        // been content-indexed (indexing_status = 'indexed') but whose
-        // file_id is NOT in the Embeddings table. Build a batch and
-        // send it to BgeService::embedDocumentsBatch on the worker thread.
-        sqlite3* raw = db_->raw();
-        if (raw) {
-            // Pull all (file_id, content) pairs that have a SearchIndex
-            // row but no BgeEmbeddings row. JOIN with SearchIndex to grab
-            // the extracted text at the same time (avoids a second query
-            // per file). Cap at 1000 files per batch to bound memory.
-            sqlite3_stmt* sel = nullptr;
-            sqlite3_prepare_v2(raw,
-                "SELECT s.file_id, s.content "
-                "FROM SearchIndex s "
-                "LEFT JOIN BgeEmbeddings e ON e.file_id = s.file_id "
-                "WHERE e.file_id IS NULL "
-                "  AND length(s.content) > 0 "
-                "LIMIT 1000;",
-                -1, &sel, nullptr);
-            QVector<int> fileIds;
-            QStringList texts;
-            if (sel) {
-                while (sqlite3_step(sel) == SQLITE_ROW) {
-                    const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
-                    const unsigned char* c = sqlite3_column_text(sel, 1);
-                    if (c && c[0]) {
-                        fileIds.append(fileId);
-                        texts.append(QString::fromUtf8(
-                            reinterpret_cast<const char*>(c)));
-                    }
-                }
-                sqlite3_finalize(sel);
-            }
-            const qint64 totalUnembedded = fileIds.size();
-            if (totalUnembedded > 0) {
-                statusBar()->showMessage(
-                    QString("AI: generating embeddings for %1 unembedded file%2...")
-                        .arg(totalUnembedded)
-                        .arg(totalUnembedded == 1 ? "" : "s"), 5000);
-                bgeService_->embedDocumentsBatch(fileIds, texts);
-            } else if (stats.total > 0) {
-                statusBar()->showMessage(
-                    QString("AI search enabled — %1 embeddings ready.")
-                        .arg(stats.total), 3000);
-            } else {
-                statusBar()->showMessage(
-                    "AI search enabled. Extract files to generate embeddings.",
-                    4000);
-            }
-        } else {
+        if (stats.total > 0) {
+            setAiChip(QString("%1").arg(stats.total), true);
+        }
+        // Queue any indexed-but-unembedded files on the background BGE
+        // worker (shared with the onBgeReady path; batches chain from
+        // onBgeEmbeddingFinished until the backlog is drained).
+        ensureEmbeddingsBackfill();
+        if (!aiBackfillRunning_) {
             statusBar()->showMessage(
-                checked ? "AI search enabled." : "AI search disabled.", 3000);
+                stats.total > 0
+                    ? QString("AI search enabled — %1 embeddings ready.").arg(stats.total)
+                    : "AI search enabled. Extract files to generate embeddings.",
+                3000);
         }
     } else {
         statusBar()->showMessage(
@@ -2342,19 +2335,122 @@ void MainWindow::onBgeReady() {
     if (hybridSearch_) {
         hybridSearch_->setBgeService(bgeService_.get());
     }
+    // Persistent chip: show embedding coverage, not just "ready". Skip if
+    // the auto-enable above already kicked off a backfill — its progress
+    // text ("0/N") must not be overwritten by the static total.
+    if (!aiBackfillRunning_) {
+        const auto stats = bgeService_->getStats();
+        setAiChip(QString("%1").arg(stats.total), true);
+    }
     statusBar()->showMessage(
         "AI search ready: " + bgeService_->getStatus(), 5000);
+    // Drain the embedding backlog right away — previously this only ran
+    // when the user manually toggled AI on, so files indexed before the
+    // service was up stayed invisible to semantic search.
+    ensureEmbeddingsBackfill();
+}
+
+void MainWindow::onBgeFailed() {
+    const QString why = bgeService_ ? bgeService_->getStatus()
+                                    : QString("service unavailable");
+    DS_WARN("BGE", "AI subsystem failed to initialize: " + why);
+    semanticEnabled_ = false;
+    if (aiSwitch_) {
+        aiSwitch_->setCheckedNoAnim(false);
+        aiSwitch_->setEnabled(false);
+        aiSwitch_->setToolTip(
+            "AI semantic search is unavailable: " + why +
+            "\n\nExpected model files:\n"
+            "  models/bge-small-en-v1.5/model.onnx (+ vocab.txt)\n"
+            "  next to the app (or under %APPDATA%/DocuSearch/models).\n"
+            "Reinstall or restore those files, then restart the app.");
+    }
+    if (aiControlWidget_) aiControlWidget_->setToolTip(aiSwitch_ ? aiSwitch_->toolTip() : QString());
+    // Chip spells out the problem instead of a silent gray switch.
+    setAiChip("NO MODEL", false);
+    statusBar()->showMessage(
+        "AI search unavailable: " + why +
+        " - model files missing or failed to load.", 10000);
+}
+
+void MainWindow::setAiChip(const QString& text, bool active) {
+    if (!aiStateLbl_) return;
+    const auto& tp = Theme::active();
+    const QString col = text.isEmpty() ? tp.muted
+                        : (active ? tp.primaryStrong : tp.muted);
+    aiStateLbl_->setText(text);
+    aiStateLbl_->setStyleSheet(QString(
+        "background:transparent; color:%1; font-weight:800; font-size:11px;"
+        " min-width:24px;").arg(col));
+}
+
+void MainWindow::ensureEmbeddingsBackfill() {
+    // One batch in flight at a time; onBgeEmbeddingFinished chains the
+    // next batch while unembedded files remain, so a >1000-file backlog
+    // drains progressively instead of being silently truncated.
+    if (aiBackfillRunning_ || !bgeService_ || !bgeService_->isReady() || !db_)
+        return;
+    sqlite3* raw = db_->raw();
+    if (!raw) return;
+
+    // Files that have been content-indexed (SearchIndex row with text)
+    // but have no document-level BGE embedding yet. Capped per batch to
+    // bound memory; the finish handler queues the next slice.
+    sqlite3_stmt* sel = nullptr;
+    sqlite3_prepare_v2(raw,
+        "SELECT s.file_id, s.content "
+        "FROM SearchIndex s "
+        "LEFT JOIN BgeEmbeddings e ON e.file_id = s.file_id "
+        "WHERE e.file_id IS NULL "
+        "  AND length(s.content) > 0 "
+        "LIMIT 1000;",
+        -1, &sel, nullptr);
+    QVector<int> fileIds;
+    QStringList texts;
+    if (sel) {
+        while (sqlite3_step(sel) == SQLITE_ROW) {
+            const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
+            const unsigned char* c = sqlite3_column_text(sel, 1);
+            if (c && c[0]) {
+                fileIds.append(fileId);
+                texts.append(QString::fromUtf8(
+                    reinterpret_cast<const char*>(c)));
+            }
+        }
+        sqlite3_finalize(sel);
+    }
+    if (fileIds.isEmpty()) return;
+
+    aiBackfillRunning_ = true;
+    setAiChip(QString("0/%1").arg(fileIds.size()), true);
+    statusBar()->showMessage(
+        QString("AI: generating embeddings for %1 unembedded file%2...")
+            .arg(fileIds.size())
+            .arg(fileIds.size() == 1 ? "" : "s"));
+    bgeService_->embedDocumentsBatch(fileIds, texts);
 }
 
 void MainWindow::onBgeEmbeddingProgress(int current, int total) {
+    // Chip stays live during backfill so the user can SEE the AI working.
+    setAiChip(QString("%1/%2").arg(current).arg(total), true);
     statusBar()->showMessage(
         QString("Embedding documents: %1/%2").arg(current).arg(total));
 }
 
 void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
+    aiBackfillRunning_ = false;
     statusBar()->showMessage(
         QString("Embedding complete: %1 succeeded, %2 failed.").arg(success).arg(fail),
         8000);
+    if (bgeService_ && bgeService_->isReady()) {
+        const auto stats = bgeService_->getStats();
+        setAiChip(QString("%1").arg(stats.total), semanticEnabled_);
+    }
+    // Chain the next batch while files remain unembedded (the backlog was
+    // previously capped at 1000 and silently dropped the rest).
+    if (semanticEnabled_) {
+        QTimer::singleShot(250, this, [this]() { ensureEmbeddingsBackfill(); });
+    }
 }
 
 void MainWindow::updateIndexStats() {
