@@ -26,13 +26,13 @@ ImagePreview::ImagePreview(QWidget* parent)
     tbLay->setSpacing(4);
 
     auto* zoomInBtn = new QPushButton("+", toolbar);
-    zoomInBtn->setToolTip("Zoom in");
+    zoomInBtn->setToolTip("Zoom in (+)");
     zoomInBtn->setFixedWidth(32);
     auto* zoomOutBtn = new QPushButton("-", toolbar);
-    zoomOutBtn->setToolTip("Zoom out");
+    zoomOutBtn->setToolTip("Zoom out (-)");
     zoomOutBtn->setFixedWidth(32);
     auto* fitBtn = new QPushButton("Fit", toolbar);
-    fitBtn->setToolTip("Fit image to window");
+    fitBtn->setToolTip("Resize the image to fit the window");
 
     tbLay->addWidget(zoomInBtn);
     tbLay->addWidget(zoomOutBtn);

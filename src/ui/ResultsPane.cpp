@@ -86,11 +86,14 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
 
     // ---- Header: title + count + sort dropdown ----
     auto* header = new QWidget(this);
+    header->setObjectName("resultsHeader");  // styled as the pane's top strip
     auto* hLay = new QHBoxLayout(header);
     hLay->setContentsMargins(16, 12, 16, 12);
     hLay->setSpacing(8);
 
-    titleLbl_ = new QLabel("Search Results", header);
+    // Uppercase micro-caps title — doubles as an unmistakable visual tag
+    // that tells the user WHICH pane they are looking at.
+    titleLbl_ = new QLabel("RESULTS", header);
     titleLbl_->setObjectName("resultsTitle");
     countLbl_ = new QLabel("(0)", header);
     countLbl_->setObjectName("resultsCount");

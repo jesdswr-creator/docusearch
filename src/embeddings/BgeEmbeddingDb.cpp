@@ -116,6 +116,9 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
         return results;
     }
 
+    // Diagnostics: remember the best similarity even below threshold so the
+    // UI can report how close the nearest document came.
+    float bestSim = -1.0f;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const int   fileId = sqlite3_column_int(stmt, 0);
         const char* path   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
@@ -129,6 +132,7 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
         std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
 
         const float sim = cosineSimilarity(queryEmbedding, emb);
+        if (sim > bestSim) bestSim = sim;
         if (sim >= threshold) {
             SemanticHit hit;
             hit.fileId    = fileId;
@@ -139,6 +143,7 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
         }
     }
     sqlite3_finalize(stmt);
+    m_lastBestSimilarity = bestSim;
 
     // Sort by similarity descending, then trim to topK.
     std::sort(results.begin(), results.end(),
@@ -428,6 +433,7 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
     std::map<int, float> bestPerFile;
     int offset = 0;
     const int BATCH = 500;
+    m_lastBestSimilarity = -1.0f;
 
     while (true) {
         sqlite3_stmt* stmt = nullptr;
@@ -465,6 +471,7 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
 
     // Filter by threshold + sort + trim to topK.
     for (const auto& [fileId, sim] : bestPerFile) {
+        if (sim > m_lastBestSimilarity) m_lastBestSimilarity = sim;
         if (sim >= threshold) {
             SemanticHit hit;
             hit.fileId = fileId;

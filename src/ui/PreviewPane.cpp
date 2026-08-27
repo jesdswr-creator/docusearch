@@ -74,19 +74,16 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     openBtn_ = new QPushButton(header);
     openBtn_->setObjectName("openBtn");
     openBtn_->setCursor(Qt::PointingHandCursor);
-    openBtn_->setToolTip("Open file in default application");
+    openBtn_->setToolTip("Open this file with its default Windows application");
     openBtn_->setText("Open");
 
     ocrBtn_ = new QPushButton(header);
     ocrBtn_->setObjectName("ocrBtn");
     ocrBtn_->setCursor(Qt::PointingHandCursor);
     ocrBtn_->setToolTip(
-        "OCR (Optical Character Recognition)\n"
-        "Extracts text from scanned PDFs and images using AI.\n"
-        "Click this if the extracted text is empty or garbled —\n"
-        "it means the document is a scanned image, not born-digital.\n"
-        "The OCR engine (Windows.Media.Ocr) runs in a separate process\n"
-        "and cannot crash the main app.");
+        "Run OCR on this document.\n"
+        "Recognizes text inside scanned PDFs and images so it becomes searchable.\n"
+        "Useful when the extracted text is empty or garbled because the page is a scan.");
     ocrBtn_->setText("OCR");
 
     // Zoom buttons hidden — top FilePreviewPane handles zoom now.
@@ -190,11 +187,11 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     copyBtn_ = new QPushButton("Copy", actionsRow);
     copyBtn_->setObjectName("copyBtn");
     copyBtn_->setCursor(Qt::PointingHandCursor);
-    copyBtn_->setToolTip("Copy extracted text to clipboard");
+    copyBtn_->setToolTip("Copy the extracted text to the clipboard");
     downloadBtn_ = new QPushButton("Save", actionsRow);
     downloadBtn_->setObjectName("downloadBtn");
     downloadBtn_->setCursor(Qt::PointingHandCursor);
-    downloadBtn_->setToolTip("Save extracted text to file");
+    downloadBtn_->setToolTip("Save the extracted text to a .txt file");
     actLay->addWidget(copyBtn_);
     actLay->addWidget(downloadBtn_);
     epLay->addWidget(actionsRow);

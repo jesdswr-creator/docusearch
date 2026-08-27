@@ -68,14 +68,14 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
     // Removed the "i" info icon — the title is self-explanatory and the
     // "i" glyph was visually noisy next to the heading text. The tooltip
     // on the title label still surfaces the same info on hover.
-    titleLbl_->setToolTip("File metadata extracted from the filesystem and indexed content.");
+    titleLbl_->setToolTip("Details for the selected file, gathered from the filesystem and its indexed content.");
 
     hLay->addStretch();
 
     editBtn_ = new QPushButton(header);
     editBtn_->setObjectName("editBtn");
     editBtn_->setCursor(Qt::PointingHandCursor);
-    editBtn_->setToolTip("Edit metadata");
+    editBtn_->setToolTip("Edit tags and notes for this file");
     hLay->addWidget(editBtn_);
     outer->addWidget(header);
 

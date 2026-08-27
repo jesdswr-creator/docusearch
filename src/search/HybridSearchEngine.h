@@ -39,6 +39,7 @@ public:
     void setSemanticWeight(float weight);
     void setTopK(int k);
     void setThreshold(float t) { m_threshold = std::clamp(t, 0.0f, 1.0f); }
+    float threshold() const { return m_threshold; }
 
     // Set the type filter (e.g., "pdf") so semantic-only results that
     // don't match the filter are excluded. Empty = no filter.

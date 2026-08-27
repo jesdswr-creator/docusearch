@@ -91,12 +91,19 @@ public:
     };
     Stats getStats();
 
+    // Diagnostic: the highest cosine similarity seen during the most recent
+    // search scan, REGARDLESS of whether it cleared the caller's threshold.
+    // Lets the UI explain WHY a query produced zero semantic hits ("closest
+    // match scored 38% but the bar is 45%") instead of a silent nothing.
+    float lastBestSimilarity() const { return m_lastBestSimilarity; }
+
 private:
     static float cosineSimilarity(const std::vector<float>& a,
                                    const std::vector<float>& b);
 
     QString  m_dbPath;
     sqlite3* m_db = nullptr;
+    float    m_lastBestSimilarity = -1.0f;  // reset at each scan, max over rows
 
     static constexpr int EMBEDDING_DIM      = 384;
     static constexpr int EMBEDDING_BYTES    = EMBEDDING_DIM * 4;  // 1536

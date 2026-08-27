@@ -82,6 +82,14 @@ public:
     // Database stats (total/completed/failed embedding counts).
     BgeEmbeddingDb::Stats getStats() const;
 
+    // Diagnostic: best cosine similarity observed in the most recent search
+    // scan (document-level or chunk-level), even when it fell below the
+    // threshold. -1 if no scan has run yet. Powers the "closest match
+    // scored X%" hint so an empty semantic result is never a silent wall.
+    float lastBestSimilarity() const {
+        return m_database ? m_database->lastBestSimilarity() : -1.0f;
+    }
+
 signals:
     void ready();
     void embeddingProgress(int current, int total);

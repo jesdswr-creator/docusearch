@@ -339,9 +339,8 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
 
     auto* embedAllBtn = new QPushButton("Generate AI Embeddings for All Documents", this);
     embedAllBtn->setToolTip(
-        "Generate BGE embeddings for all indexed documents that don't have one yet.\n"
-        "Runs in the background — check the status bar for progress.\n"
-        "Required for semantic search to work on documents indexed before BGE was enabled.");
+        "Build AI embeddings for every indexed document that is missing one.\n"
+        "Runs in the background; progress appears in the status bar.");
     embLay->addWidget(embedAllBtn);
 
     // Wire up the "Embed All" button to a signal that MainWindow will handle.
@@ -462,7 +461,7 @@ void SettingsDialog::populateSavedSearches() {
         item->setData(kSearchIdRole,    id);
         item->setData(kSearchQueryRole, query);
         // Tooltip shows the query so the user can preview without clicking.
-        item->setToolTip(query.isEmpty() ? QStringLiteral("(empty query)")
+        item->setToolTip(query.isEmpty() ? QStringLiteral("No query stored")
                                           : query);
         savedList_->addItem(item);
     }

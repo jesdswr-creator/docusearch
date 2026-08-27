@@ -60,25 +60,22 @@ int main(int argc, char* argv[]) {
     // splash screen, the user double-clicks the exe and sees nothing
     // for several seconds — feels broken.
     //
-    // Splash pixmap: 960x600 (2x for crisp scaled displays) rounded card
-    // in the v1.5 Midnight palette — navy gradient, indigo glow, app icon,
-    // wordmark + tagline, sparkle accents. Transparent canvas around the
-    // card means no edge bleed against the desktop. Regenerate with
-    // scripts/make_splash.py.
+    // Splash asset: 1080x680 @2x compact navy card (regenerate with
+    // scripts/generate_splash.py). setDevicePixelRatio(2) renders it at
+    // a tidy 540x340 logical pixels on every display — the previous
+    // 960x600 1:1 pixmap covered half of a 1080p laptop screen.
+    // Transparent margins + rounded corners = no edge bleed. The status
+    // line is baked into the artwork (splash.showMessage would land in
+    // the transparent margin outside the card).
     QPixmap splashPixmap(":/icons/splash.png");
     if (splashPixmap.isNull()) {
         // Fallback to the app icon if the splash PNG failed to load.
         splashPixmap = QPixmap(":/icons/DocuSearch-256.png");
+    } else {
+        splashPixmap.setDevicePixelRatio(2.0);  // crisp on HiDPI, compact everywhere
     }
-    // Frameless + always-on-top so it floats over the desktop cleanly.
     QSplashScreen splash(splashPixmap,
                          Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
-    // No stylesheet background — the pixmap itself carries all the
-    // visual styling. Setting a stylesheet bg here causes edge bleed
-    // because QSplashScreen fills the window with the bg color around
-    // the pixmap's transparent corners.
-    splash.showMessage("Loading DocuSearch…",
-                       Qt::AlignBottom | Qt::AlignHCenter, QColor("#ffffff"));
     splash.show();
     app.processEvents();  // Force paint the splash immediately
 

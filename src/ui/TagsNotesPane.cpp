@@ -87,7 +87,7 @@ public:
         : QPushButton(text, parent), colorClass_(colorClass), onRemove_(std::move(onRemove)) {
         setObjectName(colorClass);
         setCursor(Qt::PointingHandCursor);
-        setToolTip("Right-click to remove");
+        setToolTip("Right-click to remove this tag");
     }
 
     QString colorClass() const { return colorClass_; }

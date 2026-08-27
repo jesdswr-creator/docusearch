@@ -72,7 +72,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
 
     clearBtn_ = new QPushButton;
     clearBtn_->setCursor(Qt::PointingHandCursor);
-    clearBtn_->setToolTip("Clear");
+    clearBtn_->setToolTip("Clear the search box");
     clearBtn_->setFixedSize(22, 22);
     clearBtn_->hide();
     inputWrap->setClearButton(clearBtn_);
@@ -86,7 +86,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
 
     // Saved searches
     savedBox_ = new QComboBox(this);
-    savedBox_->setToolTip("Saved searches");
+    savedBox_->setToolTip("Re-run one of your saved searches");
     savedBox_->addItem("Saved");
     savedBox_->setMinimumHeight(36);
     savedBox_->setMaximumHeight(36);

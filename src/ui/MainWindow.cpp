@@ -119,22 +119,26 @@ public:
 protected:
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton) {
-            dragPos_ = e->globalPosition().toPoint() - owner_->frameGeometry().topLeft();
-            dragging_ = true;
+            // Delegate to the platform's native move loop instead of manual
+            // owner_->move() tracking. The manual tracker had a fatal flaw:
+            // if the release happened outside the window (Alt+Tab, a toast
+            // stealing focus, Win+Down minimizing mid-drag), dragging_ stayed
+            // true forever and every later mouse-move teleported the window —
+            // which also wedged WM_NCHITTEST resize handling until restart.
+            // startSystemMove() hands control to Windows, supports Aero Snap,
+            // and can never get stuck in a half-finished drag.
+            if (owner_->windowHandle())
+                owner_->windowHandle()->startSystemMove();
             e->accept();
         }
     }
 
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (dragging_ && (e->buttons() & Qt::LeftButton)) {
-            owner_->move(e->globalPosition().toPoint() - dragPos_);
-            e->accept();
-        }
+        QWidget::mouseMoveEvent(e);  // native loop owns movement
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override {
-        dragging_ = false;
-        e->accept();
+        QWidget::mouseReleaseEvent(e);
     }
 
     void mouseDoubleClickEvent(QMouseEvent* e) override {
@@ -151,8 +155,6 @@ protected:
 private:
     MainWindow* owner_ = nullptr;
     QWidget* draggable_ = nullptr;
-    bool dragging_ = false;
-    QPoint dragPos_;
 };
 
 // ============================================================
@@ -455,26 +457,64 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     if (eventType == "windows_generic_MSG" && message) {
         MSG* msg = reinterpret_cast<MSG*>(message);
         if (msg->message == WM_NCHITTEST) {
-            const LONG x = GET_X_LPARAM(msg->lParam);
-            const LONG y = GET_Y_LPARAM(msg->lParam);
-            const QRect wr = frameGeometry();
-            const int border = 6;
-            const bool onLeft   = x >= wr.left() && x < wr.left() + border;
-            const bool onRight  = x <  wr.right()  && x >= wr.right() - border;
-            const bool onTop    = y >= wr.top() && y < wr.top() + border;
-            const bool onBottom = y <  wr.bottom() && y >= wr.bottom() - border;
-            if (onTop && onLeft)     { *result = HTTOPLEFT;     return true; }
-            if (onTop && onRight)    { *result = HTTOPRIGHT;    return true; }
-            if (onBottom && onLeft)  { *result = HTBOTTOMLEFT;  return true; }
-            if (onBottom && onRight) { *result = HTBOTTOMRIGHT; return true; }
-            if (onLeft)   { *result = HTLEFT;   return true; }
-            if (onRight)  { *result = HTRIGHT;  return true; }
-            if (onTop)    { *result = HTTOP;    return true; }
-            if (onBottom) { *result = HTBOTTOM; return true; }
+            // Work entirely in PHYSICAL screen pixels — the same coordinate
+            // space as WM_NCHITTEST's lParam. The previous version compared
+            // against Qt's frameGeometry(), which is device-independent:
+            // on any monitor scaled above 100% the mismatch pushed the
+            // responsive border bands off the visible edge, so after a
+            // minimize/restore cycle the window looked unresizable.
+            RECT rc;
+            if (GetWindowRect(msg->hwnd, &rc)) {
+                const LONG x = GET_X_LPARAM(msg->lParam);
+                const LONG y = GET_Y_LPARAM(msg->lParam);
+
+                // A minimized or maximized window must not offer resize
+                // borders; restoring to normal re-enables them below.
+                if (!IsIconic(msg->hwnd) && !IsZoomed(msg->hwnd)) {
+                    // 6 logical px of grab zone, scaled to this window's DPI.
+                    UINT dpi = GetDpiForWindow(msg->hwnd);
+                    if (dpi == 0) dpi = USER_DEFAULT_SCREEN_DPI;
+                    const LONG border = MulDiv(6, int(dpi), USER_DEFAULT_SCREEN_DPI);
+
+                    const bool onLeft   = x >= rc.left  && x < rc.left  + border;
+                    const bool onRight  = x <  rc.right && x >= rc.right - border;
+                    const bool onTop    = y >= rc.top   && y < rc.top   + border;
+                    const bool onBottom = y <  rc.bottom && y >= rc.bottom - border;
+                    if (onTop && onLeft)     { *result = HTTOPLEFT;     return true; }
+                    if (onTop && onRight)    { *result = HTTOPRIGHT;    return true; }
+                    if (onBottom && onLeft)  { *result = HTBOTTOMLEFT;  return true; }
+                    if (onBottom && onRight) { *result = HTBOTTOMRIGHT; return true; }
+                    if (onLeft)   { *result = HTLEFT;   return true; }
+                    if (onRight)  { *result = HTRIGHT;  return true; }
+                    if (onTop)    { *result = HTTOP;    return true; }
+                    if (onBottom) { *result = HTBOTTOM; return true; }
+                }
+            }
         }
     }
 #endif
     return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+// Keep the maximize button's icon/tooltip in sync with the real window
+// state (also corrects state drift after Aero-Snap or Win+Up/Down).
+void MainWindow::updateTitleBarState() {
+    if (!titleMaxBtn_) return;
+    QColor textColor = qApp->palette().color(QPalette::Text);
+    if (isMaximized()) {
+        titleMaxBtn_->setIcon(loadLucideIcon("copy", textColor, 14));   // restore glyph
+        titleMaxBtn_->setToolTip("Restore down");
+    } else {
+        titleMaxBtn_->setIcon(loadLucideIcon("square", textColor, 14)); // maximize glyph
+        titleMaxBtn_->setToolTip("Maximize");
+    }
+    titleMaxBtn_->setIconSize(QSize(14, 14));
+}
+
+void MainWindow::changeEvent(QEvent* e) {
+    if (e && e->type() == QEvent::WindowStateChange)
+        updateTitleBarState();
+    QMainWindow::changeEvent(e);
 }
 
 // ============================================================
@@ -524,6 +564,9 @@ void MainWindow::buildTitleBar() {
     h->addWidget(titleMinBtn_);
     h->addWidget(titleMaxBtn_);
     h->addWidget(titleCloseBtn_);
+
+    // Icon + tooltip must match the current maximize/restore state.
+    updateTitleBarState();
 }
 
 // ============================================================
@@ -643,7 +686,7 @@ void MainWindow::buildCentral() {
     // 3-way splitter: results | viewer | (metadata+tags)
     mainSplitter_ = new QSplitter(Qt::Horizontal, centerWidget);
     mainSplitter_->setObjectName("mainSplitter");
-    mainSplitter_->setHandleWidth(6);  // themed in QSS: invisible until hover
+    mainSplitter_->setHandleWidth(6);  // themed in QSS: double-hairline gutter
     mainSplitter_->setChildrenCollapsible(false);
     centerLay->addWidget(mainSplitter_, 1);
 
@@ -801,9 +844,9 @@ void MainWindow::buildStatusBar() {
     ocrLay->addWidget(ocrDotLbl_);
     ocrLay->addWidget(ocrStatusLbl_);
     ocrStatusWidget_->setToolTip(
-        "OCR (Optical Character Recognition) status.\n"
-        "Green: Windows.Media.Ocr is ready (language packs installed).\n"
-        "Amber: no OCR language packs installed — click for instructions.");
+        "Optical character recognition (OCR).\n"
+        "Ready — text in images and scanned PDFs is searchable.\n"
+        "Setup required — no Windows OCR language pack installed; click for steps.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
     // Semantic search toggle — custom slider pill (matches Pastel Pop design).
@@ -832,9 +875,9 @@ void MainWindow::buildStatusBar() {
     aiSwitch_->setChecked(false);
     aiSwitch_->setEnabled(false);
     aiSwitch_->setToolTip(
-        "Toggle AI semantic search (BGE Small EN v1.5).\n"
-        "When ON, search results include AI semantic matches in addition to keyword matches.\n"
-        "Disabled if the AI model is not installed.");
+        "AI semantic search (BGE-small-en-v1.5, runs fully offline).\n"
+        "When on, results are re-ranked by meaning in addition to keywords,\n"
+        "and semantically close documents appear even without keyword hits.");
     aiLay->addWidget(aiSwitch_);
 
     aiStateLbl_ = new QLabel("OFF", aiControlWidget_);
@@ -846,11 +889,11 @@ void MainWindow::buildStatusBar() {
     aiControlWidget_->setToolTip(aiSwitch_->toolTip());
     sb->addPermanentWidget(aiControlWidget_);
 
-    // Theme toggle button — cycles Lavender → Mint → Peach (palette icon + label).
+    // Theme toggle button — Daylight ⇄ Midnight (palette icon + label).
     themeToggleBtn_ = new QPushButton(sb);
     themeToggleBtn_->setObjectName("themeToggleBtn");
-    themeToggleBtn_->setText("Lavender");
-    themeToggleBtn_->setToolTip("Cycle theme: Lavender → Mint → Peach");
+    themeToggleBtn_->setText("Light");
+    themeToggleBtn_->setToolTip("Switch between light and dark appearance");
     themeToggleBtn_->setCursor(Qt::PointingHandCursor);
     themeToggleBtn_->setFixedHeight(29);
     connect(themeToggleBtn_, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
@@ -861,7 +904,7 @@ void MainWindow::buildStatusBar() {
     openLocationBtn_->setObjectName("openLocationBtn");
     openLocationBtn_->setCursor(Qt::PointingHandCursor);
     openLocationBtn_->setText("Open");
-    openLocationBtn_->setToolTip("Open the folder containing the selected file");
+    openLocationBtn_->setToolTip("Show the selected file in File Explorer");
     openLocationBtn_->setFixedHeight(29);
     sb->addPermanentWidget(openLocationBtn_);
 }
@@ -1235,28 +1278,58 @@ void MainWindow::onSearch(const QString& query) {
                 if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
             }
             statusBar()->showMessage(
-                QString("AI search: %1 result%2  |  AI contributed to %3  |  AI-only finds: %4  |  %5 ms")
+                QString("%1 result%2 · AI refined %3 · %4 ms")
                     .arg(merged.size())
                     .arg(merged.size() == 1 ? "" : "s")
                     .arg(aiContribCount)
-                    .arg(aiOnlyCount)
                     .arg(t.elapsed()));
             // Persistent summary pill directly above the results list —
             // the status-bar toast disappears, this stays until the next
             // search so users can actually SEE what AI did.
             if (aiContribCount > 0) {
                 resultsPane_->setAiSummary(QString(
-                    "<b>AI contributed to %1 of %2 results</b>%3")
+                    "<b>Semantic ranking active</b> — AI refined %1 of %2 "
+                    "results%3")
                     .arg(aiContribCount)
                     .arg(merged.size())
                     .arg(aiOnlyCount > 0
-                        ? QString(" - %1 found by AI alone (no keyword match)").arg(aiOnlyCount)
+                        ? QString(", including %1 found by semantic match "
+                          "alone (no keyword overlap)")
+                          .arg(aiOnlyCount)
                         : QString()));
+            } else if (bgeService_ && bgeService_->isReady()) {
+                // Zero semantic contribution: explain exactly why, with the
+                // real numbers from the scan, instead of a vague complaint.
+                const auto stats = bgeService_->getStats();
+                const float bestSim = bgeService_->lastBestSimilarity();
+                const int thrPct = hybridSearch_
+                    ? qRound(hybridSearch_->threshold() * 100) : 45;
+                if (stats.total == 0) {
+                    resultsPane_->setAiSummary(QString(
+                        "<b>Semantic index is empty.</b> AI ranking starts "
+                        "working once documents are extracted — each indexed "
+                        "document builds an embedding on its own."));
+                } else if (bestSim < 0.0f) {
+                    resultsPane_->setAiSummary(QString(
+                        "<b>No embeddings to compare yet.</b> %1 document%2 "
+                        "still queued for embedding — results below are "
+                        "keyword-only for now.")
+                        .arg(stats.total)
+                        .arg(stats.total == 1 ? " is" : "s are"));
+                } else {
+                    resultsPane_->setAiSummary(QString(
+                        "<b>No semantic match above the %1% similarity bar.</b> "
+                        "Closest of %2 embedded documents scored %3%. Lower "
+                        "the AI threshold in Settings → Search to admit "
+                        "weaker semantic matches.")
+                        .arg(thrPct)
+                        .arg(stats.total)
+                        .arg(qRound(bestSim * 100)));
+                }
             } else {
                 resultsPane_->setAiSummary(QString(
-                    "AI is on but found nothing semantically close enough to "
-                    "re-rank for this query - try a natural-language phrase "
-                    "like \"how to file a reimbursement claim\"."));
+                    "<b>Semantic ranking unavailable</b> — the AI model is "
+                    "not loaded, so results are keyword-only."));
             }
         } else {
             // Keyword-only search (existing behavior).
@@ -2277,48 +2350,37 @@ void MainWindow::onSemanticToggled(bool checked) {
         if (aiSwitch_) aiSwitch_->setCheckedNoAnim(false);
         if (aiStateLbl_) aiStateLbl_->setText("OFF");
         QMessageBox::information(this, "AI Search",
-            "AI search model not available.\n\n"
-            "The AI model files should be bundled with DocuSearch.\n"
-            "If they're missing, the app may have been installed incorrectly.\n\n"
-            "Model files expected at:\n"
-            "  models/bge-small-en-v1.5/model.onnx\n"
-            "  models/bge-small-en-v1.5/vocab.txt\n"
-            "  onnxruntime.dll");
+            "The AI model is not available.\n\n"
+            "Model files ship with DocuSearch and are expected at:\n"
+            "  models/bge-small-en-v1.5/model.onnx (+ vocab.txt)\n"
+            "next to the app or under %APPDATA%/DocuSearch/models.\n\n"
+            "Reinstall or restore those files, then restart the app.");
         return;
     }
     semanticEnabled_ = checked;
     if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
     setAiChip(checked ? "ON" : "OFF", checked);
 
-    // CRITICAL FIX: When user toggles AI ON, scan for indexed files that
-    // don't have BGE embeddings yet and auto-queue them on the background
-    // worker thread. Without this, AI search has nothing to match against
-    // (semanticHits is empty → RRF falls back to pure keyword → user sees
-    // no AI contribution → "AI has no role in search" complaint).
-    //
-    // This is the band-aid for the bigger architectural problem that
-    // bgeService_->embedDocument() during extraction was commented out.
-    // Until we can safely re-enable that, this toggle-time scan is the
-    // way to retroactively embed files indexed before the fix.
     if (checked && bgeService_ && bgeService_->isReady()) {
-        const auto stats = bgeService_->getStats();
-        if (stats.total > 0) {
-            setAiChip(QString("%1").arg(stats.total), true);
-        }
         // Queue any indexed-but-unembedded files on the background BGE
         // worker (shared with the onBgeReady path; batches chain from
         // onBgeEmbeddingFinished until the backlog is drained).
         ensureEmbeddingsBackfill();
         if (!aiBackfillRunning_) {
+            const auto stats = bgeService_->getStats();
             statusBar()->showMessage(
                 stats.total > 0
-                    ? QString("AI search enabled — %1 embeddings ready.").arg(stats.total)
-                    : "AI search enabled. Extract files to generate embeddings.",
-                3000);
+                    ? QString("AI search on — %1 document%2 ready for "
+                              "semantic ranking.")
+                          .arg(stats.total)
+                          .arg(stats.total == 1 ? "" : "s")
+                    : "AI search on. Extract a document to start building "
+                      "the semantic index.",
+                4000);
         }
     } else {
         statusBar()->showMessage(
-            checked ? "AI search enabled." : "AI search disabled.", 3000);
+            checked ? "AI search on." : "AI search off.", 3000);
     }
 }
 
@@ -2335,15 +2397,14 @@ void MainWindow::onBgeReady() {
     if (hybridSearch_) {
         hybridSearch_->setBgeService(bgeService_.get());
     }
-    // Persistent chip: show embedding coverage, not just "ready". Skip if
-    // the auto-enable above already kicked off a backfill — its progress
-    // text ("0/N") must not be overwritten by the static total.
+    // Persistent chip: steady state reads "ON"; embedding counts only
+    // appear as i/n progress while a backfill batch is running, so an
+    // idle number never sits in the status bar confusing anyone.
     if (!aiBackfillRunning_) {
-        const auto stats = bgeService_->getStats();
-        setAiChip(QString("%1").arg(stats.total), true);
+        setAiChip("ON", true);
     }
     statusBar()->showMessage(
-        "AI search ready: " + bgeService_->getStatus(), 5000);
+        "AI search ready — " + bgeService_->getStatus(), 5000);
     // Drain the embedding backlog right away — previously this only ran
     // when the user manually toggled AI on, so files indexed before the
     // service was up stayed invisible to semantic search.
@@ -2440,11 +2501,13 @@ void MainWindow::onBgeEmbeddingProgress(int current, int total) {
 void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
     aiBackfillRunning_ = false;
     statusBar()->showMessage(
-        QString("Embedding complete: %1 succeeded, %2 failed.").arg(success).arg(fail),
+        QString("Semantic indexing complete — %1 document%2 embedded%3")
+            .arg(success)
+            .arg(success == 1 ? "" : "s")
+            .arg(fail > 0 ? QString(", %1 failed").arg(fail) : QString()),
         8000);
     if (bgeService_ && bgeService_->isReady()) {
-        const auto stats = bgeService_->getStats();
-        setAiChip(QString("%1").arg(stats.total), semanticEnabled_);
+        setAiChip(semanticEnabled_ ? "ON" : "OFF", semanticEnabled_);
     }
     // Chain the next batch while files remain unembedded (the backlog was
     // previously capped at 1000 and silently dropped the rest).

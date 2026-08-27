@@ -532,10 +532,10 @@ QLabel#ocrDot[status="setup"] {
 QLabel#ocrStatus[status="ready"] { color: @success@; }
 QLabel#ocrStatus[status="setup"] { color: @warn@; }
 
-/* ── Sidebar — subtle elevated card background ── */
+/* ── Sidebar — deepest chrome tone, clearly darker than both panes ── */
 QWidget#sidebar {
-    background: @surface2@;
-    border-right: 1px solid @border@;
+    background: @surface3@;
+    border-right: 1px solid @border2@;
 }
 QListWidget#sidebar {
     background: transparent;
@@ -573,32 +573,68 @@ QListWidget#sidebar::item:selected {
    from a shippable product.
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Pane distinction — three clearly separate columns ──
-   Previously every pane shared the window canvas color, so the 1px
-   splitter seams were the only boundary and the three columns melted
-   into one undifferentiated surface. Now:
-     left  (Results)  = elevated card surface @surface@
-     middle (Viewer)  = quiet canvas @bg@, document paper floats on it
-     right (Details)  = tinted chrome rail @surface2@
-   + hairline edge on the inner side of each flank + 6px splitter
-   handles (invisible until hover) for a clean grab affordance. */
+/* ── Pane distinction — three unmistakably separate columns ──
+   Each column now sits on its OWN rung of the surface ladder, so the
+   eye separates them instantly even with no borders at all:
+     nav (left)       = @surface3@  deepest chrome
+     Results          = @surface@   brightest card (light) / raised panel
+     Viewer           = @bg@        quiet canvas the paper floats on
+     Details rail     = @surface2@  mid chrome tint
+   Seams are REAL borders (@border2@, twice as strong as hairlines), and
+   every QSplitter seam shows a permanent double-hairline gutter that
+   lights up in accent colors on hover. Previous attempt used @border@
+   (#e4e7ee on white ≈ invisible) and hover-only handles; users could not
+   tell where one pane ended and the next began. */
 QWidget#centralWidget, QWidget#filePreviewPane, QWidget#previewPane {
     background: @bg@;
 }
 QWidget#resultsPane {
     background: @surface@;
-    border-right: 1px solid @border@;
+    border-right: 1px solid @border2@;
 }
 QWidget#metadataPane, QWidget#metadataPanel {
     background: @surface2@;
-    border-left: 1px solid @border@;
+    border-left: 1px solid @border2@;
 }
 QWidget#tagsNotesPane, QWidget#tagsNotesPanel {
     background: transparent;  /* inherit the details-rail tint */
 }
 
-/* ── Splitter handles — invisible seam, hover reveal ── */
-QSplitter::handle { background: transparent; }
+/* Top strip of each pane — micro-caps caption + separating rule.
+   Renders "RESULTS" as a scannable pane label instead of free-floating
+   text on an anonymous white area. */
+QWidget#resultsHeader {
+    background: transparent;
+    border-bottom: 1px solid @border@;
+}
+QLabel#resultsTitle {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+}
+QLabel#resultsCount {
+    color: @muted@;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ── Splitter gutters — permanent seams you can grab ──
+   The 6 px handle stays transparent inside so it doesn't muddy the pane
+   tones; its outer edges draw a tight double hairline that reads as a
+   real gutter in both light and dark themes. Hover floods it with the
+   soft accent to confirm "this is draggable". */
+QSplitter::handle {
+    background: transparent;
+}
+QSplitter::handle:horizontal {
+    border-left: 1px solid @border2@;
+    border-right: 1px solid @border2@;
+}
+QSplitter::handle:vertical {
+    border-top: 1px solid @border2@;
+    border-bottom: 1px solid @border2@;
+}
 QSplitter::handle:hover { background: @primarySoft@; }
 QSplitter::handle:pressed { background: @primaryBorder@; }
 

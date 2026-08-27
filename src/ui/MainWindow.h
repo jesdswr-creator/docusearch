@@ -72,6 +72,7 @@ protected:
     void closeEvent(QCloseEvent* e) override;
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     bool eventFilter(QObject* obj, QEvent* e) override;
+    void changeEvent(QEvent* e) override;
 
 private slots:
     void onSearch(const QString& query);
@@ -204,6 +205,7 @@ public:
 
     // Persistent status chip text for the AI control (state + counts).
     void setAiChip(const QString& text, bool active);
+    void updateTitleBarState();
 
     // Right panel
     QSplitter*      rightSplitter_        = nullptr;  // metadata | tags/notes (vertical)

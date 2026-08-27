@@ -36,17 +36,17 @@ PdfPreview::PdfPreview(QWidget* parent)
     tbLay->setSpacing(4);
 
     m_prevButton    = new QPushButton("‹ Prev", toolbar);
-    m_prevButton->setToolTip("Previous page");
+    m_prevButton->setToolTip("Go to the previous page");
     m_nextButton    = new QPushButton("Next ›", toolbar);
-    m_nextButton->setToolTip("Next page");
+    m_nextButton->setToolTip("Go to the next page");
     m_zoomOutButton = new QPushButton("-", toolbar);
     m_zoomOutButton->setFixedWidth(32);
-    m_zoomOutButton->setToolTip("Zoom out");
+    m_zoomOutButton->setToolTip("Zoom out (-)");
     m_zoomInButton  = new QPushButton("+", toolbar);
     m_zoomInButton->setFixedWidth(32);
-    m_zoomInButton->setToolTip("Zoom in");
+    m_zoomInButton->setToolTip("Zoom in (+)");
     m_fitButton     = new QPushButton("Fit", toolbar);
-    m_fitButton->setToolTip("Fit page to window");
+    m_fitButton->setToolTip("Resize the page to fit the window");
 
     m_pageLabel = new QLabel("No document loaded", toolbar);
     m_pageLabel->setObjectName("previewPageLabel");

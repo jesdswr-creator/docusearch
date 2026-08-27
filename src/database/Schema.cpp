@@ -20,7 +20,37 @@ bool Schema::initialize(Database& db) {
     // (e.g. v1.0 databases that don't have BgeEmbeddings/SemanticSettings).
     // See MISSED-6 in the review report — without this, upgrading from v1.0
     // would crash on first query to BgeEmbeddings.
-    return migrate(db);
+    if (!migrate(db)) {
+        return false;
+    }
+
+    // ── One-time repair of a legacy AI setting ────────────────────
+    // Early builds seeded similarity_threshold at 0.65. INSERT OR IGNORE
+    // never updates an existing row, so databases created by those builds
+    // kept 0.65 forever — and BGE-small-en-v1.5 almost never scores that
+    // high on real content, so semantic search silently returned zero hits
+    // on every query (the "AI is on but found nothing" report). Databases
+    // created later use 0.40; anything still >= 0.55 is a stale legacy
+    // value (or a user-tuned value so strict it blocks every match) and is
+    // reset to the engine's current default of 0.45.
+    {
+        sqlite3* raw = db.raw();
+        if (raw && db.exec(
+                "UPDATE SemanticSettings "
+                "SET value='0.45', updated_at=strftime('%s','now') "
+                "WHERE key='similarity_threshold' "
+                "  AND CAST(value AS REAL) >= 0.55;")) {
+            const int changed = sqlite3_changes(raw);
+            if (changed > 0) {
+                DS_INFO("Database",
+                    QString("Repaired %1 legacy AI similarity threshold(s) "
+                            ">= 0.55 back to 0.45 (semantic search was "
+                            "previously unusable with the old default).")
+                        .arg(changed));
+            }
+        }
+    }
+    return true;
 }
 
 int Schema::currentVersion(Database& db) {
