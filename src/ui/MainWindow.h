@@ -73,6 +73,7 @@ protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
     bool eventFilter(QObject* obj, QEvent* e) override;
     void changeEvent(QEvent* e) override;
+    void showEvent(QShowEvent* e) override;
 
 private slots:
     void onSearch(const QString& query);
@@ -135,6 +136,11 @@ private:
 
     // Re-render all Lucide icons throughout the UI (call after theme toggle).
     void refreshAllIcons();
+
+    // One-shot: restore WS_THICKFRAME so Windows honors the WM_NCHITTEST
+    // resize borders on our frameless window. See MainWindow.cpp.
+    void enableNativeResize();
+    bool nativeResizeApplied_ = false;
 
 public:
     Q_INVOKABLE void updateIndexStats();

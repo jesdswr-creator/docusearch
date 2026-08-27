@@ -449,6 +449,10 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     QMainWindow::closeEvent(e);
 }
 
+// Handle WM_NCCALCSIZE so the re-added WS_THICKFRAME (see
+// enableNativeResize) never visually reserves nonclient frame pixels:
+// our widgets keep owning the entire window. While maximized we pull
+// the client rect back inside the monitor by the invisible frame pad.
 // Handle WM_NCHITTEST on Windows so the frameless window can be resized
 // from its edges (the OS doesn't provide resize handles for frameless
 // windows, so we tell it which pixels belong to which resize border).
@@ -456,6 +460,24 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" && message) {
         MSG* msg = reinterpret_cast<MSG*>(message);
+        if (msg->message == WM_NCCALCSIZE) {
+            if (msg->wParam) {
+                if (IsZoomed(msg->hwnd)) {
+                    auto* nccs = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+                    const int padX = GetSystemMetrics(SM_CXSIZEFRAME)
+                                   + GetSystemMetrics(SM_CXPADDEDBWIDTH);
+                    const int padY = GetSystemMetrics(SM_CYSIZEFRAME)
+                                   + GetSystemMetrics(SM_CXPADDEDBWIDTH);
+                    nccs->rgrc[0].left   += padX;
+                    nccs->rgrc[0].right  -= padX;
+                    nccs->rgrc[0].top    += padY;
+                    nccs->rgrc[0].bottom -= padY;
+                }
+                *result = 0;
+                return true;
+            }
+            return false;
+        }
         if (msg->message == WM_NCHITTEST) {
             // Work entirely in PHYSICAL screen pixels — the same coordinate
             // space as WM_NCHITTEST's lParam. The previous version compared
@@ -494,6 +516,36 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     }
 #endif
     return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+// Restore WS_THICKFRAME on this frameless window. Qt's
+// FramelessWindowHint strips that style, and WITHOUT it Windows silently
+// ignores hit-test results like HTLEFT/HTBOTTOMRIGHT — dragging any edge
+// did nothing in ANY window state, which users experienced as "cannot
+// resize after minimize". With the style back (and WM_NCCALCSIZE handled
+// above to keep the frame invisible), edge dragging enters the native
+// sizing loop in every state, including right after restore.
+void MainWindow::enableNativeResize() {
+#ifdef Q_OS_WIN
+    if (nativeResizeApplied_) return;
+    nativeResizeApplied_ = true;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    SetWindowLongPtrW(hwnd, GWL_STYLE,
+                      style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#endif
+}
+
+void MainWindow::showEvent(QShowEvent* e) {
+    QMainWindow::showEvent(e);
+#ifdef Q_OS_WIN
+    enableNativeResize();
+#else
+    Q_UNUSED(e)
+#endif
 }
 
 // Keep the maximize button's icon/tooltip in sync with the real window
@@ -649,7 +701,9 @@ void MainWindow::buildCentral() {
     for (int i = 0; i < navLabels.size(); ++i) {
         auto* item = new QListWidgetItem(navLabels[i], sidebarList_);
         item->setData(Qt::UserRole, navLabels[i]);
-        item->setSizeHint(QSize(96, 28));
+        // Width must fit [icon][gap][longest label] plus QSS padding —
+        // a tighter box silently clipped the leading glyph off some items.
+        item->setSizeHint(QSize(112, 28));
         item->setTextAlignment(Qt::AlignCenter);
     }
     // No initial selection — the strip is action buttons, not tabs.
@@ -662,8 +716,12 @@ void MainWindow::buildCentral() {
     auto* sbLay = new QHBoxLayout(statusBadge);
     sbLay->setContentsMargins(8, 4, 8, 4);
     sbLay->setSpacing(8);
-    indexedInfoLbl_ = new QLabel("0 files", statusBadge);
+    indexedInfoLbl_ = new QLabel("0 indexed", statusBadge);
     indexedInfoLbl_->setObjectName("indexedInfo");
+    indexedInfoLbl_->setToolTip(
+        "Number of files currently searchable in your offline index.\n"
+        "The bar below the count shows how much of the collection has "
+        "been processed.");
     sbLay->addWidget(indexedInfoLbl_);
 
     indexedBar_ = new QProgressBar(statusBadge);
@@ -1156,6 +1214,9 @@ void MainWindow::refreshAllIcons() {
     if (previewPane_)   previewPane_->refreshIcons();
     if (metadataPane_)  metadataPane_->refreshIcons();
     if (tagsNotesPane_) tagsNotesPane_->refreshIcons();
+
+    // ---- PDF / image preview toolbar zoom glyphs ----
+    if (filePreviewPane_) filePreviewPane_->refreshIcons();
 }
 
 void MainWindow::loadSettings() {
@@ -1382,6 +1443,16 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     // Load the file into the new native FilePreviewPane (top pane).
     try {
         if (filePreviewPane_) filePreviewPane_->loadFile(path);
+    } catch (...) {}
+
+    // The extracted-text pane is only useful next to a RENDERED preview:
+    // for PDFs the top pane shows page images while this pane shows the
+    // matching text. Every other type (txt/docx/xlsx/pptx/images…) already
+    // displays its full content in the top preview, so showing the same
+    // text twice was redundant — hide the bottom pane for those types.
+    try {
+        const bool isPdf = path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive);
+        previewPane_->setVisible(isPdf || path.isEmpty());
     } catch (...) {}
 
     try {
@@ -2530,8 +2601,9 @@ void MainWindow::updateIndexStats() {
             if (f.exists()) dbSize = f.size();
         }
         if (indexedInfoLbl_) {
-            // Single-line: "X files". Size info is already in Stats panel.
-            indexedInfoLbl_->setText(QString("%1 files").arg(total));
+            // Single-line, self-explanatory: "1,234 indexed". Size info
+            // stays in the Stats panel where curious users can find it.
+            indexedInfoLbl_->setText(QString("%1 indexed").arg(total));
         }
         if (indexedBar_) {
             // Progress = content_done / total (capped at 100).
@@ -2563,9 +2635,9 @@ void MainWindow::updateIndexStats() {
             indexingWidget_->update(p);
         }
 
-        statusBar()->showMessage(
-            QString("Files: %1 | Content: %2 | Metadata only: %3")
-                .arg(total).arg(contentDone).arg(metaOnly), 5000);
+        // NOTE: no periodic statusBar()->showMessage() here anymore — it
+        // fired on every timer tick and kept overwriting action feedback
+        // ("OCR complete", "N results", …) with raw counters nobody read.
     } catch (...) {
         // Stats update is best-effort - never crash the UI from a timer.
     }
@@ -3140,6 +3212,9 @@ void MainWindow::onOcrThisFile(const QString& path) {
 
     previewPane_->setExtractedText(ocrText);
     previewPane_->setDocumentText(ocrText);
+    // OCR results are text — surface them even when the selected file is
+    // not a PDF (the extracted-text pane starts hidden for those types).
+    previewPane_->setVisible(true);
     updateIndexStats();
     statusBar()->showMessage(
         QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
@@ -3355,67 +3430,101 @@ void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
     try {
         // ── Batch query: get ALL duplicate file records in ONE SQL query ──
-        // The old code called repo_->getById(id) for each duplicate file ID
-        // (N+1 query problem). With thousands of duplicates, that froze the
-        // UI for seconds. This single query replaces all the individual
-        // lookups.
         sqlite3* raw = db_->raw();
         if (!raw) return;
 
+        // Duplicate detection is only meaningful for user documents.
+        // Photos, screenshots and notes (png/jpg/md/txt…) naturally share
+        // bytes or tiny sizes and were pure noise here — the whitelist is
+        // deliberately limited to real document formats.
+        static const char* kDocTypes[] = {
+            "pdf", "doc", "docx", "xls", "xlsx",
+            "ppt", "pptx", "rtf", "csv"
+        };
+        QString typeList;
+        for (const char* t : kDocTypes) {
+            if (!typeList.isEmpty()) typeList += QLatin1Char(',');
+            typeList += QString("'%1'").arg(QLatin1String(t));
+        }
+
         sqlite3_stmt* s = nullptr;
-        // Find all files that share a hash with at least one other file.
-        // Ordered by hash so duplicates appear grouped in the results list.
-        sqlite3_prepare_v2(raw,
-            "SELECT f.id, f.path, f.filename, f.extension, f.size, f.modified_date, f.hash "
+        // Find document files that share a hash with at least one other
+        // file. Ordered by hash so duplicates appear grouped.
+        const QString sql = QString(
+            "SELECT f.id, f.path, f.filename, f.extension, f.size, "
+            "       f.modified_date, f.hash "
             "FROM Files f "
-            "WHERE f.hash != '' AND f.hash IN ("
+            "WHERE f.hash != '' AND lower(f.extension) IN (%1) AND f.hash IN ("
             "  SELECT hash FROM Files WHERE hash != '' "
             "  GROUP BY hash HAVING COUNT(*) > 1"
-            ") ORDER BY f.hash, f.filename;",
-            -1, &s, nullptr);
+            ") ORDER BY f.hash, f.filename;").arg(typeList);
+        sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr);
 
         QList<SearchHit> hits;
-        int groupCount = 0;
-        QString lastHash;
+        QStringList hashes;      // aligned with hits — used to regroup below
+        int skippedMissing = 0;
+
         while (sqlite3_step(s) == SQLITE_ROW) {
             SearchHit h;
             h.fileId       = sqlite3_column_int64(s, 0);
-            const unsigned char* p = sqlite3_column_text(s, 1);
+            const unsigned char* p  = sqlite3_column_text(s, 1);
             const unsigned char* fn = sqlite3_column_text(s, 2);
-            const unsigned char* e = sqlite3_column_text(s, 3);
-            h.path         = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
+            const unsigned char* e  = sqlite3_column_text(s, 3);
+            h.path         = p  ? QString::fromUtf8(reinterpret_cast<const char*>(p))  : QString();
             h.filename     = fn ? QString::fromUtf8(reinterpret_cast<const char*>(fn)) : QString();
-            h.extension    = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
+            h.extension    = e  ? QString::fromUtf8(reinterpret_cast<const char*>(e))  : QString();
             h.size         = sqlite3_column_int64(s, 4);
             h.modifiedDate = QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
             const unsigned char* hash = sqlite3_column_text(s, 6);
-            QString currentHash = hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
-            if (currentHash != lastHash) {
-                ++groupCount;
-                lastHash = currentHash;
-            }
-            hits.append(h);
+            const QString currentHash =
+                hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
 
-            // Process events every 500 files so the UI doesn't freeze
-            // during large duplicate sets.
-            if (hits.size() % 500 == 0) {
+            // Index rows can outlive their files (deleted after scanning).
+            // A "duplicate" pointing at nothing helps nobody — skip it.
+            if (!QFile::exists(h.path)) { ++skippedMissing; continue; }
+
+            hits.append(h);
+            hashes.append(currentHash);
+
+            // Process events periodically so the UI doesn't freeze when a
+            // large folder produces thousands of duplicate candidates.
+            if ((hits.size() + skippedMissing) % 400 == 0)
                 QApplication::processEvents();
-            }
         }
         sqlite3_finalize(s);
 
+        // Regroup AFTER filtering so vanished files never count as groups.
+        int groupCount = 0;
+        QString lastHash;
+        for (const QString& hs : hashes) {
+            if (hs != lastHash) { ++groupCount; lastHash = hs; }
+        }
+
         if (hits.isEmpty()) {
             QMessageBox::information(this, "Duplicates",
-                "No duplicates found.\n\n"
-                "Make sure 'Compute file hashes' is enabled in Settings → "
-                "Performance, then re-scan your folders.");
+                skippedMissing > 0
+                    ? QStringLiteral(
+                        "No duplicates among your remaining documents.\n\n"
+                        "%1 stale index entries (files already deleted from "
+                        "disk) were ignored. They disappear permanently after "
+                        "the next re-scan.").arg(skippedMissing)
+                    : QStringLiteral(
+                        "No duplicate documents found.\n\n"
+                        "Duplicate search covers documents only: "
+                        ".pdf .doc/.docx .xls/.xlsx .ppt/.pptx .rtf .csv\n\n"
+                        "Make sure 'Compute file hashes' is enabled in "
+                        "Settings → Performance, then re-scan your folders."));
             return;
         }
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)")
-                .arg(groupCount).arg(hits.size()), 8000);
+            skippedMissing > 0
+                ? QString("Found %1 duplicate groups (%2 files); %3 deleted files ignored.")
+                    .arg(groupCount).arg(hits.size()).arg(skippedMissing)
+                : QString("Found %1 duplicate groups (%2 files)")
+                    .arg(groupCount).arg(hits.size()),
+            8000);
     } catch (const std::exception& e) {
         DS_ERROR("Duplicates", QString("Failed: %1").arg(e.what()));
         statusBar()->showMessage("Duplicate detection failed.", 3000);

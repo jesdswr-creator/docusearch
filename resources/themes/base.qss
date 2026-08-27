@@ -298,7 +298,7 @@ QSpinBox, QDoubleSpinBox, QComboBox {
     border: 1px solid @border2@;
     border-radius: 8px;
     padding: 6px 10px;
-    font-weight: 600;
+    font-weight: 500;
 }
 QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
     border-color: @primaryBorder@;
@@ -307,7 +307,11 @@ QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
     border: 1px solid @primary@;
     background: @surface@;
 }
-QComboBox { padding-right: 28px; }
+QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+    background: transparent; color: @muted@;
+    border: 1px solid @border@;
+}
+QComboBox { padding-right: 28px; font-size: 12px; }
 QComboBox::drop-down {
     border: none;
     width: 22px;
@@ -324,17 +328,19 @@ QComboBox QAbstractItemView {
     color: @text@;
     border: 1px solid @border@;
     outline: 0;
-    padding: 6px;
+    padding: 5px;
     selection-background-color: @primarySoft@;
     selection-color: @primaryStrong@;
     background-color: @surface@;
 }
 QComboBox QAbstractItemView::item {
-    padding: 8px 14px;
-    min-height: 24px;
+    padding: 7px 14px;
+    min-height: 26px;
     border-radius: 6px;
     background: transparent;
     color: @text@;
+    font-weight: 500;
+    font-size: 12px;
 }
 QComboBox QAbstractItemView::item:hover {
     background: @hover@;
@@ -343,7 +349,40 @@ QComboBox QAbstractItemView::item:hover {
 QComboBox QAbstractItemView::item:selected {
     background: @primarySoft@;
     color: @primaryStrong@;
+    font-weight: 600;
 }
+
+/* ── Menus (context menus) — same card language as combobox popups ──
+   Without this block Qt falls back to the raw native menu look inside
+   an otherwise themed window — jarringly unstyled next to every other
+   dropdown. */
+QMenu {
+    background: @surface@;
+    color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 6px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QMenu::item {
+    padding: 7px 24px 7px 14px;
+    border-radius: 6px;
+    background: transparent;
+    color: @text@;
+}
+QMenu::item:selected {
+    background: @primarySoft@;
+    color: @primaryStrong@;
+    font-weight: 600;
+}
+QMenu::item:disabled { color: @muted@; }
+QMenu::separator {
+    height: 1px;
+    background: @hover@;
+    margin: 5px 8px;
+}
+QMenu::icon { padding-left: 8px; }
 
 /* Generic QListView fallback — refined card style */
 QListView {
@@ -723,6 +762,35 @@ QPushButton#extractedTab:checked {
 QTextEdit#extractedContent { background: @surface@; border-radius: 0; border: none; }
 QPushButton#ocrBtn { background: @success@; color: @btnText@; }
 QPushButton#ocrBtn:hover { border-color: @primaryBorder@; }
+
+/* ── PDF preview (continuous scroll) ──
+   Neutral workspace with white page cards floating on it, like a real
+   PDF reader. The toolbar is quiet chrome; icon-only zoom buttons sit
+   between the page stepper and the indicator. */
+QWidget#previewToolbar {
+    background: @surface2@;
+    border-bottom: 1px solid @border@;
+}
+QPushButton#previewIconBtn {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 6px;
+    padding: 0;
+}
+QPushButton#previewIconBtn:hover { border-color: @primaryBorder@; background: @hoverSoft@; }
+QPushButton#previewIconBtn:pressed { background: @primarySoft@; }
+QPushButton#previewIconBtn:disabled { background: transparent; border-color: @border@; }
+QLabel#previewPageLabel {
+    color: @muted@; font-size: 12px; font-weight: 600;
+    background: transparent;
+}
+QWidget#pdfPagesHost { background: @bg@; }
+QLabel#pdfPageCard {
+    background: #ffffff;
+    border: 1px solid @border2@;
+    border-radius: 4px;
+    color: @muted@; font-size: 12px;
+}
 
 /* ── Ghost icon buttons (More and friends) ── */
 QPushButton#moreActionBtn {

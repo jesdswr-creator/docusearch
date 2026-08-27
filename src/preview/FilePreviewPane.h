@@ -50,6 +50,9 @@ public:
     // Clears all preview widgets and shows the default unavailable message.
     void clearPreview();
 
+    // Re-render toolbar glyphs in child previews (call after retheme).
+    void refreshIcons();
+
     // Returns true if this file type is previewable.
     static bool isPreviewable(const QString& filePath);
 

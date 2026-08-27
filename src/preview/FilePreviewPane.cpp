@@ -116,6 +116,11 @@ void FilePreviewPane::clearPreview() {
     showUnavailable("Select a file to preview");
 }
 
+void FilePreviewPane::refreshIcons() {
+    m_pdfPreview->refreshIcons();
+    m_imagePreview->refreshIcons();
+}
+
 void FilePreviewPane::showUnavailable(const QString& message) {
     m_unavailableLabel->setText(message);
     m_stack->setCurrentWidget(m_unavailableWidget);

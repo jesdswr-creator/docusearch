@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.5.2
+    VERSION 1.6.0
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )

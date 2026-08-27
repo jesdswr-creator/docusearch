@@ -1,11 +1,14 @@
 #pragma once
 
 // ============================================================
-// PdfPreview.h - Preview widget for PDF files
+// PdfPreview.h - Continuous scrolling PDF preview (Poppler)
 // ============================================================
 //
-// Renders PDF pages one at a time using Poppler (cpp binding).
-// Lazy rendering — only the current page is held in memory.
+// All pages are laid out vertically inside one scroll area so the
+// user reads the document like in a normal PDF viewer (scroll wheel,
+// Prev/Next snap to page boundaries). Pages are rendered LAZILY:
+// only pages near the viewport are rasterized, and far-away pixmaps
+// are evicted, keeping memory bounded even for 30-page documents.
 // Caps: max 30 pages, max 100 MB file size.
 // ============================================================
 
@@ -15,6 +18,9 @@
 #include <QLabel>
 #include <QScrollArea>
 #include <QPushButton>
+#include <QVector>
+#include <QSizeF>
+#include <QTimer>
 #include <memory>
 
 namespace DocuSearch {
@@ -28,6 +34,7 @@ public:
     QWidget* getWidget() override { return this; }
     void clear() override;
     QString getTypeName() const override { return "PDF"; }
+    void refreshIcons();          // re-render toolbar glyphs after retheme
 
 protected:
     // Reimplemented to call onFitWindow() the first time the widget
@@ -41,32 +48,42 @@ private slots:
     void onZoomIn();
     void onZoomOut();
     void onFitWindow();
+    void onScrolled();
 
 private:
-    void renderPage(int pageNumber);
-    void updateButtonStates();
+    QSizeF  pageSizePoints(int index) const;
+    QSize   pageSizePixels(int index) const;
+    void    rebuildPages();               // (re)create placeholder labels
+    void    applyZoom(double newZoom);    // relayout + re-render visible set
+    int     currentPageFromScrollPos() const;
+    void    updatePageIndicator();
+    void    updateButtonStates();
+    void    scheduleRenderPass();         // debounced renderVisiblePages()
+    void    renderVisiblePages();         // rasterize viewport-neighbourhood
+    bool    renderIntoLabel(int index);   // sync-render one page pixmap
+    void    scrollToPage(int index);
+    void    pumpRenderQueue();            // step the sequential render queue
 
-    // Poppler document is held as void* to avoid leaking the poppler
-    // header into this class's interface. Internally we cast back to
-    // std::shared_ptr<poppler::document> with a custom deleter.
-    // (See CRITICAL-2 in the review report — we keep this pattern
-    // because poppler::document's destructor is virtual, so the
-    // static_cast in the deleter is safe.)
-    std::shared_ptr<void> m_document;
+    std::shared_ptr<void> m_document;     // poppler::document (type-erased)
 
-    QLabel*        m_pageCanvas   = nullptr;
-    QScrollArea*   m_scrollArea   = nullptr;
-    QLabel*        m_pageLabel    = nullptr;
-    QPushButton*   m_prevButton   = nullptr;
-    QPushButton*   m_nextButton   = nullptr;
-    QPushButton*   m_zoomInButton = nullptr;
-    QPushButton*   m_zoomOutButton= nullptr;
-    QPushButton*   m_fitButton    = nullptr;
+    QWidget*       m_pagesHost      = nullptr;
+    QLabel*        m_pageLabel      = nullptr;
+    QScrollArea*   m_scrollArea     = nullptr;
+    QVector<QLabel*> m_pageLabels;
+    QPushButton*   m_prevButton     = nullptr;
+    QPushButton*   m_nextButton     = nullptr;
+    QPushButton*   m_zoomInButton   = nullptr;
+    QPushButton*   m_zoomOutButton  = nullptr;
+    QPushButton*   m_fitButton      = nullptr;
+
+    QTimer         m_renderDebounce;      // coalesces scroll/zoom bursts
+    QVector<int>   m_renderQueue;         // page indices pending rasterization
+    bool           m_pumping        = false;
 
     int    m_currentPage  = 0;
     int    m_totalPages   = 0;
     double m_zoomLevel    = 1.0;
-    bool   m_pendingFit   = false;  // true = need to call onFitWindow on first show
+    bool   m_pendingFit   = false;   // true = need to call onFitWindow on first show
 
     static const int    MAX_PAGES           = 30;
     static constexpr double RENDER_DPI      = 150.0;

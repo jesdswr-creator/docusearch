@@ -23,6 +23,7 @@ public:
     QWidget* getWidget() override { return this; }
     void clear() override;
     QString getTypeName() const override { return "Image"; }
+    void refreshIcons();   // re-render toolbar glyphs after retheme
 
 private slots:
     void onZoomIn();
@@ -35,6 +36,8 @@ private:
     QLabel*        m_imageLabel  = nullptr;
     QScrollArea*   m_scrollArea  = nullptr;
     QLabel*        m_infoLabel   = nullptr;
+    QPushButton*   m_zoomInBtn   = nullptr;
+    QPushButton*   m_zoomOutBtn  = nullptr;
     QImage         m_originalImage;
     double         m_zoomLevel   = 1.0;
 

@@ -72,11 +72,11 @@ MetadataPane::MetadataPane(QWidget* parent) : QWidget(parent) {
 
     hLay->addStretch();
 
-    editBtn_ = new QPushButton(header);
-    editBtn_->setObjectName("editBtn");
-    editBtn_->setCursor(Qt::PointingHandCursor);
-    editBtn_->setToolTip("Edit tags and notes for this file");
-    hLay->addWidget(editBtn_);
+    // NOTE: the pencil "edit" button that used to live here is gone.
+    // Tags and notes are edited directly inside the Tags & Notes panel
+    // below — a second edit affordance on a read-only metadata list only
+    // confused users. The QSS rule for #editBtn remains harmless if the
+    // objectName is ever reused.
     outer->addWidget(header);
 
     // ---- Scrollable metadata rows ----
@@ -173,12 +173,6 @@ void MetadataPane::refreshIcons() {
         if (!iconLbl) continue;
         iconLbl->setPixmap(loadLucidePixmap(icons[i], iconColor, 16, row->devicePixelRatio()));
     }
-
-    // Edit button icon — white (the button has primary bg via QSS, so a
-    // white icon is visible). Previously this used muted gray which was
-    // invisible against the primary background.
-    editBtn_->setIcon(loadLucideIcon("pencil", QColor("#ffffff"), 16));
-    editBtn_->setIconSize(QSize(16, 16));
 }
 
 QString MetadataPane::humanizeStatus(const QString& s) const {

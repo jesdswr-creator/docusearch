@@ -77,12 +77,13 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     clearBtn_->hide();
     inputWrap->setClearButton(clearBtn_);
 
-    // Search button
+    // Search button — REMOVED. Typing searches live and Enter runs a
+    // full search; a dedicated primary button (whose icon kept rendering
+    // as an unlabeled blue box for some users) was redundant chrome.
+    // The member is kept so existing references keep compiling.
     searchBtn_ = new QPushButton("Search", this);
     searchBtn_->setObjectName("searchBtn");
-    searchBtn_->setCursor(Qt::PointingHandCursor);
-    searchBtn_->setMinimumHeight(36);
-    searchBtn_->setMaximumHeight(36);
+    searchBtn_->setVisible(false);
 
     // Saved searches
     savedBox_ = new QComboBox(this);
@@ -92,6 +93,9 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     savedBox_->setMaximumHeight(36);
     savedBox_->setCursor(Qt::PointingHandCursor);
     savedBox_->setMinimumWidth(100);
+    // Disabled until at least one saved search exists — a permanently
+    // empty dropdown read as broken UI. (setSavedSearches re-enables it.)
+    savedBox_->setEnabled(false);
 
     // Add Folder
     addFolderBtn_ = new QPushButton("Add Folder", this);
@@ -119,9 +123,8 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     gridBtn_ = new QPushButton(this); gridBtn_->setVisible(false);
     moreBtn_ = new QPushButton(this); moreBtn_->setVisible(false);
 
-    // Layout: input | Search | Saved | Add Folder | Extract
+    // Layout: input | Saved | Add Folder | Extract  (Search btn removed)
     layout->addWidget(inputWrap, 1);
-    layout->addWidget(searchBtn_);
     layout->addWidget(savedBox_);
     layout->addWidget(addFolderBtn_);
     layout->addWidget(extractBtn_);
@@ -175,6 +178,7 @@ void SearchBar::setSavedSearches(const QStringList& names) {
     savedBox_->clear();
     savedBox_->addItem("Saved");
     savedBox_->addItems(names);
+    savedBox_->setEnabled(!names.isEmpty());
     savedBox_->blockSignals(false);
     auto* c = edit_->completer();
     if (c) { auto* m = qobject_cast<QStringListModel*>(c->model()); if (m) m->setStringList(names); }

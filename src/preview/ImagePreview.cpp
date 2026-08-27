@@ -3,12 +3,15 @@
 // ============================================================
 
 #include "ImagePreview.h"
+#include "../ui/IconUtils.h"
 
 #include <QFile>
 #include <QFileInfo>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPixmap>
+#include <QApplication>
+#include <QPalette>
 
 namespace DocuSearch {
 
@@ -25,14 +28,19 @@ ImagePreview::ImagePreview(QWidget* parent)
     tbLay->setContentsMargins(4, 4, 4, 4);
     tbLay->setSpacing(4);
 
-    auto* zoomInBtn = new QPushButton("+", toolbar);
-    zoomInBtn->setToolTip("Zoom in (+)");
-    zoomInBtn->setFixedWidth(32);
-    auto* zoomOutBtn = new QPushButton("-", toolbar);
-    zoomOutBtn->setToolTip("Zoom out (-)");
-    zoomOutBtn->setFixedWidth(32);
+    auto* zoomInBtn = new QPushButton(toolbar);
+    zoomInBtn->setObjectName("previewIconBtn");
+    zoomInBtn->setFixedSize(30, 28);
+    zoomInBtn->setToolTip("Zoom in");
+    auto* zoomOutBtn = new QPushButton(toolbar);
+    zoomOutBtn->setObjectName("previewIconBtn");
+    zoomOutBtn->setFixedSize(30, 28);
+    zoomOutBtn->setToolTip("Zoom out");
     auto* fitBtn = new QPushButton("Fit", toolbar);
     fitBtn->setToolTip("Resize the image to fit the window");
+    m_zoomInBtn  = zoomInBtn;
+    m_zoomOutBtn = zoomOutBtn;
+    refreshIcons();
 
     tbLay->addWidget(zoomInBtn);
     tbLay->addWidget(zoomOutBtn);
@@ -61,6 +69,15 @@ ImagePreview::ImagePreview(QWidget* parent)
     connect(zoomInBtn,  &QPushButton::clicked, this, &ImagePreview::onZoomIn);
     connect(zoomOutBtn, &QPushButton::clicked, this, &ImagePreview::onZoomOut);
     connect(fitBtn,     &QPushButton::clicked, this, &ImagePreview::onFitWindow);
+}
+
+void ImagePreview::refreshIcons() {
+    if (!m_zoomInBtn || !m_zoomOutBtn) return;
+    const QColor textColor = qApp->palette().color(QPalette::Text);
+    m_zoomInBtn->setIcon(loadLucideIcon("zoom-in", textColor, 15));
+    m_zoomOutBtn->setIcon(loadLucideIcon("zoom-out", textColor, 15));
+    m_zoomInBtn->setIconSize(QSize(15, 15));
+    m_zoomOutBtn->setIconSize(QSize(15, 15));
 }
 
 bool ImagePreview::loadFile(const QString& filePath) {
