@@ -203,7 +203,9 @@ QSizeF PdfPreview::pageSizePoints(int index) const {
     auto* doc = static_cast<poppler::document*>(m_document.get());
     poppler::page* page = doc->create_page(index);
     if (!page) return QSizeF();
-    const poppler::rectf r = page->dimensions();
+    // vcpkg's poppler-cpp exposes page geometry as page_box(), not
+    // the older dimensions() helper.
+    const poppler::rectf r = page->page_box(poppler::page::media_box);
     delete page;
     return QSizeF(r.width(), r.height());
 #else

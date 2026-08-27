@@ -463,6 +463,16 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         if (msg->message == WM_NCCALCSIZE) {
             if (msg->wParam) {
                 if (IsZoomed(msg->hwnd)) {
+                    // Some SDK configurations hide these post-XP metrics.
+#ifndef SM_CXSIZEFRAME
+#define SM_CXSIZEFRAME 32
+#endif
+#ifndef SM_CYPADDEDBWIDTH
+#define SM_CYPADDEDBWIDTH 93
+#endif
+#ifndef SM_CXPADDEDBWIDTH
+#define SM_CXPADDEDBWIDTH 92
+#endif
                     auto* nccs = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
                     const int padX = GetSystemMetrics(SM_CXSIZEFRAME)
                                    + GetSystemMetrics(SM_CXPADDEDBWIDTH);
