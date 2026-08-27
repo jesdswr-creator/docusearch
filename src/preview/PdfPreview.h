@@ -19,7 +19,7 @@
 #include <QScrollArea>
 #include <QPushButton>
 #include <QVector>
-#include <QSizeF>
+#include <QSize>
 #include <QTimer>
 #include <memory>
 
@@ -51,8 +51,8 @@ private slots:
     void onScrolled();
 
 private:
-    QSizeF  pageSizePoints(int index) const;
     QSize   pageSizePixels(int index) const;
+    void    measureBaseSizes();           // low-DPI probe of true page sizes
     void    rebuildPages();               // (re)create placeholder labels
     void    applyZoom(double newZoom);    // relayout + re-render visible set
     int     currentPageFromScrollPos() const;
@@ -70,6 +70,7 @@ private:
     QLabel*        m_pageLabel      = nullptr;
     QScrollArea*   m_scrollArea     = nullptr;
     QVector<QLabel*> m_pageLabels;
+    QVector<QSize>   m_baseSizes;         // pixels at zoom level 1
     QPushButton*   m_prevButton     = nullptr;
     QPushButton*   m_nextButton     = nullptr;
     QPushButton*   m_zoomInButton   = nullptr;

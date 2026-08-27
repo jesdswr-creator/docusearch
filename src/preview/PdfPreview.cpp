@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QTimer>
 #include <QApplication>
+#include <QEventLoop>
 #include <QPalette>
 #include <algorithm>
 
@@ -38,6 +39,9 @@ constexpr int kRenderContextPages = 1;
 // Hard cap on pixmaps kept alive; anything farther than this many
 // pages from the viewport is evicted during the render pass.
 constexpr int kEvictDistance      = 8;
+// Low DPI used ONLY to measure page proportions cheaply. The real
+// display render always happens at RENDER_DPI * zoom.
+constexpr double kMeasureDpi      = 36.0;
 } // namespace
 
 PdfPreview::PdfPreview(QWidget* parent)
@@ -173,6 +177,7 @@ bool PdfPreview::loadFile(const QString& filePath) {
         m_currentPage = 0;
         m_zoomLevel   = 1.0;
 
+        measureBaseSizes();   // true page sizes via cheap low-DPI probes
         rebuildPages();
         m_pendingFit = true;  // trigger onFitWindow() in showEvent
 
@@ -197,29 +202,47 @@ bool PdfPreview::loadFile(const QString& filePath) {
 #endif
 }
 
-QSizeF PdfPreview::pageSizePoints(int index) const {
-#ifdef DOCUSEARCH_HAS_POPPLER
-    if (!m_document || index < 0 || index >= m_totalPages) return QSizeF();
-    auto* doc = static_cast<poppler::document*>(m_document.get());
-    poppler::page* page = doc->create_page(index);
-    if (!page) return QSizeF();
-    // vcpkg's poppler-cpp exposes page geometry as page_box(), not
-    // the older dimensions() helper.
-    const poppler::rectf r = page->page_box(poppler::page::media_box);
-    delete page;
-    return QSizeF(r.width(), r.height());
-#else
-    Q_UNUSED(index);
-    return QSizeF();
-#endif
+QSize PdfPreview::pageSizePixels(int index) const {
+    if (index >= 0 && index < m_baseSizes.size()) {
+        const QSize& b = m_baseSizes[index];
+        return QSize(qMax(64, int(b.width()  * m_zoomLevel + 0.5)),
+                     qMax(84, int(b.height() * m_zoomLevel + 0.5)));
+    }
+    return QSize(600, 800);  // sane fallback aspect
 }
 
-QSize PdfPreview::pageSizePixels(int index) const {
-    const QSizeF pts = pageSizePoints(index);
-    if (pts.isEmpty()) return QSize(600, 800);  // sane fallback aspect
-    const double scale = RENDER_DPI * m_zoomLevel / 72.0;
-    return QSize(qMax(64, int(pts.width()  * scale + 0.5)),
-                 qMax(84, int(pts.height() * scale + 0.5)));
+// Probe every page once at a very low DPI to learn its true pixel
+// size at RENDER_DPI (zoom 1). This avoids any poppler geometry API
+// (dimensions()/page_box() differ wildly between versions) by using
+// the renderer itself, which has been stable across every build.
+void PdfPreview::measureBaseSizes() {
+    m_baseSizes.clear();
+#ifdef DOCUSEARCH_HAS_POPPLER
+    if (!m_document) return;
+    auto* doc = static_cast<poppler::document*>(m_document.get());
+    for (int i = 0; i < m_totalPages; ++i) {
+        QSize sz(1275, 1650);   // A4 portrait @150 DPI fallback
+        poppler::page* page = doc->create_page(i);
+        if (page) {
+            poppler::page_renderer renderer;
+            auto img = renderer.render_page(page, kMeasureDpi, kMeasureDpi);
+            delete page;
+            if (img.is_valid() && img.width() > 0 && img.height() > 0) {
+                sz.setWidth(qMax(64,
+                    int(img.width()  * (RENDER_DPI / kMeasureDpi) + 0.5)));
+                sz.setHeight(qMax(84,
+                    int(img.height() * (RENDER_DPI / kMeasureDpi) + 0.5)));
+            }
+        }
+        m_baseSizes.append(sz);
+        // Yield occasionally so a big document does not hitch the UI
+        // noticeably during load.
+        if ((i % 10) == 9) QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
+#else
+    for (int i = 0; i < m_totalPages; ++i)
+        m_baseSizes.append(QSize(600, 800));
+#endif
 }
 
 void PdfPreview::rebuildPages() {
@@ -244,14 +267,7 @@ void PdfPreview::rebuildPages() {
         lbl->setScaledContents(false);
         // Reserve the exact final size so scroll offsets are stable
         // before the pixmap arrives (lazy placeholder).
-        const QSize px = [&]{
-            const QSizeF pts = pageSizePoints(i);
-            if (pts.isEmpty()) return QSize(600, 800);
-            const double scale = RENDER_DPI * m_zoomLevel / 72.0;
-            return QSize(qMax(64, int(pts.width()  * scale + 0.5)),
-                         qMax(84, int(pts.height() * scale + 0.5)));
-        }();
-        lbl->setFixedSize(px);
+        lbl->setFixedSize(pageSizePixels(i));
         lay->insertWidget(lay->count() - 1, lbl, 0, Qt::AlignHCenter);
         m_pageLabels.append(lbl);
     }
@@ -439,19 +455,13 @@ void PdfPreview::onFitWindow() {
     if (!m_document || m_totalPages == 0) return;
     // Fit the WIDEST page to the viewport width so no horizontal
     // scrolling surprises appear mid-document.
-    double widestPts = 0.0;
-    for (int i = 0; i < m_totalPages; ++i) {
-        const QSizeF pts = pageSizePoints(i);
-        widestPts = std::max(widestPts, pts.width());
-    }
+    double widestPx1 = 0.0;
+    for (int i = 0; i < m_baseSizes.size(); ++i)
+        widestPx1 = std::max<double>(widestPx1, m_baseSizes[i].width());
+    if (widestPx1 <= 0.0) { applyZoom(1.0); return; }
     const int viewportWidth = m_scrollArea->viewport()->width() - 24 - 20; // margins+scrollbar
-    if (widestPts <= 0.0 || viewportWidth <= 0) {
-        applyZoom(1.0);
-        return;
-    }
-    // pixelWidth = ptsWidth * DPI/72 * zoom  =>  zoom = target/pw at zoom 1.
-    const double pxAtZoom1 = widestPts * RENDER_DPI / 72.0;
-    applyZoom(viewportWidth / pxAtZoom1);
+    if (viewportWidth <= 0) { applyZoom(1.0); return; }
+    applyZoom(viewportWidth / widestPx1);
 }
 
 void PdfPreview::clear() {
@@ -460,6 +470,7 @@ void PdfPreview::clear() {
     m_currentPage = 0;
     m_zoomLevel   = 1.0;
     m_pendingFit  = false;
+    m_baseSizes.clear();
     rebuildPages();                 // removes all page cards
     m_pageLabel->setText("No document loaded");
     updateButtonStates();
