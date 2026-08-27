@@ -884,67 +884,74 @@ void MainWindow::applyTheme() {
     // Fluent palette tokens (same names as before so QSS works unchanged).
     QString bg, surface, surface2, surface3, field, border, border2, hover, hoverSoft, text, muted;
     QString primary, primaryStrong, primarySoft, primaryBorder, primaryGlow;
-    QString shadow, elevation1, elevation2;
+    QString shadow, elevation1, elevation2, btnText;
     QString themeLabel;
     bool isDark = false;
 
     switch (pastelTheme_) {
-        case 1: // Fluent Dark
+        case 1: // Midnight (pro dark)
             isDark = true;
-            // Direct from docs/ui-design-reference.html dark tokens.
-            bg        = "#1c1c1c";   // --mica
-            surface   = "#262626";   // --surface
-            surface2  = "#2d2d2d";   // --card
-            surface3  = "#333333";   // --card-2
-            field     = "#2d2d2d";   // --card
-            border    = "#2e2e2e";   // rgba(255,255,255,.085) ≈ #2e2e2e on #1c1c1c
-            border2   = "#3a3a3a";   // rgba(255,255,255,.16)
-            hover     = "#2d2d2d";   // rgba(255,255,255,.055)
-            hoverSoft = "#2a2a2a";
-            text      = "#f5f5f5";
-            muted     = "#a9a9a9";
-            primary        = "#4cc2ff";   // --accent (Win11 cyan)
-            primaryStrong  = "#67d4ff";   // --accent-strong
-            primarySoft    = "#1f2d3a";   // rgba(76,194,255,.14)
-            primaryBorder  = "#3a6477";   // rgba(76,194,255,.30)
-            primaryGlow    = "#4cc2ff";
-            shadow     = "#00000099";    // 0 8px 28px rgba(0,0,0,.45)
-            elevation1 = "#2d2d2d";
-            elevation2 = "#333333";
-            tooltipBg  = "#1c1c1c";
-            tooltipText = "#f5f5f5";
+            // ── DocuSearch Pro · Midnight — 2026 design refresh ──
+            // Deep blue-slate neutrals (never pure black), hairline borders,
+            // and a luminous indigo accent. Accent buttons use DARK ink on a
+            // bright fill (the Linear/GitHub-dark pattern) for AA contrast.
+            bg        = "#14181f";   // window canvas
+            surface   = "#1b212b";   // panels / cards
+            surface2  = "#232b38";   // chrome: title bar, search bar, status bar
+            surface3  = "#2b3547";   // chrome deep end of gradients
+            field     = "#161c25";   // inputs sit recessed below panels
+            border    = "#26303f";   // hairline ≈ rgba(255,255,255,.06)
+            border2   = "#3a465a";   // stronger ≈ rgba(255,255,255,.12)
+            hover     = "#232c3b";
+            hoverSoft = "#1f2734";
+            text      = "#e8edf5";
+            muted     = "#97a3b8";
+            primary        = "#4d8df6";   // luminous indigo-blue (fills)
+            primaryStrong  = "#7cb0ff";   // emphasis text / hover lift
+            primarySoft    = "#223259";   // selected backgrounds
+            primaryBorder  = "#45639e";
+            primaryGlow    = "#79acff";
+            btnText   = "#0a1322";         // dark ink on luminous accent fills
+            shadow     = "#000000aa";
+            elevation1 = "#222b3a";
+            elevation2 = "#293349";
+            tooltipBg  = "#0d1118";
+            tooltipText = "#e8edf5";
             // File-type accent colors — kept punchy on dark surfaces.
             cPdf="#ff99a4"; cDocx="#67d4ff"; cXlsx="#6ccb9f"; cMd="#b18aff"; cTxt="#7ad7f0";
             cPdfBg="#3d1f24"; cDocxBg="#1f2d3a"; cXlsxBg="#1f3d2a"; cMdBg="#2d1f3d"; cTxtBg="#1f3d40";
-            success="#6ccb9f"; warn="#ffcf6b"; pink="#ff99a4"; orange="#ffcf6b"; sky="#4cc2ff"; violet="#b18aff";
+            success="#3ecf8e"; warn="#f5bf4f"; pink="#f472b6"; orange="#fb923c"; sky="#66b1ff"; violet="#b18aff";
             themeLabel = "Dark";
             break;
-        default: // Fluent Light (index 0)
-            // Direct from docs/ui-design-reference.html light tokens.
-            bg        = "#f2f1ee";   // --mica (warm light gray)
-            surface   = "#faf9f7";   // --surface
-            surface2  = "#ffffff";   // --card
-            surface3  = "#f4f4f4";    // --card-2
-            field     = "#ffffff";
-            border    = "#e1e0dc";    // rgba(0,0,0,.08)
-            border2   = "#d0cfc9";    // rgba(0,0,0,.16)
-            hover     = "#eceae5";    // rgba(0,0,0,.045)
-            hoverSoft = "#f0eeea";
-            text      = "#1b1b1b";
-            muted     = "#5c5c5c";
-            primary        = "#0067c0";   // --accent (Win11 blue)
-            primaryStrong  = "#005a9e";   // --accent-strong
-            primarySoft    = "#e0eef7";   // rgba(0,103,192,.10)
-            primaryBorder  = "#9ec5e0";   // rgba(0,103,192,.30)
-            primaryGlow    = "#0067c0";
-            shadow     = "#00000033";    // 0 10px 30px rgba(0,0,0,.14)
+        default: // Daylight (pro light)
+            // ── DocuSearch Pro · Daylight — 2026 design refresh ──
+            // Cool neutral canvas (no more beige cast), crisp white cards,
+            // slate text ramp, and a confident indigo-blue accent.
+            bg        = "#f6f7f9";
+            surface   = "#ffffff";
+            surface2  = "#eff1f5";   // chrome bars read as "device shell"
+            surface3  = "#e7eaf0";
+            field     = "#fafbfd";
+            border    = "#e4e7ee";   // hairline
+            border2   = "#d2d9e4";
+            hover     = "#eef1f6";
+            hoverSoft = "#f2f4f8";
+            text      = "#151f2c";
+            muted     = "#667188";
+            primary        = "#2563eb";
+            primaryStrong  = "#1d4ed8";
+            primarySoft    = "#e9f0fd";
+            primaryBorder  = "#bcd0f6";
+            primaryGlow    = "#3b82f6";
+            btnText   = "#ffffff";
+            shadow     = "#00000026";
             elevation1 = "#ffffff";
-            elevation2 = "#f4f4f4";
-            tooltipBg  = "#1b1b1b";
+            elevation2 = "#fafbfd";
+            tooltipBg  = "#101828";
             tooltipText = "#ffffff";
             cPdf="#c42b1c"; cDocx="#0067c0"; cXlsx="#0f7b4a"; cMd="#8a5b00"; cTxt="#005a9e";
             cPdfBg="#fde0dc"; cDocxBg="#dbeaf6"; cXlsxBg="#d6ecd9"; cMdBg="#f4e6cc"; cTxtBg="#d6e8f4";
-            success="#0f7b4a"; warn="#8a5b00"; pink="#c42b1c"; orange="#8a5b00"; sky="#0067c0"; violet="#6d4ea6";
+            success="#059669"; warn="#b45309"; pink="#db2777"; orange="#ea580c"; sky="#0369a1"; violet="#7c3aed";
             themeLabel = "Light";
             break;
     }
@@ -1002,10 +1009,9 @@ QWidget {
 }
 QMainWindow { background: @bg@; }
 
-/* ── Title bar — subtle gradient for premium feel ── */
+/* ── Title bar — flat chrome shell, hairline seam ── */
 QWidget#topMenuBar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 @surface2@, stop:1 @surface3@);
+    background: @surface2@;
     border-bottom: 1px solid @border@;
 }
 
@@ -1036,21 +1042,30 @@ QLineEdit:focus {
     border: 1px solid @primary@;
     background: @surface@;
 }
+QLineEdit:disabled {
+    background: @hoverSoft@;
+    color: @muted@;
+    border-color: @border@;
+}
 
-/* ── Primary button — gradient accent (subtle two-tone lift) ── */
+/* ── Primary button — confident accent fill, dark-or-light ink per theme ──
+   A transparent 1px base border reserves space so the :focus ring swaps
+   color without any geometry shift. Hover lifts via @primaryGlow@ which
+   stays legible against both ink choices in either mode. */
 QPushButton {
     background: @primary@;
-    color: #ffffff;
-    border: none;
-    border-radius: 10px;
-    padding: 7px 16px;
-    font-weight: 700;
+    color: @btnText@;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 7px 15px;
+    font-weight: 600;
     font-size: 13px;
 }
 QPushButton:hover {
-    background: @primaryStrong@;
+    background: @primaryGlow@;
 }
 QPushButton:pressed { background: @primaryStrong@; }
+QPushButton:focus { border-color: @primaryBorder@; }
 QPushButton:disabled { background: @border2@; color: @muted@; }
 
 /* ── Title bar window buttons (min/max/close) ──
@@ -1524,6 +1539,142 @@ QListWidget#sidebar::item:selected {
     font-weight: 700;
     border-left: 3px solid @primary@;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Component completeness pass — v1.5 "Modern Professional" refresh.
+   Every widget below exists at runtime but previously had NO rule
+   here: tag pills all rendered as solid primary-blue chips, the
+   status dot was an unstyled gray square, and the viewer / extract
+   drawer / search bar fell back to bare generic styles. Giving each
+   one an intentional treatment is what separates a themed demo
+   from a shippable product.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Pane containers — share the window canvas so splitters read as seams */
+QWidget#centralWidget, QWidget#filePreviewPane, QWidget#previewPane,
+QWidget#resultsPane, QWidget#metadataPane,
+QWidget#tagsNotesPane, QWidget#tagsNotesPanel { background: @bg@; }
+
+/* ── Frameless titlebar container (defensive: legacy name) ── */
+QWidget#titleBar { background: @surface2@; border-bottom: 1px solid @border@; }
+QLabel#titleLabel { font-weight: 800; font-size: 13px; background: transparent; }
+
+/* ── Search bar — chrome shell + prominent command-field ── */
+QWidget#searchBarArea { background: @surface2@; border-bottom: 1px solid @border@; }
+QLineEdit#searchInput {
+    background: @field@; color: @text@;
+    border: 1px solid @border2@;
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 13px; font-weight: 500;
+    selection-background-color: @primary@; selection-color: @btnText@;
+}
+QLineEdit#searchInput:hover { border-color: @primaryBorder@; }
+QLineEdit#searchInput:focus { border: 1px solid @primary@; background: @surface@; }
+
+/* Sort dropdown reads as a compact filter chip, not a form control */
+QComboBox#sortSelect { padding: 4px 26px 4px 12px; font-size: 12px; }
+
+/* ── Document viewer ── */
+QWidget#viewerPanel { background: @surface@; }
+QWidget#viewerHeader { background: @surface2@; border-bottom: 1px solid @border@; }
+QLabel#viewerTitle {
+    font-size: 13px; font-weight: 700; color: @text@;
+    background: transparent;
+}
+QTextEdit#documentPage {
+    /* The paper sheet stays physical-light in BOTH modes on purpose:
+       reading surfaces do not invert with chrome — like every PDF viewer. */
+    background: #fbf9f4; color: #26303d;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 24px 28px;
+}
+QTextEdit#documentPage:focus { border: 1px solid @primaryBorder@; }
+
+/* ── Extracted-content drawer under the viewer ── */
+QWidget#extractedPanel { background: @surface2@; border-top: 1px solid @border@; }
+QWidget#extractedTabHeader { background: transparent; border-bottom: 1px solid @border@; }
+QPushButton#extractedTab {
+    background: transparent; color: @muted@;
+    border: none; border-bottom: 2px solid transparent;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 14px;
+    font-size: 12px; font-weight: 600;
+}
+QPushButton#extractedTab:hover { color: @text@; background: @hover@; }
+QPushButton#extractedTab:checked {
+    color: @primaryStrong@;
+    border-bottom: 2px solid @primary@;
+    background: transparent;
+}
+/* Open/Copy/Download inherit the accent-fill QPushButton recipe above.
+   OCR gets its own semantic-green treatment instead of echoing blue. */
+QTextEdit#extractedContent { background: @surface@; border-radius: 0; border: none; }
+QPushButton#ocrBtn { background: @success@; color: @btnText@; }
+QPushButton#ocrBtn:hover { border-color: @primaryBorder@; }
+
+/* ── Ghost icon buttons (More and friends) ── */
+QPushButton#moreActionBtn {
+    background: transparent; color: @muted@;
+    border: none; border-radius: 8px; padding: 2px;
+    min-width: 28px; min-height: 28px; max-width: 28px; max-height: 28px;
+}
+QPushButton#moreActionBtn:hover { background: @hover@; color: @text@; }
+
+/* ── Metadata tidy-ups ── */
+QLabel#metaIconLabel { background: transparent; }
+
+/* ── Tags & notes ── */
+QLabel#tagsHeader, QLabel#notesHeader {
+    font-size: 12px; font-weight: 700; color: @muted@;
+    letter-spacing: 0.4px; background: transparent;
+}
+QWidget#notesSection { background: transparent; }
+QTextEdit#notesContent {
+    background: @field@; color: @text@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+QTextEdit#notesContent:focus { border: 1px solid @primaryBorder@; }
+QLabel#notesModified { font-size: 10.5px; color: @muted@; background: transparent; }
+QPushButton#addTagBtn {
+    background: transparent; color: @muted@;
+    border: 1px dashed @border2@;
+    border-radius: 999px; padding: 3px 11px;
+    font-size: 11px; font-weight: 600;
+}
+QPushButton#addTagBtn:hover {
+    color: @primaryStrong@;
+    border: 1px solid @primaryBorder@;
+    background: transparent;
+}
+
+/* Tag pills — were falling through to the solid-accent QPushButton rule,
+   so ALL four classes rendered identical primary-blue. Now each class is
+   a soft tinted chip whose wash stays legible in both modes; ID
+   specificity keeps their bg stable against the generic :hover fill. */
+QPushButton#tagBlue   { background: rgba(96,165,250,0.22); color: @sky@; }
+QPushButton#tagGreen  { background: rgba(62,207,142,0.20); color: @success@; }
+QPushButton#tagYellow { background: rgba(245,191,79,0.22); color: @warn@; }
+QPushButton#tagPurple { background: rgba(177,138,255,0.22); color: @violet@; }
+QPushButton#tagBlue:hover, QPushButton#tagGreen:hover,
+QPushButton#tagYellow:hover, QPushButton#tagPurple:hover {
+    border-color: @primaryBorder@;
+}
+
+/* ── Sidebar index meter row ── */
+QWidget#indexedStatus { background: transparent; border-top: 1px solid @border@; }
+
+/* Status dot until dynamic state recolors it */
+QLabel#statusDot {
+    background: @success@; border-radius: 4px;
+    min-width: 8px; min-height: 8px; max-width: 8px; max-height: 8px;
+}
+
+/* Keyboard focus visibility for result rows */
+QListWidget#resultsList::item:focus { border-color: @primaryBorder@; }
 )");
 
     // Token substitution
@@ -1532,7 +1683,7 @@ QListWidget#sidebar::item:selected {
         {"@bg@",bg},{"@surface@",surface},{"@surface2@",surface2},{"@surface3@",surface3},
         {"@field@",field},{"@border@",border},{"@border2@",border2},
         {"@hover@",hover},{"@hoverSoft@",hoverSoft},
-        {"@text@",text},{"@muted@",muted},
+        {"@text@",text},{"@muted@",muted},{"@btnText@",btnText},
         {"@primary@",primary},{"@primaryStrong@",primaryStrong},
         {"@primarySoft@",primarySoft},{"@primaryBorder@",primaryBorder},
         {"@primaryGlow@",primaryGlow},

@@ -1,9 +1,12 @@
-/* DocuSearch — Dark theme overrides.
-   The authoritative QSS is compiled into Theme.cpp; this file is shipped
-   purely as an editable override. To customise the dark theme, uncomment
-   and edit the rules below — they will be applied after the built-in QSS. */
+/* DocuSearch - Dark theme ("Midnight") override hooks.
+   ⚠ SOURCE OF TRUTH: the authoritative QSS is generated inside
+   MainWindow::applyTheme() (src/ui/MainWindow.cpp) with @token@
+   substitution and applied via qApp->setStyleSheet().
+   This file ships only as an optional user/IT override hook — any rules
+   uncommented below are appended AFTER the built-in sheet.
+   To customise, mirror the selectors used in MainWindow::applyTheme(). */
 
 /*
-QMainWindow, QWidget { background-color: #1f1f1f; }
+QMainWindow { background-color: #14181f; }
 QPushButton { border-radius: 8px; }
 */

@@ -1,9 +1,12 @@
-/* DocuSearch — Light theme overrides.
-   The authoritative QSS is compiled into Theme.cpp; this file is shipped
-   purely as an editable override. To customise the light theme, uncomment
-   and edit the rules below — they will be applied after the built-in QSS. */
+/* DocuSearch - Light theme ("Daylight") override hooks.
+   ⚠ SOURCE OF TRUTH: the authoritative QSS is generated inside
+   MainWindow::applyTheme() (src/ui/MainWindow.cpp) with @token@
+   substitution and applied via qApp->setStyleSheet().
+   This file ships only as an optional user/IT override hook — any rules
+   uncommented below are appended AFTER the built-in sheet.
+   To customise, mirror the selectors used in MainWindow::applyTheme(). */
 
 /*
-QMainWindow, QWidget { background-color: #fafafa; }
+QMainWindow { background-color: #f6f7f9; }
 QPushButton { border-radius: 8px; }
 */
