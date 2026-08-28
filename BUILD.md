@@ -238,7 +238,7 @@ DocuSearch is a proper Windows 11 citizen:
 | Taskbar jump list             | `src/win/JumpList.{h,cpp}` — native `ICustomDestinationList` |
 | File associations             | Both WiX (`.pdf`, `.docx`, `.xlsx`, `.pptx`) AND MSIX manifest |
 | Start Menu + Desktop shortcuts| WiX installer (`ApplicationShortcut` + Desktop shortcut)   |
-| Add/Remove Programs entry     | WiX `RegistryUninstallEntry` component                     |
+| Add/Remove Programs entry     | MSI built-in ARP + `ARPPRODUCTICON` (single entry with app logo) |
 | Modern Fluent QSS theme       | `Theme.cpp` — 8 px rounded, Win11 accent (#005FB8 / #4CC2FF) |
 | App User Model ID             | Set on shortcuts so taskbar grouping works correctly       |
 

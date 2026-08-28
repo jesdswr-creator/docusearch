@@ -655,13 +655,30 @@ jobs:
             Write-Host "  Semantic search will be unavailable in this build."
           }
 
+      - name: Read app version from CMakeLists.txt
+        shell: pwsh
+        run: |
+          # One version source for the whole pipeline: project(VERSION) in
+          # CMakeLists.txt. Portable-ZIP filename, MSI filename and MSI
+          # ProductVersion all derive from it, so installers can never
+          # lag the app again (the MSI was frozen at 1.4.0.0 while the
+          # app kept releasing).
+          $cmake = Get-Content CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(DocuSearch\s+VERSION\s+(\d+)\.(\d+)\.(\d+)') {
+            throw "Could not parse project VERSION from CMakeLists.txt"
+          }
+          $ver = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          "APP_VERSION=$ver"       >> $env:GITHUB_ENV
+          "APP_VERSION_MSI=$ver.0" >> $env:GITHUB_ENV
+          Write-Host "App version: $ver (MSI ProductVersion: $ver.0)"
+
       - name: Build portable ZIP
         shell: pwsh
         run: |
           # Create a portable ZIP directly from the windeployqt output.
           # This is simpler than MSI/MSIX and works on any Windows 10/11 PC
           # without installation - just unzip and double-click DocuSearch.exe.
-          $portableZip = Join-Path (Get-Location) "dist\DocuSearch-1.0.0.0-portable.zip"
+          $portableZip = Join-Path (Get-Location) "dist\DocuSearch-$env:APP_VERSION-portable.zip"
           $distDir = Split-Path $portableZip -Parent
           if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
           if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
@@ -740,7 +757,7 @@ jobs:
           $env:Path += ";$env:USERPROFILE\.dotnet\tools"
           $wxsMain = "installer\DocuSearch.wxs"
           $wxsHarvest = "installer\DocuSearch.Harvest.wxs"
-          $msiOut = Join-Path (Get-Location) "dist\DocuSearch-Setup-1.0.0.0.msi"
+          $msiOut = Join-Path (Get-Location) "dist\DocuSearch-Setup-$env:APP_VERSION.msi"
           if (-not (Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" | Out-Null }
           # Build MSI: pass both the main wxs and the harvested wxs as inputs.
           # -ext WixToolset.UI.wixext enables <ui:WixUI> for the install wizard.
@@ -748,6 +765,7 @@ jobs:
           # C:\Program Files (not Program Files (x86)).
           & wix build $wxsMain $wxsHarvest -o $msiOut `
             -d "BuildOutputDir=build\bin\Release" `
+            -d "ProductVersion=$env:APP_VERSION_MSI" `
             -ext WixToolset.UI.wixext `
             -platform x64
           if (-not (Test-Path $msiOut)) { throw "MSI was not produced at $msiOut" }
@@ -844,7 +862,7 @@ jobs:
           }
 
           # ── Sign the MSI installer ─────────────────────────────────────
-          $msi = "dist\DocuSearch-Setup-1.0.0.0.msi"
+          $msi = "dist\DocuSearch-Setup-$env:APP_VERSION.msi"
           if (Test-Path $msi) {
             Write-Host "Signing: $msi"
             & $signtool sign /f $certPath /p $certPwd `
@@ -892,7 +910,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: DocuSearch-portable
-          path: dist/DocuSearch-1.0.0.0-portable.zip
+          path: dist/DocuSearch-*-portable.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -900,7 +918,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: DocuSearch-Setup-msi
-          path: dist/DocuSearch-Setup-1.0.0.0.msi
+          path: dist/DocuSearch-Setup-*.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -924,12 +942,12 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: DocuSearch-portable.zip
-          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-1.0.0.0-portable.zip') }}
+          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-*-portable.zip') }}
           push-to-registry: false
 
       - name: Attest build provenance (MSI installer)
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: DocuSearch-Setup.msi
-          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-Setup-1.0.0.0.msi') }}
+          subject-digest: sha256:${{ hashFiles('dist/DocuSearch-Setup-*.msi') }}
           push-to-registry: false

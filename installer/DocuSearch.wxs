@@ -34,7 +34,14 @@
 
   <?define ProductName       = "DocuSearch" ?>
   <?define ProductPublisher  = "DocuSearch" ?>
-  <?define ProductVersion    = "1.4.0.0" ?>
+  <!-- ProductVersion: CI passes -d ProductVersion=x.y.z.0 parsed from
+       CMakeLists.txt, so the MSI always matches the app version. This
+       file was frozen at 1.4.0.0 for every release since v1.4 — the
+       installer is now versioned from the single source of truth, and
+       the define below is only the fallback for local builds. -->
+  <?ifndef ProductVersion ?>
+  <?define ProductVersion    = "1.6.5.0" ?>
+  <?endif ?>
   <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
 
   <Package
@@ -77,6 +84,22 @@
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
 
     <!-- ============================================================
+         Add/Remove Programs metadata — the ONE automatic entry.
+         Windows Installer registers an uninstall entry itself for
+         every MSI product. This package used to ALSO hand-write a
+         second Uninstall registry key (RegistryUninstallEntry), which
+         produced two DocuSearch rows in Add/Remove Programs — one with
+         the app logo (DisplayIcon) and one with a generic icon — and
+         removing either killed both because both pointed at the same
+         MSI product. The hand-written key is gone; ARPPRODUCTICON
+         gives the remaining automatic entry the DocuSearch logo.
+         ============================================================ -->
+    <Property Id="ARPPRODUCTICON" Value="DocuSearchIcon.exe" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/jesdswr-creator/docusearch" />
+
+    <!-- ============================================================
          Product structure
          ============================================================ -->
     <Media Id="1" Cabinet="DocuSearch.cab" EmbedCab="yes" />
@@ -87,7 +110,6 @@
       <ComponentGroupRef Id="HarvestedFiles" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="ApplicationShortcutDesktop" />
-      <ComponentRef Id="RegistryUninstallEntry" />
       <ComponentRef Id="FileAssocPdf" />
       <ComponentRef Id="FileAssocDocx" />
       <ComponentRef Id="FileAssocXlsx" />
@@ -186,55 +208,6 @@
                        KeyPath="yes" />
       </Component>
     </DirectoryRef>
-
-    <!-- ============================================================
-         Add/Remove Programs (uninstall) entry
-         ============================================================ -->
-    <Component Id="RegistryUninstallEntry"
-               Directory="INSTALLFOLDER"
-               Guid="A1B2C3D4-AAAA-BBBB-CCCC-DDDDEEEEFFFF">
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="DisplayName"
-                     Value="$(var.ProductName)"
-                     Type="string" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="DisplayVersion"
-                     Value="$(var.ProductVersion)"
-                     Type="string" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="Publisher"
-                     Value="$(var.ProductPublisher)"
-                     Type="string" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="InstallLocation"
-                     Value="[INSTALLFOLDER]"
-                     Type="string" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="DisplayIcon"
-                     Value="[BinFolder]DocuSearch.exe,0"
-                     Type="string" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="NoModify"
-                     Value="1"
-                     Type="integer" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="NoRepair"
-                     Value="1"
-                     Type="integer" />
-      <RegistryValue Root="HKMU"
-                     Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(var.ProductName)"
-                     Name="UninstallString"
-                     Value="[System64Folder]msiexec.exe /x [ProductCode] /qn"
-                     Type="string"
-                     KeyPath="yes" />
-    </Component>
 
     <!-- ============================================================
          File associations: .pdf, .docx, .xlsx, .pptx
