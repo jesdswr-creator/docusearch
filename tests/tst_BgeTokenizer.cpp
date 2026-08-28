@@ -211,7 +211,12 @@ private slots:
         // 600 known words → 602 tokens → capped at 512, last is [SEP].
         QString text;
         for (int i = 0; i < 600; ++i) {
-            text += QStringLiteral(i % 2 == 0 ? "hello " : "world ");
+            // NOTE: QStringLiteral() is a macro that only accepts a
+            // string LITERAL — a runtime ternary expression inside it
+            // fails to compile on MSVC (C2146). Select the literal
+            // outside the macro.
+            text += (i % 2 == 0) ? QStringLiteral("hello ")
+                                 : QStringLiteral("world ");
         }
         const auto out = t.encode(text);
         QCOMPARE(static_cast<int>(out.inputIds.size()),
