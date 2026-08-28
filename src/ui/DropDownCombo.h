@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QPoint>
 #include <QRect>
