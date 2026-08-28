@@ -298,6 +298,7 @@ QSpinBox, QDoubleSpinBox, QComboBox {
     border: 1px solid @border2@;
     border-radius: 8px;
     padding: 6px 10px;
+    min-height: 24px;
     font-weight: 500;
 }
 QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
@@ -408,7 +409,7 @@ QListView::item:selected {
 }
 
 /* ── Checkboxes / radios — accent fill, refined border ── */
-QCheckBox, QRadioButton { color: @text@; spacing: 8px; font-weight: 500; }
+QCheckBox, QRadioButton { color: @text@; spacing: 8px; font-weight: 500; min-height: 22px; }
 QCheckBox::indicator, QRadioButton::indicator {
     width: 16px; height: 16px;
     border-radius: 4px;
@@ -512,7 +513,7 @@ QToolTip {
     color: @tooltipText@;
     border: 1px solid @tooltipBorder@;
     border-radius: 8px;
-    padding: 5px 9px;
+    padding: 6px 11px;
     font-size: 12px;
     font-weight: 500;
 }

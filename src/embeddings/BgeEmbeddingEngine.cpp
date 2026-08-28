@@ -7,6 +7,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QThread>
 #include <cmath>
 #include <cstring>
 #include <array>
@@ -56,8 +57,18 @@ bool BgeEmbeddingEngine::initialize(const QString& modelPath) {
 
         // Create SessionOptions
         auto opts = std::make_unique<Ort::SessionOptions>();
-        opts->SetIntraOpNumThreads(2);
-        opts->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+        // Scale inference with the user's hardware: the old fixed 2
+        // intra-op threads made a 5000-document embedding backlog take
+        // effectively days. (cores - 1, floor 4) turns that into tens of
+        // minutes on any modern CPU while still leaving one core for the
+        // UI. Inter-op stays 1 — the BGE graph is sequential anyway.
+        const int inferenceThreads = qMax(4, QThread::idealThreadCount() - 1);
+        opts->SetIntraOpNumThreads(inferenceThreads);
+        opts->SetInterOpNumThreads(1);
+        opts->SetGraphOptimizationLevel(
+            GraphOptimizationLevel::ORT_ENABLE_ALL);
+        DS_INFO("BGE", QString("ONNX inference threads: %1")
+                           .arg(inferenceThreads));
         m_sessionOptions = new std::unique_ptr<Ort::SessionOptions>(std::move(opts));
 
         // Create Session.

@@ -239,6 +239,9 @@ MainWindow::MainWindow(QWidget* parent)
         ocrStatusWidget_->setCursor(Qt::PointingHandCursor);
         ocrStatusWidget_->installEventFilter(this);
     }
+    // App-wide filter: gives every tooltip window translucency so its QSS
+    // border-radius produces REAL rounded corners (see eventFilter).
+    qApp->installEventFilter(this);
 
     // DEFER semantic search init to after the window is shown.
     // initializeSemanticSearch() creates a BgeService + QtConcurrent::run
@@ -313,6 +316,16 @@ MainWindow::MainWindow(QWidget* parent)
         autoScanIndexedFolders();
     });
     autoScanTimer_->start();
+
+    // Live index stats: refresh the "N indexed" badge every 20 s so the
+    // number always reflects the database — it used to change only when a
+    // specific event happened to call updateIndexStats, which read as a
+    // frozen ("hard coded") figure while extraction was running.
+    auto* statsRefreshTimer = new QTimer(this);
+    statsRefreshTimer->setInterval(20 * 1000);
+    connect(statsRefreshTimer, &QTimer::timeout,
+            this, &MainWindow::updateIndexStats);
+    statsRefreshTimer->start();
 
     // Startup diff: check for files that changed while app was closed.
     QTimer::singleShot(2000, this, [this]() {
@@ -2325,6 +2338,20 @@ void MainWindow::updateOcrStatusIndicator() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // Translucent tooltip windows — REAL rounded corners.
+    // Qt creates tooltips as QTipLabel: a square native top-level window.
+    // Our QSS draws a border-radius on it, but without translucency the
+    // pixels outside the radius show the raw ToolTipBase fill, so every
+    // corner still looked clipped/square. Flipping the window translucent
+    // here (before Qt creates its native window — QEvent::Show arrives
+    // first) makes everything outside the QSS radius fully transparent.
+    if (e->type() == QEvent::Show && obj->isWidgetType()) {
+        auto* w = static_cast<QWidget*>(obj);
+        if (w->windowType() == Qt::ToolTip && w->inherits("QTipLabel")
+            && !w->testAttribute(Qt::WA_TranslucentBackground)) {
+            w->setAttribute(Qt::WA_TranslucentBackground);
+        }
+    }
     // Click on the OCR status indicator → show status info.
     if (obj == ocrStatusWidget_ && e->type() == QEvent::MouseButtonPress) {
         auto& ocr = DocuSearch::WindowsOcrEngine::instance();
@@ -2607,7 +2634,7 @@ void MainWindow::ensureEmbeddingsBackfill() {
             "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id) "
             "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c WHERE c.file_id = dt.file_id) "
             "  AND length(dt.extracted_text) > 1000 "
-            "ORDER BY dt.file_id LIMIT 120;",
+            "ORDER BY dt.file_id LIMIT 300;",
             -1, &sel, nullptr);
         if (sel) {
             while (sqlite3_step(sel) == SQLITE_ROW) {
@@ -2720,7 +2747,11 @@ void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
     // drain whenever the AI toggle was off, freezing the queue forever —
     // embeddings are cheap, async, and useful the moment AI is re-enabled.
     if (remaining > 0 && bgeService_ && bgeService_->isReady()) {
-        QTimer::singleShot(250, this, [this]() { ensureEmbeddingsBackfill(); });
+        // 25 ms gap: just enough for the event loop to breathe between
+        // batches. The old 250 ms delay added up over dozens of batches
+        // and stretched the backlog out for no benefit — inference runs
+        // on the worker pool either way, so the UI stays responsive.
+        QTimer::singleShot(25, this, [this]() { ensureEmbeddingsBackfill(); });
     }
 }
 
@@ -2738,9 +2769,19 @@ void MainWindow::updateIndexStats() {
             if (f.exists()) dbSize = f.size();
         }
         if (indexedInfoLbl_) {
-            // Single-line, self-explanatory: "1,234 indexed". Size info
-            // stays in the Stats panel where curious users can find it.
-            indexedInfoLbl_->setText(QString("%1 indexed").arg(total));
+            // "N indexed" counts documents actually indexed (content
+            // extracted or metadata staged). The old figure was totalFiles()
+            // — every row in Files, including skipped formats and rows
+            // whose file is already gone — so the number barely moved and
+            // read as hard coded. This one changes as work progresses.
+            const qint64 indexedNow = contentDone + metaOnly;
+            indexedInfoLbl_->setText(QString("%1 indexed").arg(indexedNow));
+            indexedInfoLbl_->setToolTip(
+                QStringLiteral(
+                    "Documents indexed: %1\n"
+                    "Files tracked: %2 (skipped formats and deleted files "
+                    "are not counted).\nLive value — refreshes automatically.")
+                    .arg(indexedNow).arg(total));
         }
         if (indexedBar_) {
             // Progress = content_done / total. Only VISIBLE while indexing
@@ -3623,6 +3664,25 @@ void MainWindow::onDetectDuplicates() {
         }
         sqlite3_finalize(s);
 
+        // Stale index rows: the SAME path can sit in the Files table twice
+        // after aggressive re-scans. One physical file must never pass as
+        // a "group of two" with itself — a unique document then appeared
+        // in the duplicate list as its own pair (reported as "single files
+        // are also listing"). Dedupe by path BEFORE the survivors-only
+        // pass so every physical file is counted exactly once.
+        QSet<QString> seenPaths;
+        QList<SearchHit> uniqueHits;
+        QStringList uniqueHashes;
+        int staleRows = 0;
+        for (int i = 0; i < hits.size(); ++i) {
+            if (seenPaths.contains(hits[i].path)) { ++staleRows; continue; }
+            seenPaths.insert(hits[i].path);
+            uniqueHits.append(hits[i]);
+            uniqueHashes.append(hashes[i]);
+        }
+        hits  = std::move(uniqueHits);
+        hashes = std::move(uniqueHashes);
+
         // Survivors-only grouping. When the OTHER copy of a pair was
         // deleted on disk, its lone survivor used to be listed as a
         // "duplicate" of a file that no longer exists ("single files are
@@ -3652,15 +3712,18 @@ void MainWindow::onDetectDuplicates() {
 
         if (hits.isEmpty()) {
             QMessageBox::information(this, "Duplicates",
-                (skippedMissing > 0 || droppedSingletons > 0)
+                (skippedMissing > 0 || droppedSingletons > 0 || staleRows > 0)
                     ? QStringLiteral(
                         "No duplicate documents found.\n\n"
-                        "%1 file%2 whose duplicate partner was deleted, and "
-                        "%3 stale index entr%4 were excluded.")
+                        "%1 file%2 whose duplicate partner was deleted, "
+                        "%3 stale index entr%4 and %5 duplicate row%6 "
+                        "for the same file were excluded.")
                         .arg(droppedSingletons)
                         .arg(droppedSingletons == 1 ? "y" : "ies")
                         .arg(skippedMissing)
                         .arg(skippedMissing == 1 ? "y" : "ies")
+                        .arg(staleRows)
+                        .arg(staleRows == 1 ? "" : "s")
                     : QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "Duplicate search covers documents only: "
@@ -3672,13 +3735,18 @@ void MainWindow::onDetectDuplicates() {
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)%3")
+            QString("Found %1 duplicate groups (%2 files)%3%4")
                 .arg(groupCount).arg(hits.size())
                 .arg(droppedSingletons > 0
                     ? QString(
                         "; %1 lone file%2 (deleted partners) excluded")
                         .arg(droppedSingletons)
                         .arg(droppedSingletons == 1 ? "" : "s")
+                    : QString())
+                .arg(staleRows > 0
+                    ? QString("; %1 duplicate row%2 for the same file excluded")
+                        .arg(staleRows)
+                        .arg(staleRows == 1 ? "" : "s")
                     : QString()),
             8000);
     } catch (const std::exception& e) {

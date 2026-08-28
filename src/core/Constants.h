@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.6.3";  // v1.6.3: dropdown list opens under the field (explicit popup placement for the frameless window)
+constexpr const char* kAppVersion     = "1.6.4";  // v1.6.4: translucent (truly rounded) tooltips, live indexed count, distinct-path duplicate groups, hardware-scaled AI inference, tag input + settings spacing fixes
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

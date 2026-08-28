@@ -148,7 +148,10 @@ TagsNotesPane::TagsNotesPane(QWidget* parent) : QWidget(parent) {
 
     tagInput_ = new QLineEdit(tagsSection);
     tagInput_->setPlaceholderText("Type tag name and press Enter");
-    tagInput_->setMaximumHeight(28);
+    // 28 px clipped the 13 px text (8+8 px QSS padding + borders) — the
+    // field needs >= 34 px to show the full line ("inline text is cut").
+    tagInput_->setMinimumHeight(34);
+    tagInput_->setMaximumHeight(34);
     tagInput_->hide();
     tagsLay->addWidget(tagInput_);
 

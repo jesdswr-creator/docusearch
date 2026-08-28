@@ -141,6 +141,8 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // -------- Performance tab --------
     auto* perfTab = new QWidget(this);
     auto* perfLay = new QFormLayout(perfTab);
+    perfLay->setVerticalSpacing(10);
+    perfLay->setContentsMargins(4, 12, 4, 12);
     threadsSpin_ = new QSpinBox(this);
     threadsSpin_->setRange(1, 16);
     threadsSpin_->setValue(current_.maxWorkerThreads);
@@ -192,6 +194,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // Shows BGE model status, embedding count, and search parameters.
     auto* semTab = new QWidget(this);
     auto* semLay = new QVBoxLayout(semTab);
+    semLay->setSpacing(10);
 
     // Model status group
     auto* modelGroup = new QGroupBox("AI Model", this);
@@ -359,6 +362,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // -------- Saved searches tab --------
     auto* savTab = new QWidget(this);
     auto* savLay = new QVBoxLayout(savTab);
+    savLay->setSpacing(10);
     savedList_ = new QListWidget(this);
     savedList_->setSelectionMode(QAbstractItemView::SingleSelection);
     savLay->addWidget(new QLabel("Existing saved searches:", this));
@@ -385,6 +389,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     // -------- Backup / Restore tab --------
     auto* bkTab = new QWidget(this);
     auto* bkLay = new QVBoxLayout(bkTab);
+    bkLay->setSpacing(10);
     auto* bkHelp = new QLabel(
         "Back up the search index (database file) to a .zip archive.\n"
         "Restore will overwrite your current database - the app must "
