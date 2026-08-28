@@ -1401,16 +1401,32 @@ void MainWindow::onSearch(const QString& query) {
                         "working once documents are extracted — each indexed "
                         "document builds an embedding on its own."));
                 } else if (bestSim < 0.0f) {
-                    // Embeddings exist but nothing was comparable this pass
-                    // (e.g. the chunk index is still being built in the
-                    // background). Say that instead of the misleading
-                    // "still queued" wording.
-                    resultsPane_->setAiSummary(QString(
-                        "<b>AI index warming up.</b> %1 document%2 embedded; "
-                        "the chunk index is still building in the background — "
-                        "results below are keyword-only for now.")
-                        .arg(stats.total)
-                        .arg(stats.total == 1 ? " is" : "s are"));
+                    // Nothing was comparable this pass. Only blame the
+                    // chunk backfill while work is genuinely pending —
+                    // the old wording claimed "chunk index building"
+                    // even when the real problem was that semantic
+                    // search never ran (see the onBgeReady ordering
+                    // fix) or no comparable embedding exists.
+                    const qint64 pendingDocs   = countMissingEmbeddings();
+                    const qint64 pendingChunks = countMissingChunkDocs();
+                    if (pendingDocs > 0 || pendingChunks > 0) {
+                        resultsPane_->setAiSummary(QString(
+                            "<b>AI index warming up.</b> %1 document%2 "
+                            "embedded; %3 still pending in the AI index "
+                            "build — results below are keyword-only for "
+                            "now. This is one-time background work.")
+                            .arg(stats.total)
+                            .arg(stats.total == 1 ? " is" : "s are")
+                            .arg(pendingDocs + pendingChunks));
+                    } else {
+                        resultsPane_->setAiSummary(QString(
+                            "<b>Semantic scan found nothing to compare.</b> "
+                            "%1 embedding%2 exist but the last query "
+                            "compared none — check the log (BGE) for "
+                            "tokenizer/model errors.")
+                            .arg(stats.total)
+                            .arg(stats.total == 1 ? "" : "s"));
+                    }
                 } else {
                     resultsPane_->setAiSummary(QString(
                         "<b>No semantic match above the %1% similarity bar.</b> "
@@ -2522,6 +2538,16 @@ void MainWindow::onSemanticToggled(bool checked) {
 
 void MainWindow::onBgeReady() {
     DS_INFO("BGE", "BGE service ready: " + bgeService_->getStatus());
+    // CRITICAL FIX: attach the service to the hybrid engine BEFORE the
+    // auto-toggle below. setChecked(true) fires onSemanticToggled()
+    // synchronously, and setSemanticEnabled(true) used to evaluate while
+    // the engine's service pointer was still null — permanently disabling
+    // semantic search for the whole session (every query keyword-only,
+    // "AI refined 0", plus a misleading "chunk index building" banner).
+    if (hybridSearch_) {
+        hybridSearch_->setBgeService(bgeService_.get());
+        hybridSearch_->setSemanticEnabled(semanticEnabled_);
+    }
     if (aiSwitch_) {
         aiSwitch_->setEnabled(true);
         // Phase 1.3: Auto-enable AI when BGE is ready.
@@ -2529,9 +2555,6 @@ void MainWindow::onBgeReady() {
         if (!aiSwitch_->isChecked()) {
             aiSwitch_->setChecked(true);
         }
-    }
-    if (hybridSearch_) {
-        hybridSearch_->setBgeService(bgeService_.get());
     }
     // Persistent chip: steady state reads "ON"; embedding counts only
     // appear as i/n progress while a backfill batch is running, so an

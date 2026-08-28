@@ -18,10 +18,21 @@ HybridSearchEngine::HybridSearchEngine() = default;
 
 void HybridSearchEngine::setBgeService(BgeService* service) {
     m_bgeService = service;
+    // CRITICAL FIX: re-evaluate enablement when the service arrives.
+    // The old code let setSemanticEnabled(true) run during onBgeReady()
+    // BEFORE this pointer was attached — setSemanticEnabled ANDed the
+    // request with a null service and locked m_semanticEnabled at false
+    // permanently. Symptom: every query returned keyword-only results
+    // with a misleading "chunk index still building" banner, even with
+    // thousands of embeddings stored and the toggle showing ON.
+    m_semanticEnabled = m_semanticRequested && (m_bgeService != nullptr);
 }
 
 void HybridSearchEngine::setSemanticEnabled(bool enabled) {
-    m_semanticEnabled = enabled && (m_bgeService != nullptr);
+    // Remember the REQUEST separately from the effective state: the
+    // request survives a service pointer that arrives later.
+    m_semanticRequested = enabled;
+    m_semanticEnabled   = enabled && (m_bgeService != nullptr);
 }
 
 void HybridSearchEngine::setSemanticWeight(float weight) {

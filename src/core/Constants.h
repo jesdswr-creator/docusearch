@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.6.5";  // v1.6.5: packaging overhaul - installer version flows from CMake, single ARP entry with logo (duplicate uninstall entry removed)
+constexpr const char* kAppVersion     = "1.6.6";  // v1.6.6: semantic search actually enabled (onBgeReady service-attach ordering), tokenizer exact-length <=512 + accent folding, honest AI status
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

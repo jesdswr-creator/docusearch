@@ -56,7 +56,8 @@ private:
     float computeAiWeight(const QString& query) const;
 
     BgeService* m_bgeService     = nullptr;  // not owned
-    bool        m_semanticEnabled = false;
+    bool        m_semanticRequested = false; // what the user/UI asked for
+    bool        m_semanticEnabled = false;   // request AND service present
     float       m_semanticWeight  = 0.30f;  // 30% AI, 70% keyword (read from SemanticSettings)
     // Phase 2: lowered from 0.65 (too strict for BGE-small-en-v1.5,
     // which typically returns 0.45-0.60 for genuinely related docs).
