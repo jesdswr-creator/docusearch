@@ -160,51 +160,81 @@ bool BgeEmbeddingEngine::embed(const QString& text, std::vector<float>& outEmbed
             return false;
         }
 
-        // 2. Create input tensors
-        Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(
-            OrtArenaAllocator, OrtMemTypeDefault);
-
-        std::array<int64_t, 2> shape = {1, BgeTokenizer::MAX_SEQ_LENGTH};
-
-        auto inputIdsTensor = Ort::Value::CreateTensor<int64_t>(
-            memInfo, tokens.inputIds.data(), tokens.inputIds.size(),
-            shape.data(), shape.size());
-        auto attnTensor = Ort::Value::CreateTensor<int64_t>(
-            memInfo, tokens.attentionMask.data(), tokens.attentionMask.size(),
-            shape.data(), shape.size());
-        auto typeIdsTensor = Ort::Value::CreateTensor<int64_t>(
-            memInfo, tokens.tokenTypeIds.data(), tokens.tokenTypeIds.size(),
-            shape.data(), shape.size());
-
-        // 3. Build input/output name arrays. BGE expects:
-        //    input_ids, attention_mask, token_type_ids
-        //    Output: last_hidden_state  (or  sentence_embedding)
-        const char* inputNames[]  = {"input_ids", "attention_mask", "token_type_ids"};
-        const char* outputNames[] = {"last_hidden_state"};
-
-        // 4. Run inference
-        std::vector<Ort::Value> inputTensors;
-        inputTensors.reserve(3);
-        inputTensors.push_back(std::move(inputIdsTensor));
-        inputTensors.push_back(std::move(attnTensor));
-        inputTensors.push_back(std::move(typeIdsTensor));
-
         auto& session = **static_cast<std::unique_ptr<Ort::Session>*>(m_session);
+
+        // 2. Run inference at the EXACT token count (the BGE ONNX
+        //    export has a dynamic sequence axis). This replaces the old
+        //    fixed 128-token shape which (a) truncated ~1000-char chunks
+        //    to roughly their first half and (b) padded short queries
+        //    out to 128, making every query inference 4-8x slower than
+        //    needed. Tensors are taken BY VALUE so the underlying
+        //    buffers stay alive for the duration of Run().
+        auto runOnce = [&](std::vector<int64_t> ids,
+                           std::vector<int64_t> mask,
+                           std::vector<int64_t> types)
+            -> std::vector<Ort::Value> {
+            std::array<int64_t, 2> shape = {
+                1, static_cast<int64_t>(ids.size())};
+            Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(
+                OrtArenaAllocator, OrtMemTypeDefault);
+
+            std::vector<Ort::Value> inputTensors;
+            inputTensors.reserve(3);
+            inputTensors.push_back(Ort::Value::CreateTensor<int64_t>(
+                memInfo, ids.data(), ids.size(), shape.data(), shape.size()));
+            inputTensors.push_back(Ort::Value::CreateTensor<int64_t>(
+                memInfo, mask.data(), mask.size(), shape.data(), shape.size()));
+            inputTensors.push_back(Ort::Value::CreateTensor<int64_t>(
+                memInfo, types.data(), types.size(), shape.data(), shape.size()));
+
+            // BGE expects: input_ids, attention_mask, token_type_ids.
+            // Output: last_hidden_state (or sentence_embedding).
+            const char* inputNames[]  = {"input_ids", "attention_mask",
+                                         "token_type_ids"};
+            const char* outputNames[] = {"last_hidden_state"};
+            const char* altOutputNames[] = {"sentence_embedding"};
+
+            try {
+                return session.Run(
+                    Ort::RunOptions{nullptr},
+                    inputNames, inputTensors.data(), inputTensors.size(),
+                    outputNames, 1);
+            } catch (const Ort::Exception&) {
+                // Retry with the alternative output name.
+                return session.Run(
+                    Ort::RunOptions{nullptr},
+                    inputNames, inputTensors.data(), inputTensors.size(),
+                    altOutputNames, 1);
+            }
+        };
 
         std::vector<Ort::Value> outputTensors;
         try {
-            outputTensors = session.Run(
-                Ort::RunOptions{nullptr},
-                inputNames, inputTensors.data(), inputTensors.size(),
-                outputNames, 1);
+            // Exact-length inference (dynamic sequence axis).
+            outputTensors = runOnce(tokens.inputIds, tokens.attentionMask,
+                                    tokens.tokenTypeIds);
         } catch (const Ort::Exception& e) {
-            // Retry with alternative output name "sentence_embedding"
-            const char* altOutputNames[] = {"sentence_embedding"};
-            outputTensors = session.Run(
-                Ort::RunOptions{nullptr},
-                inputNames, inputTensors.data(), inputTensors.size(),
-                altOutputNames, 1);
-            (void)e;
+            // Fallback: some model.onnx exports were built with a FIXED
+            // 128-position sequence axis. Retry padded/truncated to 128
+            // — the legacy shape every earlier DocuSearch build used —
+            // so those installs keep working instead of losing semantic
+            // search entirely.
+            DS_WARN("BGE", QString(
+                        "Dynamic-length inference failed (%1); retrying "
+                        "with legacy fixed 128-token shape.")
+                        .arg(e.what()));
+            auto padTo128 = [](std::vector<int64_t> v, int64_t fill) {
+                constexpr int kLegacySeq = 128;
+                if (static_cast<int>(v.size()) > kLegacySeq) {
+                    v.resize(kLegacySeq);
+                }
+                v.resize(kLegacySeq, fill);
+                return v;
+            };
+            outputTensors = runOnce(
+                padTo128(tokens.inputIds, BgeTokenizer::PAD_TOKEN_ID),
+                padTo128(tokens.attentionMask, 0),
+                padTo128(tokens.tokenTypeIds, 0));
         }
 
         if (outputTensors.empty()) {

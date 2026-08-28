@@ -25,6 +25,7 @@ set(TEST_SOURCES
     ../src/search/QueryParser.cpp
     ../src/search/SearchEngine.cpp
     ../src/indexer/PriorityScheduler.cpp
+    ../src/embeddings/BgeTokenizer.cpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Test Sql)
@@ -68,6 +69,7 @@ docusearch_add_test(tst_QueryParser)
 docusearch_add_test(tst_PriorityScheduler)
 docusearch_add_test(tst_FileRepository)
 docusearch_add_test(tst_FtsTokenizer)
+docusearch_add_test(tst_BgeTokenizer)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
 # Verifies the Windows.Media.Ocr helper exe crash safety. Tests that the

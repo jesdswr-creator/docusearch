@@ -10,6 +10,18 @@
 // The previous hash-based fallback was fundamentally broken: it
 // mapped words to random token IDs, producing semantically
 // meaningless embeddings. See HIGH-1 in the review report.
+//
+// Fidelity notes (vs. the HF BERT tokenizer reference):
+//   - Accent folding: é/ü/ñ are NFD-decomposed to their base ASCII
+//     letter, matching BERT's strip_accents behavior. The old code
+//     DROPPED non-ASCII chars ("café" → "caf"), giving every
+//     accented word a wrong embedding.
+//   - Punctuation is split per character ("..." → ".", ".", ".")
+//     like BERT; the old code kept whole runs as one token, which
+//     usually mapped to UNK.
+//   - Output length is EXACT (no padding), capped at 512 tokens.
+//     The old fixed 128-token output truncated ~1000-char chunks
+//     to their first half before the model ever saw them.
 // ============================================================
 
 #include "BgeTokenizer.h"
@@ -117,14 +129,14 @@ BgeTokenizer::TokenizerOutput BgeTokenizer::encode(const QString& text) {
         return out;  // empty TokenizerOutput
     }
 
-    out.inputIds.assign(MAX_SEQ_LENGTH, PAD_TOKEN_ID);
-    out.attentionMask.assign(MAX_SEQ_LENGTH, 0);
-    out.tokenTypeIds.assign(MAX_SEQ_LENGTH, 0);
-
     // 1. Lowercase (BERT-BGE style)
     QString s = text.toLower();
 
-    // 2. Remove non-printable ASCII (keep 32..126), normalize whitespace
+    // 2. Accent-fold non-ASCII letters to their ASCII base (BERT's
+    //    strip_accents), normalize whitespace, and drop characters the
+    //    English-only vocab cannot represent (CJK, Devanagari, …).
+    //    The old code simply deleted non-ASCII, turning "café" into
+    //    "caf" — a different word with a wrong embedding.
     QString filtered;
     filtered.reserve(s.size());
     for (const QChar& ch : s) {
@@ -133,22 +145,39 @@ BgeTokenizer::TokenizerOutput BgeTokenizer::encode(const QString& text) {
             filtered.append(ch);
         } else if (u == 9 || u == 10 || u == 13) {
             filtered.append(' ');
+        } else if (ch.isLetter()) {
+            // NFD-decompose and keep only the base character(s):
+            // "é" (U+00E9) → "e" + U+0301 → keep "e".
+            const QString d = QString(ch).normalized(
+                QString::NormalizationForm_D);
+            for (const QChar& dc : d) {
+                if (dc.combiningClass() == 0) {
+                    const ushort du = dc.unicode();
+                    if (du >= 32 && du <= 126) {
+                        filtered.append(dc);
+                    }
+                }
+            }
         }
-        // Non-ASCII characters are dropped — BGE small EN is English-only.
+        // Everything else (symbols outside ASCII, digits from other
+        // scripts, …) is dropped — BGE small EN is English-only.
     }
     s = filtered;
 
-    // 3. Split on whitespace and punctuation.
-    // BERT uses a regex like: \w+|[^\w\s]+  (words OR punctuation runs).
+    // 3. Split into words and SINGLE punctuation characters.
+    //    BERT's basic tokenizer splits every punctuation mark
+    //    individually; keeping whole runs ("...", "--") produced UNK
+    //    tokens because vocab.txt has no multi-char punctuation entries.
     static const QRegularExpression tokenRe(
-        QStringLiteral("[A-Za-z0-9]+|[^A-Za-z0-9\\s]+"));
+        QStringLiteral("[A-Za-z0-9]+|[^A-Za-z0-9\\s]"));
     auto it = tokenRe.globalMatch(s);
     QStringList tokens;
     while (it.hasNext()) {
         tokens.append(it.next().captured(0));
     }
 
-    // 4. Build token IDs via WordPiece.
+    // 4. Build token IDs via WordPiece. Reserve the exact cap so the
+    //    size check below is a single comparison per subword.
     std::vector<int> tokenIds;
     tokenIds.reserve(MAX_SEQ_LENGTH);
     tokenIds.push_back(CLS_TOKEN_ID);
@@ -163,11 +192,24 @@ BgeTokenizer::TokenizerOutput BgeTokenizer::encode(const QString& text) {
     }
     tokenIds.push_back(SEP_TOKEN_ID);
 
-    // 5. Copy into output (capped at MAX_SEQ_LENGTH).
-    const int n = std::min(static_cast<int>(tokenIds.size()), MAX_SEQ_LENGTH);
+    // 5. Cap at the model's 512-position limit. When truncating, keep
+    //    [SEP] as the final token so the model sees a well-formed
+    //    sequence (HF's tokenizer does the same).
+    if (static_cast<int>(tokenIds.size()) > MAX_SEQ_LENGTH) {
+        tokenIds.resize(MAX_SEQ_LENGTH);
+        tokenIds.back() = SEP_TOKEN_ID;
+    }
+
+    // 6. Emit EXACT-LENGTH vectors (no padding). The ONNX model takes
+    //    a dynamic sequence length, so short queries no longer pay for
+    //    a padded 128-token inference and long chunks are no longer
+    //    truncated to the first 128 tokens.
+    const int n = static_cast<int>(tokenIds.size());
+    out.inputIds.resize(n);
+    out.attentionMask.assign(n, 1);
+    out.tokenTypeIds.assign(n, 0);
     for (int i = 0; i < n; ++i) {
         out.inputIds[i] = tokenIds[i];
-        out.attentionMask[i] = 1;
     }
 
     return out;

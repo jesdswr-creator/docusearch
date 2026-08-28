@@ -1114,3 +1114,70 @@ Next steps:
 - Still deferred: Poppler → PDFium swap (GPL blocker for
   commercial sale), MSIX packaging in CI, EV/OV code cert,
   Partner Center account ($19).
+
+---
+Task ID: fix-semantic-search-never-enabled
+Agent: main
+Task: User reported: every search shows "AI index warming up / chunk index building in background" with "AI refined 0" — keyword-only results despite 5,000 embedded documents.
+
+Work Log:
+- Traced the full path: onSearch → HybridSearchEngine::search →
+  BgeService::searchChunksAll. The "warming up" banner only fires when
+  lastBestSimilarity() < 0, i.e. the DB scan compared NOTHING — with 5k
+  embeddings stored that is impossible unless semantic search never ran.
+- ROOT CAUSE (found in MainWindow::onBgeReady): the auto-toggle
+  aiSwitch_->setChecked(true) fired onSemanticToggled(true)
+  SYNCHRONOUSLY BEFORE hybridSearch_->setBgeService() attached the
+  service pointer. HybridSearchEngine::setSemanticEnabled() computed
+  m_semanticEnabled = true && (m_bgeService != nullptr) → false, and
+  nothing ever re-evaluated it. Semantic search was permanently
+  disabled for the whole session; the "chunk index building" message
+  was a misdiagnosis (the chunk backfill really was running, which
+  made it convincing).
+- Fix 1 (HybridSearchEngine): split m_semanticRequested (what the UI
+  asked for) from m_semanticEnabled (request AND service present).
+  setBgeService() now re-evaluates enablement when the pointer arrives.
+- Fix 2 (MainWindow::onBgeReady): attach the service to the hybrid
+  engine BEFORE the auto-toggle fires; re-assert enablement.
+- Fix 3 (MainWindow::onSearch): the bestSim < 0 branch now only claims
+  "AI index building" while work is genuinely pending (uses
+  countMissingEmbeddings() + countMissingChunkDocs(), shows remaining
+  count); otherwise it says the scan found nothing comparable and
+  points at the log.
+- Fix 4 (quality, gates results once Fix 1 lands): the tokenizer's
+  fixed 128-token output truncated every ~1000-char chunk to roughly
+  its first half before inference and padded short queries to 128
+  (4-8x slower than needed). BgeTokenizer now emits EXACT-length
+  vectors capped at 512 (BGE's real limit), keeps [SEP] as the final
+  token when capping, NFD accent-folds (café → cafe; was dropped →
+  "caf"), and splits punctuation per character like BERT (was keeping
+  whole runs "..." → UNK). BgeEmbeddingEngine builds tensors at the
+  actual sequence length (dynamic axis) with a legacy fixed-128
+  fallback if a fixed-shape model export rejects it.
+- Added tests/tst_BgeTokenizer.cpp (15 cases: vocab gating, exact
+  length, CLS/SEP framing, punctuation split, accent folding, subwords,
+  UNK, 512 cap with trailing SEP) and wired it into tests/CMakeLists.txt.
+  Runs in CI — no ONNX Runtime needed.
+- Note: pre-existing doc-level/chunk embeddings stay valid (same model,
+  same pooling); they were just built from truncated input, so old
+  chunks are lower-recall until naturally regenerated. No DB migration.
+
+Stage Summary:
+- Files modified: src/search/HybridSearchEngine.{h,cpp},
+  src/ui/MainWindow.cpp, src/embeddings/BgeTokenizer.{h,cpp},
+  src/embeddings/BgeEmbeddingEngine.cpp, tests/CMakeLists.txt,
+  tests/tst_BgeTokenizer.cpp (new), worklog.md.
+- After this lands, searches should show [AI + keyword] / [AI match]
+  badges and "AI refined N" in the status bar once embeddings exist.
+- Could not compile locally (sandbox has no Qt6 or apt mirror access);
+  relying on the Windows CI build + ctest run via PR.
+
+Next steps:
+- Watch the CI run for this PR (build with -DDOCUSEARCH_BUILD_TESTS=ON
+  runs ctest including the new tst_BgeTokenizer).
+- User should re-test: search a natural-language phrase and confirm the
+  AI badge + "AI refined N > 0" status. If sims cluster just under the
+  0.45 bar, tune via Settings → Search threshold slider.
+- Deferred from review: bundle the ~50 MB BGE model in the MSI (the
+  "completely offline" promise currently depends on
+  scripts/download_bge_model.ps1 having been run).
