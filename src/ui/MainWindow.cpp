@@ -77,6 +77,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
+#include <QHash>
 #include <QElapsedTimer>
 #include <QSvgRenderer>
 #include <QPainter>
@@ -1017,6 +1018,7 @@ void MainWindow::applyTheme() {
     QString bg, surface, surface2, surface3, field, border, border2, hover, hoverSoft, text, muted;
     QString primary, primaryStrong, primarySoft, primaryBorder, primaryGlow;
     QString shadow, elevation1, elevation2, btnText;
+    QString tooltipBorder;
     QString themeLabel;
     bool isDark = false;
 
@@ -1047,8 +1049,9 @@ void MainWindow::applyTheme() {
             shadow     = "#000000aa";
             elevation1 = "#222b3a";
             elevation2 = "#293349";
-            tooltipBg  = "#0d1118";
+            tooltipBg  = "#1f2633";   // soft slate glass (was near-black)
             tooltipText = "#e8edf5";
+            tooltipBorder = "#3d4960";
             // File-type accent colors — kept punchy on dark surfaces.
             cPdf="#ff99a4"; cDocx="#67d4ff"; cXlsx="#6ccb9f"; cMd="#b18aff"; cTxt="#7ad7f0";
             cPdfBg="#3d1f24"; cDocxBg="#1f2d3a"; cXlsxBg="#1f3d2a"; cMdBg="#2d1f3d"; cTxtBg="#1f3d40";
@@ -1079,8 +1082,9 @@ void MainWindow::applyTheme() {
             shadow     = "#00000026";
             elevation1 = "#ffffff";
             elevation2 = "#fafbfd";
-            tooltipBg  = "#101828";
-            tooltipText = "#ffffff";
+            tooltipBg  = "#f7f9fc";   // porcelain glass (was dark navy)
+            tooltipText = "#1c2430";
+            tooltipBorder = "#d5dde7";
             cPdf="#c42b1c"; cDocx="#0067c0"; cXlsx="#0f7b4a"; cMd="#8a5b00"; cTxt="#005a9e";
             cPdfBg="#fde0dc"; cDocxBg="#dbeaf6"; cXlsxBg="#d6ecd9"; cMdBg="#f4e6cc"; cTxtBg="#d6e8f4";
             success="#059669"; warn="#b45309"; pink="#db2777"; orange="#ea580c"; sky="#0369a1"; violet="#7c3aed";
@@ -1116,6 +1120,8 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::HighlightedText, QColor("#ffffff"));
     pal.setColor(QPalette::ToolTipBase,   QColor(tooltipBg));
     pal.setColor(QPalette::ToolTipText,  QColor(tooltipText));
+    // Tooltip BORDER token feeds the QSS rule only (palette above blends
+    // the square corners outside the tooltip's border-radius).
     pal.setColor(QPalette::Disabled, QPalette::WindowText, QColor(muted));
     pal.setColor(QPalette::Disabled, QPalette::Text,     QColor(muted));
     QApplication::setPalette(pal);
@@ -1151,6 +1157,7 @@ void MainWindow::applyTheme() {
         {"@field@",field},{"@border@",border},{"@border2@",border2},
         {"@hover@",hover},{"@hoverSoft@",hoverSoft},
         {"@text@",text},{"@muted@",muted},{"@btnText@",btnText},
+        {"@tooltipBorder@",tooltipBorder},
         {"@primary@",primary},{"@primaryStrong@",primaryStrong},
         {"@primarySoft@",primarySoft},{"@primaryBorder@",primaryBorder},
         {"@primaryGlow@",primaryGlow},
@@ -1917,8 +1924,16 @@ void MainWindow::onExtract() {
                 }
             } else {
                 statusBar()->showMessage(
-                    QString("Extracted %1 of %2 files. Click Extract again to continue.")
+                    QString("Extracted %1 of %2 — next batch runs automatically "
+                            "in 1 minute (Extract = start now).")
                         .arg(state->done + state->failed).arg(total), 8000);
+                // Auto-continue: drain the queue without the user having to
+                // click Extract after every 30-file batch. The 200ms per-file
+                // pacing keeps UI responsive exactly as before; this only
+                // removes the mandatory click between batches.
+                QTimer::singleShot(60 * 1000, this, [this]() {
+                    if (!contentExtractionRunning_) onExtract();
+                });
             }
             return;
         }
@@ -3608,6 +3623,26 @@ void MainWindow::onDetectDuplicates() {
         }
         sqlite3_finalize(s);
 
+        // Survivors-only grouping. When the OTHER copy of a pair was
+        // deleted on disk, its lone survivor used to be listed as a
+        // "duplicate" of a file that no longer exists ("single files are
+        // also listing"). A group only qualifies if >= 2 files SURVIVED.
+        QHash<QString, int> groupSize;
+        for (const QString& hs : hashes) ++groupSize[hs];
+        QList<SearchHit> kept;
+        QStringList keptHashes;
+        int droppedSingletons = 0;
+        for (int i = 0; i < hits.size(); ++i) {
+            if (groupSize.value(hashes[i], 0) >= 2) {
+                kept.append(hits[i]);
+                keptHashes.append(hashes[i]);
+            } else {
+                ++droppedSingletons;
+            }
+        }
+        hits  = kept;
+        hashes = keptHashes;
+
         // Regroup AFTER filtering so vanished files never count as groups.
         int groupCount = 0;
         QString lastHash;
@@ -3617,12 +3652,15 @@ void MainWindow::onDetectDuplicates() {
 
         if (hits.isEmpty()) {
             QMessageBox::information(this, "Duplicates",
-                skippedMissing > 0
+                (skippedMissing > 0 || droppedSingletons > 0)
                     ? QStringLiteral(
-                        "No duplicates among your remaining documents.\n\n"
-                        "%1 stale index entries (files already deleted from "
-                        "disk) were ignored. They disappear permanently after "
-                        "the next re-scan.").arg(skippedMissing)
+                        "No duplicate documents found.\n\n"
+                        "%1 file%2 whose duplicate partner was deleted, and "
+                        "%3 stale index entr%4 were excluded.")
+                        .arg(droppedSingletons)
+                        .arg(droppedSingletons == 1 ? "y" : "ies")
+                        .arg(skippedMissing)
+                        .arg(skippedMissing == 1 ? "y" : "ies")
                     : QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "Duplicate search covers documents only: "
@@ -3634,11 +3672,14 @@ void MainWindow::onDetectDuplicates() {
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            skippedMissing > 0
-                ? QString("Found %1 duplicate groups (%2 files); %3 deleted files ignored.")
-                    .arg(groupCount).arg(hits.size()).arg(skippedMissing)
-                : QString("Found %1 duplicate groups (%2 files)")
-                    .arg(groupCount).arg(hits.size()),
+            QString("Found %1 duplicate groups (%2 files)%3")
+                .arg(groupCount).arg(hits.size())
+                .arg(droppedSingletons > 0
+                    ? QString(
+                        "; %1 lone file%2 (deleted partners) excluded")
+                        .arg(droppedSingletons)
+                        .arg(droppedSingletons == 1 ? "" : "s")
+                    : QString()),
             8000);
     } catch (const std::exception& e) {
         DS_ERROR("Duplicates", QString("Failed: %1").arg(e.what()));

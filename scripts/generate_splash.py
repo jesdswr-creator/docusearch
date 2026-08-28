@@ -96,7 +96,11 @@ def _radial_glow(size, color, max_alpha):
 
 
 def build():
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    # OPAQUE WHITE base. The old fully-transparent canvas let the desktop
+    # bleed through the 8px margin ring and the rounded corners — users
+    # reported "transparent areas that should be white". The card still
+    # reads as a rounded navy panel, now sitting on a clean white plate.
+    img = Image.new("RGBA", (W, H), (255, 255, 255, 255))
 
     # Card body: vertical navy gradient.
     body = _vgrad((W - 2 * MARGIN, H - 2 * MARGIN), NAVY_TOP, NAVY_BOT)
@@ -182,7 +186,9 @@ def build():
     d.text((card_cx - (sb[2] - sb[0]) // 2, sy), status,
            font=f_status, fill=WHITE_85)
 
-    img.save(OUT_PATH)
+    # Flatten to RGB — the splash must be fully opaque; any residual
+    # alpha would re-introduce see-through pixels on odd compositors.
+    img.convert("RGB").save(OUT_PATH)
     print(f"Wrote {os.path.abspath(OUT_PATH)} ({W}x{H} @2x "
           f"-> displays {W//2}x{H//2} logical)")
 

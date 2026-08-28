@@ -322,13 +322,17 @@ QComboBox::down-arrow { image: url(:/icons/chevron-down.png); width: 12px; heigh
 QComboBox::down-arrow:hover { image: url(:/icons/chevron-down-strong.png); }
 QComboBox::down-arrow:disabled { image: url(:/icons/chevron-down.png); }
 
-/* ── Combobox popup — pill-style hover, refined elevation ── */
+/* ── Combobox popup — flat panel, pill items ──
+   The POPUP WINDOW itself stays square: a rounded panel here cannot clip
+   its item children, so hover pills poked past the rounded corners
+   ("edges are not clipped"). Windows 11 rounds top-level popup windows
+   via DWM anyway; our visual rounding lives on the item pills. */
 QComboBox QAbstractItemView {
     background: @surface@;
     color: @text@;
     border: 1px solid @border@;
     outline: 0;
-    padding: 5px;
+    padding: 4px;
     selection-background-color: @primarySoft@;
     selection-color: @primaryStrong@;
     background-color: @surface@;
@@ -352,16 +356,14 @@ QComboBox QAbstractItemView::item:selected {
     font-weight: 600;
 }
 
-/* ── Menus (context menus) — same card language as combobox popups ──
-   Without this block Qt falls back to the raw native menu look inside
-   an otherwise themed window — jarringly unstyled next to every other
-   dropdown. */
+/* ── Menus (context menus) — flat panel, pill items ──
+   Same reasoning as the combobox popup: no radius on the panel itself
+   (children cannot be clipped by it); DWM provides the window rounding. */
 QMenu {
     background: @surface@;
     color: @text@;
     border: 1px solid @border@;
-    border-radius: 10px;
-    padding: 6px;
+    padding: 5px;
     font-size: 12px;
     font-weight: 500;
 }
@@ -499,13 +501,18 @@ QMenu::separator {
     margin: 4px 8px;
 }
 
-/* ── Tooltips — elevated with subtle border ── */
+/* ── Tooltips — squircle glass chip, sized tight to the text ──
+   Tight padding keeps the box hugging its label; the soft slate/porcelain
+   fill with a hairline border reads as frosted glass instead of the old
+   harsh black / pastel boxes. QPalette::ToolTipBase is synced to the same
+   fill in applyTheme(), so the square corners outside the radius blend
+   invisibly into the panel. */
 QToolTip {
     background: @tooltipBg@;
     color: @tooltipText@;
-    border: 1px solid @border2@;
+    border: 1px solid @tooltipBorder@;
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 5px 9px;
     font-size: 12px;
     font-weight: 500;
 }
