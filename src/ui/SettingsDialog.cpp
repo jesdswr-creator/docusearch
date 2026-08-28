@@ -354,6 +354,42 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
         emit embedAllRequested();
     });
 
+    // ---- Rebuild (full-quality re-embed) --------------------------------
+    // Embeddings produced before the v1.6.6 tokenizer fix were computed
+    // from text truncated at 128 tokens. This button clears every stored
+    // embedding and lets the standard backfill recompute them from the
+    // full document text (up to 512 tokens), sharpening AI results.
+    auto* rebuildNote = new QLabel(
+        "Embeddings created by older DocuSearch versions were computed\n"
+        "from only the first ~500 characters of each document. Rebuilding\n"
+        "recomputes every embedding from the FULL text for sharper AI\n"
+        "results. Keyword search is NOT affected during the rebuild.", this);
+    rebuildNote->setWordWrap(true);
+    embLay->addWidget(rebuildNote);
+
+    auto* rebuildBtn = new QPushButton("Rebuild All AI Embeddings (Full Quality)", this);
+    rebuildBtn->setToolTip(
+        "Deletes ALL stored AI embeddings and regenerates them from the\n"
+        "complete document text. Use after upgrading from an older version,\n"
+        "or whenever AI results feel imprecise. Progress shows in the\n"
+        "status bar; large libraries take a while.");
+    embLay->addWidget(rebuildBtn);
+
+    connect(rebuildBtn, &QPushButton::clicked, this, [this]() {
+        const auto answer = QMessageBox::question(
+            this, "Rebuild AI Embeddings",
+            "Delete ALL existing AI embeddings and rebuild them from the\n"
+            "full document text?\n\n"
+            "  - AI (semantic) results return gradually as the rebuild\n"
+            "    progresses; keyword search is not affected.\n"
+            "  - Large libraries can take from minutes to a few hours.\n"
+            "  - Progress is shown in the status bar.\n\n"
+            "Continue?",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) return;
+        emit rebuildEmbeddingsRequested();
+    });
+
     semLay->addWidget(embGroup);
 
     semLay->addStretch();

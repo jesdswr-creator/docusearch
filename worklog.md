@@ -1181,3 +1181,14 @@ Next steps:
 - Deferred from review: bundle the ~50 MB BGE model in the MSI (the
   "completely offline" promise currently depends on
   scripts/download_bge_model.ps1 having been run).
+
+---
+Task ID: rebuild-embeddings-action
+Agent: main
+Task: v1.6.7 - Settings > AI Search gains a one-click "Rebuild All AI Embeddings (Full Quality)" action so libraries embedded by pre-1.6.6 builds (128-token truncated input) can be recomputed from full document text.
+
+Work Log:
+- SettingsDialog AI Search tab: explanation label + rebuild button with honest tooltip; QMessageBox::question confirm (default No) spelling out that AI results return gradually, keyword search is unaffected, progress shows in the status bar; emits rebuildEmbeddingsRequested()
+- MainWindow: startEmbeddingRebuild() guards (service ready, no backfill/purge in flight, embeddings actually exist), then chains purgeEmbeddingsTick() at 25 ms intervals; each tick deletes up to 1000 EmbeddingChunks + 500 BgeEmbeddings rows via portable subquery DELETEs (DELETE...LIMIT is not compiled into every SQLite build), reports remaining rows, retries transient lock errors up to 50x before giving up loudly
+- When both tables are empty the standard two-phase backfill (ensureEmbeddingsBackfill) takes over automatically: doc-level embeddings first, then the chunk index — all now computed from FULL text (exact-length, up to 512 tokens)
+- ensureEmbeddingsBackfill refuses to start mid-purge; rebuild refuses to start mid-backfill; statuses surface through the existing status bar / AI chip plumbing

@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.6.6";  // v1.6.6: semantic search actually enabled (onBgeReady service-attach ordering), tokenizer exact-length <=512 + accent folding, honest AI status
+constexpr const char* kAppVersion     = "1.6.7";  // v1.6.7: Settings > AI Search - 'Rebuild All AI Embeddings (Full Quality)' one-click re-embed of libraries built by pre-1.6.6 truncated tokenizer
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

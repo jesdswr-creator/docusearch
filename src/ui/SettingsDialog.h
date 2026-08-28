@@ -43,6 +43,13 @@ signals:
     // BgeService::embedDocumentsBatch() in the background.
     void embedAllRequested();
 
+    // Emitted when the user confirms "Rebuild All AI Embeddings" in the
+    // AI Search tab. MainWindow deletes every stored embedding row and
+    // re-runs the shared backfill so all embeddings are recomputed from
+    // FULL document text (embeddings built by pre-1.6.6 versions were
+    // computed from text truncated at 128 tokens).
+    void rebuildEmbeddingsRequested();
+
     // Task 3 Fix D: Wire settings sliders to HybridSearchEngine.
     // Emitted in real-time as the user drags the sliders.
     void aiWeightChanged(float weight);      // 0.0 to 1.0

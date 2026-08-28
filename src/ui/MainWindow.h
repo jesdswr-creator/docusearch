@@ -207,6 +207,8 @@ public:
     std::unique_ptr<HybridSearchEngine> hybridSearch_;
     bool            semanticEnabled_     = false;
     bool            aiBackfillRunning_   = false;  // batch embed in flight
+    bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
+    int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
 
     // Scan SearchIndex for files with no BgeEmbeddings row and queue a
     // batch (capped) on the background BGE worker. Called when the BGE
@@ -214,6 +216,16 @@ public:
     // embedding backlog drains without any manual user action. Follow-up
     // batches are chained from onBgeEmbeddingFinished until drained.
     void ensureEmbeddingsBackfill();
+
+    // One-click "Rebuild All AI Embeddings" (Settings -> AI Search):
+    // batch-deletes every BgeEmbeddings/EmbeddingChunks row, then hands
+    // over to ensureEmbeddingsBackfill() so the whole library is
+    // re-embedded from FULL document text. Embeddings built before the
+    // v1.6.6 tokenizer fix were computed from text truncated at 128
+    // tokens; this action recomputes them at exact length (up to 512).
+    // The purge runs in small chained batches so the UI never freezes.
+    void startEmbeddingRebuild();
+    void purgeEmbeddingsTick();
 
     // Persistent status chip text for the AI control (state + counts).
     void setAiChip(const QString& text, bool active);

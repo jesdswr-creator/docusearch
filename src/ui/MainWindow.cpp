@@ -2608,7 +2608,8 @@ void MainWindow::ensureEmbeddingsBackfill() {
     // One batch in flight at a time; onBgeEmbeddingFinished chains the
     // next batch while unembedded files remain, so a >1000-file backlog
     // drains progressively instead of being silently truncated.
-    if (aiBackfillRunning_ || !bgeService_ || !bgeService_->isReady() || !db_)
+    if (aiBackfillRunning_ || embeddingRebuildPurging_
+        || !bgeService_ || !bgeService_->isReady() || !db_)
         return;
     sqlite3* raw = db_->raw();
     if (!raw) return;
@@ -2685,6 +2686,129 @@ void MainWindow::ensureEmbeddingsBackfill() {
                 .arg(fileIds.size())
                 .arg(fileIds.size() == 1 ? "" : "s"));
     bgeService_->embedDocumentsBatch(fileIds, texts);
+}
+
+void MainWindow::startEmbeddingRebuild() {
+    if (!bgeService_ || !bgeService_->isReady() || !db_) {
+        QMessageBox::information(this, "AI Search",
+            "AI search is not ready, so there is nothing to rebuild.\n\n"
+            "Make sure the AI model is installed at:\n"
+            "  models/bge-small-en-v1.5/model.onnx\n"
+            "  models/bge-small-en-v1.5/vocab.txt");
+        return;
+    }
+    if (aiBackfillRunning_ || embeddingRebuildPurging_) {
+        statusBar()->showMessage(
+            "AI is already working — wait for the current batch to "
+            "finish, then rebuild.", 6000);
+        return;
+    }
+    sqlite3* raw = db_->raw();
+    if (!raw) return;
+
+    // Only run when there is something to rebuild; otherwise the user
+    // would watch a silent purge that accomplishes nothing.
+    qint64 existing = 0;
+    sqlite3_stmt* s = nullptr;
+    if (sqlite3_prepare_v2(raw,
+            "SELECT (SELECT COUNT(*) FROM EmbeddingChunks)"
+            "     + (SELECT COUNT(*) FROM BgeEmbeddings);",
+            -1, &s, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(s) == SQLITE_ROW)
+            existing = sqlite3_column_int64(s, 0);
+        sqlite3_finalize(s);
+    }
+    if (existing == 0) {
+        statusBar()->showMessage(
+            "No embeddings stored yet — use 'Generate AI Embeddings for "
+            "All Documents' instead.", 6000);
+        return;
+    }
+
+    embeddingRebuildPurging_ = true;
+    embeddingRebuildRetries_ = 0;
+    statusBar()->showMessage(QString(
+        "AI: rebuilding embeddings — clearing %1 stored row%2 ...")
+        .arg(existing).arg(existing == 1 ? "" : "s"));
+    QTimer::singleShot(25, this, [this]() { purgeEmbeddingsTick(); });
+}
+
+void MainWindow::purgeEmbeddingsTick() {
+    if (!db_ || !embeddingRebuildPurging_) return;
+    sqlite3* raw = db_->raw();
+    if (!raw) {
+        embeddingRebuildPurging_ = false;
+        return;
+    }
+
+    // Chunks first so phase B of the backfill sees a clean slate the
+    // moment doc-level embeddings start refilling. DELETE with LIMIT
+    // is not compiled into every SQLite build, so batch via a subquery
+    // instead — portable and just as fast at these sizes.
+    static const char* const kDeletes[] = {
+        "DELETE FROM EmbeddingChunks WHERE chunk_id IN "
+        "(SELECT chunk_id FROM EmbeddingChunks LIMIT 1000);",
+        "DELETE FROM BgeEmbeddings WHERE file_id IN "
+        "(SELECT file_id FROM BgeEmbeddings LIMIT 500);"
+    };
+    int deleted = 0;
+    bool sqlError = false;
+    for (const char* sql : kDeletes) {
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(raw, sql, -1, &st, nullptr) == SQLITE_OK
+            && sqlite3_step(st) == SQLITE_DONE) {
+            deleted += sqlite3_changes(raw);
+        } else {
+            sqlError = true;   // transient lock / I/O hiccup
+        }
+        if (st) sqlite3_finalize(st);
+    }
+
+    if (sqlError) {
+        // busy_timeout (5-10 s) makes this nearly impossible; still,
+        // never abandon the chain on the first hiccup — retry a while,
+        // then give up loudly rather than half-purging in silence.
+        if (++embeddingRebuildRetries_ <= 50) {
+            QTimer::singleShot(100, this,
+                [this]() { purgeEmbeddingsTick(); });
+            return;
+        }
+        embeddingRebuildPurging_ = false;
+        statusBar()->showMessage(
+            "AI rebuild stopped — the database stayed locked. Close other "
+            "DocuSearch windows and try again.", 8000);
+        return;
+    }
+    embeddingRebuildRetries_ = 0;
+
+    if (deleted > 0) {
+        qint64 remaining = 0;
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(raw,
+                "SELECT (SELECT COUNT(*) FROM EmbeddingChunks)"
+                "     + (SELECT COUNT(*) FROM BgeEmbeddings);",
+                -1, &s, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(s) == SQLITE_ROW)
+                remaining = sqlite3_column_int64(s, 0);
+            sqlite3_finalize(s);
+        }
+        statusBar()->showMessage(QString(
+            "AI: clearing old embeddings — %1 row%2 left ...")
+            .arg(remaining).arg(remaining == 1 ? "" : "s"));
+        QTimer::singleShot(25, this,
+            [this]() { purgeEmbeddingsTick(); });
+        return;
+    }
+
+    // Purge complete — hand over to the standard two-phase backfill.
+    // Every remaining DocumentText row now lacks an embedding, so the
+    // existing chain (doc-level first, then chunks) rebuilds the whole
+    // library from FULL document text with live status-chip progress.
+    embeddingRebuildPurging_ = false;
+    statusBar()->showMessage(
+        "AI: old embeddings cleared — rebuilding from full document "
+        "text. Progress: 'Embedding documents: X/Y'.", 8000);
+    ensureEmbeddingsBackfill();
 }
 
 qint64 MainWindow::countMissingEmbeddings() {
@@ -3524,6 +3648,12 @@ void MainWindow::onOpenSettings() {
                             "progress shows in the status bar.")
                         .arg(pending).arg(pending == 1 ? "" : "s"), 6000);
             });
+
+        // "Rebuild All AI Embeddings" — purge every stored embedding in
+        // small batches, then re-run the shared two-phase backfill so
+        // the whole library is recomputed from full document text.
+        QObject::connect(&dlg, &SettingsDialog::rebuildEmbeddingsRequested,
+            this, &MainWindow::startEmbeddingRebuild);
 
         const int rc = dlg.exec();
         refreshSavedSearches();
