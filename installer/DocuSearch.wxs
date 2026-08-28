@@ -95,7 +95,8 @@
          gives the remaining automatic entry the DocuSearch logo.
          ============================================================ -->
     <Property Id="ARPPRODUCTICON" Value="DocuSearchIcon.exe" />
-    <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- ARPNOMODIFY is already set by WixUI_InstallDir (WIX0091 duplicate
+         otherwise); ARPNOREPAIR is not, so it lives here. -->
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ARPHELPLINK" Value="https://github.com/jesdswr-creator/docusearch" />
 
