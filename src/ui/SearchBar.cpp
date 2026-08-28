@@ -71,19 +71,21 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     inputWrap->setLineEdit(edit_);
 
     clearBtn_ = new QPushButton;
+    clearBtn_->setObjectName("searchClearBtn");
     clearBtn_->setCursor(Qt::PointingHandCursor);
     clearBtn_->setToolTip("Clear the search box");
     clearBtn_->setFixedSize(22, 22);
     clearBtn_->hide();
     inputWrap->setClearButton(clearBtn_);
 
-    // Search button — REMOVED. Typing searches live and Enter runs a
-    // full search; a dedicated primary button (whose icon kept rendering
-    // as an unlabeled blue box for some users) was redundant chrome.
-    // The member is kept so existing references keep compiling.
+    // Search button — primary action. Runs the full search (same as
+    // Enter); typing still live-searches, the button is the explicit,
+    // visible affordance.
     searchBtn_ = new QPushButton("Search", this);
     searchBtn_->setObjectName("searchBtn");
-    searchBtn_->setVisible(false);
+    searchBtn_->setCursor(Qt::PointingHandCursor);
+    searchBtn_->setMinimumHeight(36);
+    searchBtn_->setMaximumHeight(36);
 
     // Saved searches
     savedBox_ = new QComboBox(this);
@@ -123,8 +125,9 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     gridBtn_ = new QPushButton(this); gridBtn_->setVisible(false);
     moreBtn_ = new QPushButton(this); moreBtn_->setVisible(false);
 
-    // Layout: input | Saved | Add Folder | Extract  (Search btn removed)
+    // Layout: input | Search | Saved | Add Folder | Extract
     layout->addWidget(inputWrap, 1);
+    layout->addWidget(searchBtn_);
     layout->addWidget(savedBox_);
     layout->addWidget(addFolderBtn_);
     layout->addWidget(extractBtn_);
@@ -158,7 +161,9 @@ void SearchBar::refreshIcons() {
     QColor whiteText("#ffffff");
 
     if (edit_) edit_->setSearchIconPixmap(loadLucidePixmap("search", QColor("#9ca3af"), 16, devicePixelRatio()));
-    clearBtn_->setIcon(loadLucideIcon("x", QColor("#6b7280"), 12));
+    // Palette-aware so the X stays visible on the ghost hover fill in
+    // both themes (a fixed gray vanished in dark mode).
+    clearBtn_->setIcon(loadLucideIcon("x", textColor, 12));
     clearBtn_->setIconSize(QSize(12, 12));
     searchBtn_->setIcon(loadLucideIcon("search", whiteText, 14));
     searchBtn_->setIconSize(QSize(14, 14));

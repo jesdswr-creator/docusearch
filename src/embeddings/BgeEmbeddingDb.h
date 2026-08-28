@@ -96,6 +96,9 @@ public:
     // Lets the UI explain WHY a query produced zero semantic hits ("closest
     // match scored 38% but the bar is 45%") instead of a silent nothing.
     float lastBestSimilarity() const { return m_lastBestSimilarity; }
+    // Lets callers combine diagnostics from multiple scans (chunk-level
+    // and document-level searches each reset/overwrite the value).
+    void setLastBestSimilarity(float v) { m_lastBestSimilarity = v; }
 
 private:
     static float cosineSimilarity(const std::vector<float>& a,

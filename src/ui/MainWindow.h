@@ -142,6 +142,12 @@ private:
     void enableNativeResize();
     bool nativeResizeApplied_ = false;
 
+    // Embedding backfill diagnostics + shared count helpers.
+    qint64 countMissingEmbeddings();   // docs with text but no embedding
+    qint64 countMissingChunkDocs();    // embedded docs without chunk rows
+    bool   aiBackfillChunkMode_ = false;
+    int    aiBackfillDeadlock_  = 0;   // consecutive zero-success batches
+
 public:
     Q_INVOKABLE void updateIndexStats();
     // Refresh the OCR availability indicator on the status bar.

@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.6.0";  // v1.6.0: real frameless resize, continuous PDF scroll, document-only duplicates, dropdown polish
+constexpr const char* kAppVersion     = "1.6.1";  // v1.6.1: search button restored + ghost clear chip, embedding drain fixed (chunks + legacy docs), extraction whitelist, white button text in dark mode
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

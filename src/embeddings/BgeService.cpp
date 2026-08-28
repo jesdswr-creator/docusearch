@@ -8,6 +8,9 @@
 
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <algorithm>
+#include <map>
+#include <vector>
 
 namespace DocuSearch {
 
@@ -117,7 +120,53 @@ std::vector<SemanticHit> BgeService::searchChunksAll(
         std::vector<float> queryEmbed;
         const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
         if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
-        return m_database->searchSimilarChunksAll(queryEmbed, topK, threshold);
+
+        // Precision path: best chunk per file.
+        auto chunkHits = m_database->searchSimilarChunksAll(queryEmbed, topK, threshold);
+        const float bestChunk = m_database->lastBestSimilarity();
+
+        // Full-document path. CRITICAL for indexes built before chunked
+        // embedding existed: those files have NO EmbeddingChunks rows, so
+        // a chunks-only scan made the whole semantic index look dead
+        // ("no embeddings to compare yet" forever, despite thousands of
+        // embedded documents). Scanning document embeddings as well keeps
+        // them searchable while the chunk backfill drains.
+        auto docHits = m_database->searchSimilar(queryEmbed, topK, threshold);
+        const float bestDoc = m_database->lastBestSimilarity();
+
+        if (chunkHits.empty()) return docHits;    // document-level only
+        if (docHits.empty())   return chunkHits;  // chunks only
+
+        // Merge per file — the better of (best chunk, full document).
+        // Document-level hits carry path/filename metadata; chunk hits do
+        // not, so keep whichever entry is richer when upgrading similarity.
+        std::map<int, SemanticHit> merged;
+        for (auto& h : docHits)   merged[h.fileId] = std::move(h);
+        for (auto& h : chunkHits) {
+            auto it = merged.find(h.fileId);
+            if (it == merged.end()) {
+                merged[h.fileId] = std::move(h);
+            } else if (h.similarity > it->second.similarity) {
+                h.filePath = it->second.filePath;
+                h.filename = it->second.filename;
+                merged[h.fileId] = std::move(h);
+            }
+        }
+        std::vector<SemanticHit> out;
+        out.reserve(merged.size());
+        for (auto& kv : merged) {
+            Q_UNUSED(kv.first);
+            out.push_back(std::move(kv.second));
+        }
+        std::sort(out.begin(), out.end(),
+            [](const SemanticHit& a, const SemanticHit& b) {
+                return a.similarity > b.similarity;
+            });
+        if (static_cast<int>(out.size()) > topK) out.resize(topK);
+
+        // The two scans each overwrote the diagnostic; report the true best.
+        m_database->setLastBestSimilarity(std::max(bestChunk, bestDoc));
+        return out;
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Exception during chunk search all: %1").arg(e.what()));
     } catch (...) {

@@ -721,6 +721,18 @@ QLineEdit#searchInput {
 QLineEdit#searchInput:hover { border-color: @primaryBorder@; }
 QLineEdit#searchInput:focus { border: 1px solid @primary@; background: @surface@; }
 
+/* Clear ("X") chip inside the search field — quiet ghost, not a blue
+   square. Without this rule it inherited the generic accent-fill
+   QPushButton look and its gray glyph disappeared against it. */
+QPushButton#searchClearBtn {
+    background: transparent;
+    border: none;
+    border-radius: 11px;
+    padding: 0;
+}
+QPushButton#searchClearBtn:hover { background: @hover@; }
+QPushButton#searchClearBtn:pressed { background: @primarySoft@; }
+
 /* Sort dropdown reads as a compact filter chip, not a form control */
 QComboBox#sortSelect { padding: 4px 26px 4px 12px; font-size: 12px; }
 

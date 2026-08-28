@@ -730,8 +730,8 @@ void MainWindow::buildCentral() {
     indexedInfoLbl_->setObjectName("indexedInfo");
     indexedInfoLbl_->setToolTip(
         "Number of files currently searchable in your offline index.\n"
-        "The bar below the count shows how much of the collection has "
-        "been processed.");
+        "The small bar appears only while files are being processed and "
+        "disappears when the queue is done.");
     sbLay->addWidget(indexedInfoLbl_);
 
     indexedBar_ = new QProgressBar(statusBadge);
@@ -1043,7 +1043,7 @@ void MainWindow::applyTheme() {
             primarySoft    = "#223259";   // selected backgrounds
             primaryBorder  = "#45639e";
             primaryGlow    = "#79acff";
-            btnText   = "#0a1322";         // dark ink on luminous accent fills
+            btnText   = "#ffffff";         // white on luminous accent fills
             shadow     = "#000000aa";
             elevation1 = "#222b3a";
             elevation2 = "#293349";
@@ -1381,10 +1381,14 @@ void MainWindow::onSearch(const QString& query) {
                         "working once documents are extracted — each indexed "
                         "document builds an embedding on its own."));
                 } else if (bestSim < 0.0f) {
+                    // Embeddings exist but nothing was comparable this pass
+                    // (e.g. the chunk index is still being built in the
+                    // background). Say that instead of the misleading
+                    // "still queued" wording.
                     resultsPane_->setAiSummary(QString(
-                        "<b>No embeddings to compare yet.</b> %1 document%2 "
-                        "still queued for embedding — results below are "
-                        "keyword-only for now.")
+                        "<b>AI index warming up.</b> %1 document%2 embedded; "
+                        "the chunk index is still building in the background — "
+                        "results below are keyword-only for now.")
                         .arg(stats.total)
                         .arg(stats.total == 1 ? " is" : "s are"));
                 } else {
@@ -1549,12 +1553,12 @@ void MainWindow::scanFolderFast(const QString& folder) {
     sqlite3* raw = db_->raw();
     if (!raw) return;
 
-    // ONLY index supported file types — skip DLLs, EXEs, archives, etc.
+    // ONLY index file types the user cares about — documents and common
+    // images. Everything else (txt/md/csv/rtf/html/json/logs, exotic image
+    // formats, archives…) stays out of the index entirely.
     const QSet<QString> supportedExts = {
         "pdf", "doc", "docx", "xls", "xlsx", "xlsm",
-        "ppt", "pptx", "txt", "rtf", "csv", "md",
-        "jpg", "jpeg", "png", "tif", "tiff", "bmp",
-        "gif", "webp", "html", "htm", "xml", "json", "log",
+        "ppt", "pptx", "jpg", "jpeg", "png",
     };
 
     int count = 0, skipped = 0;
@@ -1754,6 +1758,16 @@ void MainWindow::onExtract() {
     {
         sqlite3* raw = db_->raw();
         if (!raw) return;
+
+        // Retire plain-text-ish types the user excluded from extraction.
+        // Leaving them as 'metadata_only' made them look like pending work
+        // forever; 'skipped' is honest and keeps them filename-searchable.
+        sqlite3_exec(raw,
+            "UPDATE Files SET indexing_status='skipped' "
+            "WHERE indexing_status='metadata_only' "
+            "AND lower(extension) IN ('txt','csv','md','rtf','log');",
+            nullptr, nullptr, nullptr);
+
         sqlite3_stmt* s = nullptr;
         const char* sql =
             "SELECT id, path, extension FROM Files "
@@ -1761,8 +1775,7 @@ void MainWindow::onExtract() {
             "AND extension IN ("
             "'pdf','doc','docx',"
             "'xls','xlsx','xlsm',"
-            "'ppt','pptx',"
-            "'txt','csv','md','rtf') "
+            "'ppt','pptx') "
             "ORDER BY id;";
         if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
             while (sqlite3_step(s) == SQLITE_ROW) {
@@ -2535,41 +2548,113 @@ void MainWindow::ensureEmbeddingsBackfill() {
     sqlite3* raw = db_->raw();
     if (!raw) return;
 
-    // Files that have been content-indexed (SearchIndex row with text)
-    // but have no document-level BGE embedding yet. Capped per batch to
-    // bound memory; the finish handler queues the next slice.
-    sqlite3_stmt* sel = nullptr;
-    sqlite3_prepare_v2(raw,
-        "SELECT s.file_id, s.content "
-        "FROM SearchIndex s "
-        "LEFT JOIN BgeEmbeddings e ON e.file_id = s.file_id "
-        "WHERE e.file_id IS NULL "
-        "  AND length(s.content) > 0 "
-        "LIMIT 1000;",
-        -1, &sel, nullptr);
     QVector<int> fileIds;
     QStringList texts;
-    if (sel) {
-        while (sqlite3_step(sel) == SQLITE_ROW) {
-            const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
-            const unsigned char* c = sqlite3_column_text(sel, 1);
-            if (c && c[0]) {
-                fileIds.append(fileId);
-                texts.append(QString::fromUtf8(
-                    reinterpret_cast<const char*>(c)));
+    bool chunkMode = false;
+
+    // Phase A — documents with extracted text but no embedding at all.
+    // Sourced from DocumentText (the authoritative extraction store);
+    // the old SearchIndex-based query missed most documents because the
+    // FTS table only carries a subset of extracted content.
+    {
+        sqlite3_stmt* sel = nullptr;
+        sqlite3_prepare_v2(raw,
+            "SELECT dt.file_id, dt.extracted_text "
+            "FROM DocumentText dt "
+            "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
+            "WHERE e.file_id IS NULL "
+            "  AND length(dt.extracted_text) > 0 "
+            "ORDER BY dt.file_id LIMIT 500;",
+            -1, &sel, nullptr);
+        if (sel) {
+            while (sqlite3_step(sel) == SQLITE_ROW) {
+                const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
+                const unsigned char* c = sqlite3_column_text(sel, 1);
+                if (c && c[0]) {
+                    fileIds.append(fileId);
+                    texts.append(QString::fromUtf8(
+                        reinterpret_cast<const char*>(c)));
+                }
             }
+            sqlite3_finalize(sel);
         }
-        sqlite3_finalize(sel);
+    }
+
+    // Phase B — embedded documents that predate chunked indexing. They
+    // have a full-document embedding but no EmbeddingChunks rows, which
+    // used to make semantic search permanently blind to them.
+    if (fileIds.isEmpty()) {
+        chunkMode = true;
+        sqlite3_stmt* sel = nullptr;
+        sqlite3_prepare_v2(raw,
+            "SELECT dt.file_id, dt.extracted_text "
+            "FROM DocumentText dt "
+            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id) "
+            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c WHERE c.file_id = dt.file_id) "
+            "  AND length(dt.extracted_text) > 1000 "
+            "ORDER BY dt.file_id LIMIT 120;",
+            -1, &sel, nullptr);
+        if (sel) {
+            while (sqlite3_step(sel) == SQLITE_ROW) {
+                const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
+                const unsigned char* c = sqlite3_column_text(sel, 1);
+                if (c && c[0]) {
+                    fileIds.append(fileId);
+                    texts.append(QString::fromUtf8(
+                        reinterpret_cast<const char*>(c)));
+                }
+            }
+            sqlite3_finalize(sel);
+        }
     }
     if (fileIds.isEmpty()) return;
 
     aiBackfillRunning_ = true;
+    aiBackfillChunkMode_ = chunkMode;
     setAiChip(QString("0/%1").arg(fileIds.size()), true);
     statusBar()->showMessage(
-        QString("AI: generating embeddings for %1 unembedded file%2...")
-            .arg(fileIds.size())
-            .arg(fileIds.size() == 1 ? "" : "s"));
+        chunkMode
+            ? QString("AI: building chunk index for %1 document%2...")
+                .arg(fileIds.size()).arg(fileIds.size() == 1 ? "" : "s")
+            : QString("AI: generating embeddings for %1 unembedded file%2...")
+                .arg(fileIds.size())
+                .arg(fileIds.size() == 1 ? "" : "s"));
     bgeService_->embedDocumentsBatch(fileIds, texts);
+}
+
+qint64 MainWindow::countMissingEmbeddings() {
+    if (!db_) return 0;
+    sqlite3* raw = db_->raw();
+    if (!raw) return 0;
+    sqlite3_stmt* s = nullptr;
+    qint64 n = 0;
+    if (sqlite3_prepare_v2(raw,
+            "SELECT COUNT(*) FROM DocumentText dt "
+            "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
+            "WHERE e.file_id IS NULL AND length(dt.extracted_text) > 0;",
+            -1, &s, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
+        sqlite3_finalize(s);
+    }
+    return n;
+}
+
+qint64 MainWindow::countMissingChunkDocs() {
+    if (!db_) return 0;
+    sqlite3* raw = db_->raw();
+    if (!raw) return 0;
+    sqlite3_stmt* s = nullptr;
+    qint64 n = 0;
+    if (sqlite3_prepare_v2(raw,
+            "SELECT COUNT(*) FROM DocumentText dt "
+            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id) "
+            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c WHERE c.file_id = dt.file_id) "
+            "  AND length(dt.extracted_text) > 1000;",
+            -1, &s, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
+        sqlite3_finalize(s);
+    }
+    return n;
 }
 
 void MainWindow::onBgeEmbeddingProgress(int current, int total) {
@@ -2581,18 +2666,45 @@ void MainWindow::onBgeEmbeddingProgress(int current, int total) {
 
 void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
     aiBackfillRunning_ = false;
-    statusBar()->showMessage(
-        QString("Semantic indexing complete — %1 document%2 embedded%3")
-            .arg(success)
-            .arg(success == 1 ? "" : "s")
-            .arg(fail > 0 ? QString(", %1 failed").arg(fail) : QString()),
-        8000);
-    if (bgeService_ && bgeService_->isReady()) {
-        setAiChip(semanticEnabled_ ? "ON" : "OFF", semanticEnabled_);
+    // Deadlock guard: a batch where EVERY file failed would be re-selected
+    // verbatim by the next query and retried forever. Two consecutive
+    // all-fail batches means something is systematically wrong — stop and
+    // say so instead of spinning.
+    if (success == 0 && fail > 0) ++aiBackfillDeadlock_;
+    else                           aiBackfillDeadlock_ = 0;
+
+    const qint64 remaining = countMissingEmbeddings() + countMissingChunkDocs();
+    if (aiBackfillDeadlock_ >= 2 && remaining > 0) {
+        aiBackfillDeadlock_ = 0;
+        statusBar()->showMessage(
+            QString("AI indexing paused — %1 document%2 could not be "
+                    "embedded (see log). Keyword search is unaffected.")
+                .arg(remaining)
+                .arg(remaining == 1 ? "" : "s"), 10000);
+        setAiChip(semanticEnabled_ ? "ON" : "OFF", false);
+        return;
     }
-    // Chain the next batch while files remain unembedded (the backlog was
-    // previously capped at 1000 and silently dropped the rest).
-    if (semanticEnabled_) {
+    if (remaining > 0) {
+        // Mid-drain: say exactly how much work is left instead of claiming
+        // completion after every batch (the old message fired per batch,
+        // which read as "done" while thousands were still queued).
+        statusBar()->showMessage(
+            QString("AI indexing: %1 processed this pass, %2 remaining...")
+                .arg(success).arg(remaining));
+        setAiChip(QString("%1 left").arg(remaining), true);
+    } else {
+        statusBar()->showMessage(
+            QString("AI indexing complete — %1 document%2 embedded%3")
+                .arg(success)
+                .arg(success == 1 ? "" : "s")
+                .arg(fail > 0 ? QString(", %1 failed").arg(fail) : QString()),
+            8000);
+        setAiChip(semanticEnabled_ ? "ON" : "OFF", false);
+    }
+    // Chain unconditionally while work remains. The old gate stopped the
+    // drain whenever the AI toggle was off, freezing the queue forever —
+    // embeddings are cheap, async, and useful the moment AI is re-enabled.
+    if (remaining > 0 && bgeService_ && bgeService_->isReady()) {
         QTimer::singleShot(250, this, [this]() { ensureEmbeddingsBackfill(); });
     }
 }
@@ -2616,9 +2728,15 @@ void MainWindow::updateIndexStats() {
             indexedInfoLbl_->setText(QString("%1 indexed").arg(total));
         }
         if (indexedBar_) {
-            // Progress = content_done / total (capped at 100).
+            // Progress = content_done / total. Only VISIBLE while indexing
+            // or extraction is actively running — a permanent partial bar
+            // read as "my index is incomplete" (it was also the #1 support
+            // question). At idle the badge is just "N indexed".
+            const bool busy = contentExtractionRunning_
+                || (indexer_ && indexer_->isRunning());
             int pct = total > 0 ? int((contentDone * 100) / total) : 0;
             indexedBar_->setValue(qMin(100, pct));
+            indexedBar_->setVisible(busy);
         }
 
         // Status bar
@@ -3297,7 +3415,12 @@ void MainWindow::onOpenSettings() {
                     QString("AI top-K set to %1").arg(topK), 2000);
             });
 
-        // Wire up "Embed All Documents Now" button → BgeService::embedDocumentsBatch()
+        // Wire up "Embed All Documents Now" → shared two-phase backfill.
+        // The old inline handler shipped ALL pending texts in one giant
+        // batch and only covered missing embeddings — never chunk rows —
+        // so it "finished" in seconds while the semantic index stayed
+        // blind. Delegating keeps one queue, one message stream, and the
+        // background chain drains everything after the dialog closes.
         QObject::connect(&dlg, &SettingsDialog::embedAllRequested,
             this, [this]() {
                 if (!bgeService_ || !bgeService_->isReady()) {
@@ -3309,36 +3432,18 @@ void MainWindow::onOpenSettings() {
                         "And that onnxruntime.dll is present.");
                     return;
                 }
-                // Gather all files that have extracted text but no embedding yet.
-                QVector<int> fileIds;
-                QStringList texts;
-                sqlite3* raw = db_->raw();
-                if (!raw) return;
-                sqlite3_stmt* stmt = nullptr;
-                const char* sql =
-                    "SELECT dt.file_id, dt.extracted_text "
-                    "FROM DocumentText dt "
-                    "WHERE NOT EXISTS ("
-                    "  SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id"
-                    ");";
-                if (sqlite3_prepare_v2(raw, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-                    while (sqlite3_step(stmt) == SQLITE_ROW) {
-                        const int fileId = sqlite3_column_int64(stmt, 0);
-                        const unsigned char* txt = sqlite3_column_text(stmt, 1);
-                        fileIds.append(fileId);
-                        texts.append(txt ? QString::fromUtf8(
-                            reinterpret_cast<const char*>(txt)) : QString());
-                    }
-                    sqlite3_finalize(stmt);
-                }
-                if (fileIds.isEmpty()) {
+                const qint64 pending = countMissingEmbeddings()
+                                     + countMissingChunkDocs();
+                if (pending == 0) {
                     statusBar()->showMessage(
                         "All documents already have embeddings.", 5000);
                     return;
                 }
+                ensureEmbeddingsBackfill();
                 statusBar()->showMessage(
-                    QString("Embedding %1 documents...").arg(fileIds.size()), 0);
-                bgeService_->embedDocumentsBatch(fileIds, texts);
+                    QString("AI indexing started — %1 document%2 in queue; "
+                            "progress shows in the status bar.")
+                        .arg(pending).arg(pending == 1 ? "" : "s"), 6000);
             });
 
         const int rc = dlg.exec();
