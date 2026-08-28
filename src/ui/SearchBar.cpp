@@ -4,6 +4,7 @@
 
 #include "SearchBar.h"
 #include "IconUtils.h"
+#include "DropDownCombo.h"
 
 #include <QHBoxLayout>
 #include <QCompleter>
@@ -88,7 +89,7 @@ SearchBar::SearchBar(QWidget* parent) : QWidget(parent) {
     searchBtn_->setMaximumHeight(36);
 
     // Saved searches
-    savedBox_ = new QComboBox(this);
+    savedBox_ = new DropDownCombo(this);
     savedBox_->setToolTip("Re-run one of your saved searches");
     savedBox_->addItem("Saved");
     savedBox_->setMinimumHeight(36);

@@ -5,6 +5,7 @@
 #include "ResultsPane.h"
 #include "ResultItemDelegate.h"
 #include "IconUtils.h"
+#include "DropDownCombo.h"
 #include "../core/StringUtils.h"
 
 #include <QVBoxLayout>
@@ -101,7 +102,7 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     hLay->addWidget(countLbl_);
     hLay->addStretch();
 
-    sortBox_ = new QComboBox(header);
+    sortBox_ = new DropDownCombo(header);
     sortBox_->setObjectName("sortSelect");
     sortBox_->addItem("Sort: Relevance");
     sortBox_->addItem("Sort: Date");
