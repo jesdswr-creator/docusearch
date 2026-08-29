@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.0";  // v1.7.0: PDFium replaces Poppler (GPL-free PDF engine), code-drawn splash w/o white stroke + animated progress, Help no longer triggers Duplicates, AI-only hits show real ext/size, low-res Settings scroll fix
+constexpr const char* kAppVersion     = "1.7.1";  // v1.7.1: AI weight/threshold sliders get live value readouts (drag updates captions in realtime), low-res Settings density restored (1.7.0 size inflation removed - scroll wrap alone fixes clipping)
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

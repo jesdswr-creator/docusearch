@@ -1206,3 +1206,12 @@ Work Log:
 - Help bug: onSidebarClicked clears selection via QSignalBlocker; removed the legacy setCurrentRow(0) in the Help branch that re-fired currentRowChanged -> launched the Duplicates finder after every Help click.
 - Results: semantic-only hits now backfill extension/size/modified from disk (QFileInfo) in the HybridResult->SearchHit conversion - badges and sizes no longer render empty/"0 B" for AI-found documents.
 - Settings low-res: every tab wrapped in a frameless transparent QScrollArea; dialog sizes from screen availableGeometry; scoped QDialog QSS raises control min-heights.
+
+---
+Task ID: v1.7.1-settings-followup
+Agent: main
+Task: User feedback on v1.7.0 - low-res Settings buttons too big/fields crowded; AI weight + threshold sliders not realtime.
+
+Work Log:
+- Root cause of the "big buttons / buttons going into fields": the 1.7.0 scoped QDialog QSS inflated buttons (28px + padding) and inputs (26px) - on low-DPI screens that reads as bulky and crowds the inline [field][button] rows. Removed all control-size inflation; kept ONLY the QScrollArea transparency rules. The actual text-clipping fix was the 1.7.0 scroll-wrapped tabs + screen-aware dialog sizing, and both stay.
+- Slider readouts: engine wiring was already live (aiWeightChanged -> setSemanticWeight on every valueChanged), but the visible captions were not - the threshold label froze at its construction value and the weight caption never displayed a number at all. Both are now live readouts that update on every drag tick ("AI Weight: N%", "Minimum Similarity Threshold: N%"); weight caption moved below the DB read so it seeds with the REAL stored value.

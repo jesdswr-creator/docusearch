@@ -271,9 +271,6 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* searchGroup = new QGroupBox("Search Settings", this);
     auto* searchLay = new QVBoxLayout(searchGroup);
 
-    auto* weightLbl = new QLabel(
-        "AI Weight (40% = balanced, 0% = keyword only)", this);
-    searchLay->addWidget(weightLbl);
     // Read current AI settings from SemanticSettings table so sliders
     // show the actual current values, not hardcoded defaults.
     int weightVal = 30, threshVal = 50, topkVal = 20;
@@ -298,12 +295,19 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
         }
     }
 
+    // Live caption: shows the REAL current value and updates while the
+    // user drags (see the valueChanged connects below).
+    auto* weightLbl = new QLabel(
+        QString("AI Weight: %1%   (40%% = balanced, 0%% = keyword only)")
+            .arg(weightVal), this);
+    searchLay->addWidget(weightLbl);
+
     auto* weightSlider = new QSlider(Qt::Horizontal, this);
     weightSlider->setRange(0, 100);
     weightSlider->setValue(weightVal);
     searchLay->addWidget(weightSlider);
 
-    auto* threshLbl = new QLabel(QString("Minimum Similarity Threshold (%1%)").arg(threshVal), this);
+    auto* threshLbl = new QLabel(QString("Minimum Similarity Threshold: %1%").arg(threshVal), this);
     searchLay->addWidget(threshLbl);
     auto* threshSlider = new QSlider(Qt::Horizontal, this);
     threshSlider->setRange(0, 100);
@@ -318,8 +322,14 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     searchLay->addWidget(topkSpin);
 
     // Task 3 Fix D: Wire sliders to emit signals in real-time AND persist to DB.
+    // 1.7.1: the captions are now LIVE readouts — the threshold label used
+    // to freeze at its construction value and the weight caption never
+    // showed a number at all, so dragging looked like nothing was happening.
     connect(weightSlider, &QSlider::valueChanged, this,
-        [this](int value) {
+        [this, weightLbl](int value) {
+            weightLbl->setText(
+                QString("AI Weight: %1%   (40%% = balanced, 0%% = keyword only)")
+                    .arg(value));
             emit aiWeightChanged(value / 100.0f);
             if (db_) {
                 sqlite3* raw = db_->raw();
@@ -330,7 +340,9 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
             }
         });
     connect(threshSlider, &QSlider::valueChanged, this,
-        [this](int value) {
+        [this, threshLbl](int value) {
+            threshLbl->setText(
+                QString("Minimum Similarity Threshold: %1%").arg(value));
             emit aiThresholdChanged(value / 100.0f);
             if (db_) {
                 sqlite3* raw = db_->raw();
