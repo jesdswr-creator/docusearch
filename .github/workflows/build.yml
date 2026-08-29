@@ -109,7 +109,7 @@ jobs:
           # Used BOTH for building (headers + import lib) and bundling (pdfium.dll).
           $ErrorActionPreference = 'Stop'
           $pdfiumRoot = "C:\pdfium"
-          $url = "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-windows-x64.tgz"
+          $url = "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz"
           Write-Host "Downloading PDFium ..."
           $ProgressPreference = 'SilentlyContinue'
           $tgz = "$env:TEMP\pdfium.tgz"
