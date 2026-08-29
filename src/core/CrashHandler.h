@@ -7,7 +7,7 @@
 // WHY THIS EXISTS:
 //   The app has been crashing during extraction for 4+ build cycles
 //   with no diagnostic data. The logger only records what the app
-//   explicitly logs — if a crash happens inside Poppler or ONNX, the
+//   explicitly logs — if a crash happens inside the PDF engine or ONNX, the
 //   log shows nothing useful. We've been guessing at causes.
 //
 // WHAT THIS DOES:
@@ -30,7 +30,7 @@
 //   - C++ unhandled exceptions (via _set_se_translator + terminate)
 //
 // WHAT IT DOESN'T CATCH:
-//   - `longjmp` across C++ stack frames (Poppler can do this on
+//   - `longjmp` across C++ stack frames (the PDF engine can do this on
 //     malformed PDFs — see comment in extraction code)
 //   - Calls to abort()/terminate() that bypass the filter
 //   - Heap corruption that kills the process before the filter runs

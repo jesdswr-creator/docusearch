@@ -1,5 +1,5 @@
 // ============================================================
-// PdfPreview.cpp - Continuous scrolling PDF preview (Poppler)
+// PdfPreview.cpp - Continuous scrolling PDF preview (PDFium)
 // ============================================================
 //
 // The document is rendered as a vertical stack of page "cards"
@@ -7,6 +7,11 @@
 // the viewport are rendered lazily by a debounced pass driven by
 // the scrollbar, and pixmaps far away from the viewport are evicted
 // so memory stays bounded (a 150-DPI A4 page is ~8 MB of pixels).
+//
+// Engine: PDFium (BSD-style) — replaced Poppler (GPL). PDFium exposes
+// exact page geometry in points, so the low-DPI render-probe trick
+// the Poppler path needed is GONE: measureBaseSizes() is now pure
+// arithmetic (points / 72 * dpi).
 // ============================================================
 
 #include "PdfPreview.h"
@@ -24,11 +29,8 @@
 #include <QPalette>
 #include <algorithm>
 
-#ifdef DOCUSEARCH_HAS_POPPLER
-#  include <poppler-document.h>
-#  include <poppler-page.h>
-#  include <poppler-page-renderer.h>
-#  include <poppler-image.h>
+#ifdef DOCUSEARCH_HAS_PDFIUM
+#  include "../pdf/PdfiumDocument.h"
 #endif
 
 namespace DocuSearch {
@@ -39,9 +41,6 @@ constexpr int kRenderContextPages = 1;
 // Hard cap on pixmaps kept alive; anything farther than this many
 // pages from the viewport is evicted during the render pass.
 constexpr int kEvictDistance      = 8;
-// Low DPI used ONLY to measure page proportions cheaply. The real
-// display render always happens at RENDER_DPI * zoom.
-constexpr double kMeasureDpi      = 36.0;
 } // namespace
 
 PdfPreview::PdfPreview(QWidget* parent)
@@ -148,36 +147,32 @@ bool PdfPreview::loadFile(const QString& filePath) {
         return false;
     }
 
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     try {
-        // poppler::document::load_from_file returns a raw pointer that
-        // we own. Wrap it in shared_ptr<void> with a custom deleter.
-        // Note: For password-protected PDFs, load_from_file returns nullptr.
-        // We try with empty owner/user passwords as a fallback (some PDFs
-        // have an empty owner password that unlocks them).
-        const std::string stdPath = filePath.toStdString();
-        poppler::document* docRaw = poppler::document::load_from_file(stdPath);
-        if (!docRaw) {
-            docRaw = poppler::document::load_from_file(stdPath, "", "");
-        }
-        if (!docRaw || docRaw->pages() == 0) {
-            delete docRaw;
+        // PdfiumDocument is heap-allocated and hidden behind the
+        // type-erased shared_ptr so the header stays free of
+        // fpdfview.h (and the implicit-dtor completeness trap).
+        auto* pdf = new PdfiumDocument();
+        if (!pdf->loadFromFile(filePath) || pdf->pageCount() == 0) {
+            const QString err = pdf->lastError();
+            delete pdf;
             clear();
-            m_pageLabel->setText("Cannot open PDF");
+            m_pageLabel->setText(err.isEmpty()
+                ? QStringLiteral("Cannot open PDF") : err);
             return false;
         }
 
-        const int realPages = docRaw->pages();
+        const int realPages = pdf->pageCount();
         m_totalPages = std::min(realPages, MAX_PAGES);
 
         m_document = std::shared_ptr<void>(
-            docRaw,
-            [](void* p) { delete static_cast<poppler::document*>(p); });
+            pdf,
+            [](void* p) { delete static_cast<PdfiumDocument*>(p); });
 
         m_currentPage = 0;
         m_zoomLevel   = 1.0;
 
-        measureBaseSizes();   // true page sizes via cheap low-DPI probes
+        measureBaseSizes();   // exact page sizes from PDFium geometry
         rebuildPages();
         m_pendingFit = true;  // trigger onFitWindow() in showEvent
 
@@ -211,33 +206,20 @@ QSize PdfPreview::pageSizePixels(int index) const {
     return QSize(600, 800);  // sane fallback aspect
 }
 
-// Probe every page once at a very low DPI to learn its true pixel
-// size at RENDER_DPI (zoom 1). This avoids any poppler geometry API
-// (dimensions()/page_box() differ wildly between versions) by using
-// the renderer itself, which has been stable across every build.
+// True page sizes at zoom 1 (RENDER_DPI), straight from PDFium's
+// page geometry in points — the renderer-probe workaround the Poppler
+// path needed (its geometry API varied wildly between versions) is
+// no longer necessary. Cheap: FPDF_LoadPage + two doubles per page.
 void PdfPreview::measureBaseSizes() {
     m_baseSizes.clear();
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     if (!m_document) return;
-    auto* doc = static_cast<poppler::document*>(m_document.get());
+    auto* doc = static_cast<PdfiumDocument*>(m_document.get());
     for (int i = 0; i < m_totalPages; ++i) {
-        QSize sz(1275, 1650);   // A4 portrait @150 DPI fallback
-        poppler::page* page = doc->create_page(i);
-        if (page) {
-            poppler::page_renderer renderer;
-            auto img = renderer.render_page(page, kMeasureDpi, kMeasureDpi);
-            delete page;
-            if (img.is_valid() && img.width() > 0 && img.height() > 0) {
-                sz.setWidth(qMax(64,
-                    int(img.width()  * (RENDER_DPI / kMeasureDpi) + 0.5)));
-                sz.setHeight(qMax(84,
-                    int(img.height() * (RENDER_DPI / kMeasureDpi) + 0.5)));
-            }
-        }
-        m_baseSizes.append(sz);
-        // Yield occasionally so a big document does not hitch the UI
-        // noticeably during load.
-        if ((i % 10) == 9) QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        const QSizeF pts = doc->pageSizePoints(i);
+        m_baseSizes.append(QSize(
+            qMax(64, int(pts.width()  / 72.0 * RENDER_DPI + 0.5)),
+            qMax(84, int(pts.height() / 72.0 * RENDER_DPI + 0.5))));
     }
 #else
     for (int i = 0; i < m_totalPages; ++i)
@@ -258,7 +240,7 @@ void PdfPreview::rebuildPages() {
     m_renderQueue.clear();
     m_pumping = false;
 
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     for (int i = 0; i < m_totalPages; ++i) {
         auto* lbl = new QLabel(m_pagesHost);
         lbl->setObjectName("pdfPageCard");
@@ -343,32 +325,18 @@ void PdfPreview::updatePageIndicator() {
 }
 
 bool PdfPreview::renderIntoLabel(int index) {
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     if (!m_document || index < 0 || index >= m_totalPages) return false;
     try {
-        auto* doc = static_cast<poppler::document*>(m_document.get());
-        poppler::page* page = doc->create_page(index);
-        if (!page) return false;
-
-        poppler::page_renderer renderer;
-        renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-
-        const double dpi = RENDER_DPI * m_zoomLevel;
-        auto img_data = renderer.render_page(page, dpi, dpi);
-        delete page;
-        page = nullptr;
-
-        if (!img_data.is_valid() || !img_data.data()) return false;
-
-        QImage qimg(reinterpret_cast<const uchar*>(img_data.data()),
-                    img_data.width(), img_data.height(),
-                    img_data.bytes_per_row(),
-                    QImage::Format_ARGB32);
+        auto* doc = static_cast<PdfiumDocument*>(m_document.get());
+        // PDFium rasterizes BGRA with anti-aliasing by default; the
+        // wrapper detaches the buffer into an owned QImage.
+        const QImage qimg = doc->renderPage(index, RENDER_DPI * m_zoomLevel);
         if (qimg.isNull()) return false;
 
         if (index >= m_pageLabels.size()) return false;
         QLabel* lbl = m_pageLabels[index];
-        lbl->setPixmap(QPixmap::fromImage(qimg.copy()));
+        lbl->setPixmap(QPixmap::fromImage(qimg));
         lbl->setText(QString());
         return true;
     } catch (const std::exception& e) {

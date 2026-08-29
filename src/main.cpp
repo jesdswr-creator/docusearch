@@ -12,6 +12,7 @@
 #include "../core/SehTranslator.h"
 #include "../core/CrashHandler.h"
 #include "ui/MainWindow.h"
+#include "ui/SplashOverlay.h"
 
 #include <QApplication>
 #include <QStyleFactory>
@@ -20,8 +21,6 @@
 #include <QIcon>
 #include <QThread>
 #include <QThreadPool>
-#include <QSplashScreen>
-#include <QPixmap>
 
 using namespace DocuSearch;
 
@@ -60,22 +59,12 @@ int main(int argc, char* argv[]) {
     // splash screen, the user double-clicks the exe and sees nothing
     // for several seconds — feels broken.
     //
-    // Splash asset: 1080x680 @2x compact navy card (regenerate with
-    // scripts/generate_splash.py). setDevicePixelRatio(2) renders it at
-    // a tidy 540x340 logical pixels on every display — the previous
-    // 960x600 1:1 pixmap covered half of a 1080p laptop screen.
-    // Transparent margins + rounded corners = no edge bleed. The status
-    // line is baked into the artwork (splash.showMessage would land in
-    // the transparent margin outside the card).
-    QPixmap splashPixmap(":/icons/splash.png");
-    if (splashPixmap.isNull()) {
-        // Fallback to the app icon if the splash PNG failed to load.
-        splashPixmap = QPixmap(":/icons/DocuSearch-256.png");
-    } else {
-        splashPixmap.setDevicePixelRatio(2.0);  // crisp on HiDPI, compact everywhere
-    }
-    QSplashScreen splash(splashPixmap,
-                         Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    // The splash is DRAWN IN CODE (SplashOverlay.h): no static PNG, so
+    // no baked-in white stroke around the card (the old artwork's white
+    // outline was visible on any background), crisp at every DPI, and
+    // it carries a live indeterminate progress bar + cycling status
+    // caption so startup visibly moves.
+    DocuSearch::SplashOverlay splash;
     splash.show();
     app.processEvents();  // Force paint the splash immediately
 
@@ -99,9 +88,10 @@ int main(int argc, char* argv[]) {
     // ── Construct MainWindow (this is the slow part) ──
     DocuSearch::MainWindow w;
 
-    // Close splash when the window is ready to show.
-    splash.finish(&w);
+    // Show the real window first, then drop the splash in the same
+    // event-loop turn — no desktop gap, no lingering splash frame.
     w.show();
+    splash.close();
 
     return app.exec();
 }

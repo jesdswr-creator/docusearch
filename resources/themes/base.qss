@@ -873,3 +873,25 @@ QLabel#statusDot {
 
 /* Keyboard focus visibility for result rows */
 QListWidget#resultsList::item:focus { border-color: @primaryBorder@; }
+
+/* ── Settings dialog on low-res screens ──
+   Taller controls + transparent scroll hosts so the scroll-wrapped
+   tab pages keep the dialog background at any size. Scoped to QDialog
+   so the main window keeps its tighter metrics. */
+QDialog QPushButton {
+    min-height: 28px;
+    padding: 7px 16px;
+}
+QDialog QLineEdit, QDialog QComboBox,
+QDialog QSpinBox, QDialog QDoubleSpinBox {
+    min-height: 26px;
+}
+QDialog QListWidget {
+    min-height: 72px;
+}
+QDialog QScrollArea, QDialog QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+QDialog QGroupBox {
+    padding-top: 6px;
+}

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.6.7
+    VERSION 1.7.0
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -41,11 +41,11 @@ endif()
 # Find dependencies
 # ============================================================
 
-# Options to disable Poppler entirely (it causes API issues with some
-# vcpkg versions). With Poppler OFF, the app still works — just without
-# PDF text extraction (PDFs flag as needsOcr and go through Windows.Media.Ocr instead).
+# Options to disable the PDF engine entirely. With PDFium OFF, the app
+# still works — just without PDF text extraction (PDFs flag as needsOcr
+# and go through Windows.Media.Ocr instead).
 # OCR is provided by Windows.Media.Ocr (WinRT) — no build-time deps, ships with the OS.
-option(DOCUSEARCH_ENABLE_POPPLER   "Link Poppler for PDF text extraction" ON)
+option(DOCUSEARCH_ENABLE_PDFIUM   "Link PDFium for PDF rendering + text extraction" ON)
 
 # NOTE: Tesseract is no longer used. The DOCUSEARCH_ENABLE_TESSERACT option
 # (present in older versions) is a no-op. OCR is provided by Windows.Media.Ocr
@@ -88,26 +88,32 @@ if(onnxruntime_FOUND)
     set(DOCUSEARCH_HAS_ONNXRUNTIME ON)
 endif()
 
-# PkgConfig is needed for Poppler detection.
-find_package(PkgConfig QUIET)
-
-# Poppler (Qt binding preferred)
-if(DOCUSEARCH_ENABLE_POPPLER)
-if(PkgConfig_FOUND)
-    pkg_check_modules(POPPLER IMPORTED_TARGET poppler-cpp)
-endif()
-if(NOT POPPLER_FOUND)
-    find_path(POPPLER_INCLUDE_DIR poppler-document.h PATH_SUFFIXES poppler/cpp)
-    find_library(POPPLER_LIBRARY NAMES poppler-cpp)
-    if(POPPLER_INCLUDE_DIR AND POPPLER_LIBRARY)
-        set(POPPLER_FOUND TRUE)
-        add_library(Poppler::Lib INTERFACE IMPORTED)
-        set_target_properties(Poppler::Lib PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${POPPLER_INCLUDE_DIR}"
-            INTERFACE_LINK_LIBRARIES      "${POPPLER_LIBRARY}"
-        )
+# PDFium (BSD-3-style via bblanchon/pdfium-binaries) — renders PDFs and
+# extracts text. Replaces Poppler (GPL): no GPL obligations for commercial
+# distribution, exact page geometry, zero transitive DLL dependencies.
+# Point PDFIUM_ROOT at an extracted pdfium-windows-x64 package
+# (include/fpdfview.h + lib/pdfium.dll.lib + pdfium.dll).
+set(PDFIUM_ROOT "" CACHE PATH "Root of the PDFium SDK (include/ + lib/)")
+find_path(PDFIUM_INCLUDE_DIR fpdfview.h
+    HINTS "${PDFIUM_ROOT}" "$ENV{PDFIUM_ROOT}"
+    PATH_SUFFIXES include)
+find_library(PDFIUM_LIBRARY
+    NAMES pdfium.dll.lib pdfium
+    HINTS "${PDFIUM_ROOT}" "$ENV{PDFIUM_ROOT}"
+    PATH_SUFFIXES lib bin)
+if(DOCUSEARCH_ENABLE_PDFIUM AND PDFIUM_INCLUDE_DIR AND PDFIUM_LIBRARY)
+    add_library(Pdfium::Lib INTERFACE IMPORTED)
+    set_target_properties(Pdfium::Lib PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${PDFIUM_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES      "${PDFIUM_LIBRARY}"
+    )
+    set(DOCUSEARCH_HAS_PDFIUM TRUE)
+    message(STATUS "PDFium: ${PDFIUM_LIBRARY}")
+else()
+    if(DOCUSEARCH_ENABLE_PDFIUM)
+        message(WARNING "PDFium not found (set PDFIUM_ROOT). PDF preview/extraction will be disabled in this build.")
     endif()
-endif()
+    set(DOCUSEARCH_HAS_PDFIUM FALSE)
 endif()
 
 # Minizip (for OOXML .zip reading) — usually bundled with zlib
@@ -182,7 +188,7 @@ endif()
 
 # Force dynamic CRT (/MD) to match Qt6EntryPoint.lib which was compiled
 # with /MD. Without this, the linker uses static CRT (/MT) from vcpkg's
-# Poppler, causing:
+# static libs, causing:
 #   LNK4098: defaultlib 'msvcrt.lib' conflicts with use of other libs
 #   LNK2019: unresolved external symbol main (Qt6EntryPoint can't find
 #            main because it expects dynamic CRT linkage)
@@ -205,6 +211,7 @@ set(APP_SOURCES
     src/database/FileRepository.cpp
     # documents
     src/documents/TextExtractor.cpp
+    src/pdf/PdfiumDocument.cpp
     src/documents/PdfExtractor.cpp
     src/documents/DocxExtractor.cpp
     src/documents/XlsxExtractor.cpp
@@ -272,6 +279,7 @@ set(APP_HEADERS
     src/database/FileRepository.h
     src/documents/IDocumentExtractor.h
     src/documents/TextExtractor.h
+    src/pdf/PdfiumDocument.h
     src/documents/PdfExtractor.h
     src/documents/DocxExtractor.h
     src/documents/XlsxExtractor.h
@@ -303,6 +311,7 @@ set(APP_HEADERS
     src/ui/Theme.h
     src/ui/IconUtils.h
     src/ui/DropDownCombo.h
+    src/ui/SplashOverlay.h
     src/ui/SearchBar.h
     src/ui/ResultsPane.h
     src/ui/ResultItemDelegate.h
@@ -367,12 +376,12 @@ target_link_libraries(DocuSearch PRIVATE
 # docusearch_ocr_helper.exe target (see add_executable above). The helper
 # links runtimeobject.lib + windowsapp.lib; the main Qt app does NOT.
 
-if(POPPLER_FOUND)
-    target_link_libraries(DocuSearch PRIVATE Poppler::Lib)
-    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_POPPLER=1)
-    message(STATUS "Poppler: enabled")
+if(DOCUSEARCH_HAS_PDFIUM)
+    target_link_libraries(DocuSearch PRIVATE Pdfium::Lib)
+    target_compile_definitions(DocuSearch PRIVATE DOCUSEARCH_HAS_PDFIUM=1)
+    message(STATUS "PDFium: enabled")
 else()
-    message(WARNING "Poppler not found — PDF text extraction will be stubbed.")
+    message(WARNING "PDFium not found — PDF preview/extraction will be stubbed.")
 endif()
 
 # ── ONNX Runtime (optional, for BGE semantic search) ────────

@@ -1192,3 +1192,17 @@ Work Log:
 - MainWindow: startEmbeddingRebuild() guards (service ready, no backfill/purge in flight, embeddings actually exist), then chains purgeEmbeddingsTick() at 25 ms intervals; each tick deletes up to 1000 EmbeddingChunks + 500 BgeEmbeddings rows via portable subquery DELETEs (DELETE...LIMIT is not compiled into every SQLite build), reports remaining rows, retries transient lock errors up to 50x before giving up loudly
 - When both tables are empty the standard two-phase backfill (ensureEmbeddingsBackfill) takes over automatically: doc-level embeddings first, then the chunk index — all now computed from FULL text (exact-length, up to 512 tokens)
 - ensureEmbeddingsBackfill refuses to start mid-purge; rebuild refuses to start mid-backfill; statuses surface through the existing status bar / AI chip plumbing
+
+---
+Task ID: v1.7.0-pdfium-round
+Agent: main
+Task: Poppler -> PDFium swap (branch-first), splash rework, Help/Duplicates wiring bug, AI-only hit metadata, low-res Settings fix.
+
+Work Log:
+- PDFium engine: new src/pdf/PdfiumDocument.{h,cpp} RAII wrapper over the PDFium C API (FPDF_LoadMemDocument + empty-password retry, exact page geometry via FPDF_GetPageWidth/Height, BGRA renderPage detaching into QImage, UTF-16 FPDFText extraction, process-wide recursive mutex - PDFium is not thread-safe; lazy FPDF_InitLibrary). Replaces GPL poppler-cpp so the app can be sold without GPL obligations.
+- Consumers swapped: PdfExtractor (text), PdfPreview (lazy render pipeline; measureBaseSizes now uses real point geometry - the v1.6.0 low-DPI render-probe workaround is gone), PreviewPane showPdfPreview, MainWindow PDF-OCR path (page render to PNG -> helper exe).
+- Build: CMake option DOCUSEARCH_ENABLE_PDFIUM + PDFIUM_ROOT find (include/ + lib/pdfium.dll.lib), DOCUSEARCH_HAS_PDFIUM define; vcpkg.json drops poppler; CI downloads bblanchon/pdfium-binaries pdfium-windows-x64.tgz, bundles the single pdfium.dll, attaches its license; verify_setup.ps1 checks pdfium.dll.
+- Splash: replaced static splash.png (baked white stroke) with code-drawn SplashOverlay - translucent frameless card, drawn magnifier, indeterminate sliding progress bar + cycling status caption; main.cpp shows window before closing splash.
+- Help bug: onSidebarClicked clears selection via QSignalBlocker; removed the legacy setCurrentRow(0) in the Help branch that re-fired currentRowChanged -> launched the Duplicates finder after every Help click.
+- Results: semantic-only hits now backfill extension/size/modified from disk (QFileInfo) in the HybridResult->SearchHit conversion - badges and sizes no longer render empty/"0 B" for AI-found documents.
+- Settings low-res: every tab wrapped in a frameless transparent QScrollArea; dialog sizes from screen availableGeometry; scoped QDialog QSS raises control min-heights.

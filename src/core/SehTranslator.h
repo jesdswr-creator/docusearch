@@ -4,7 +4,7 @@
 // SehTranslator.h - Convert Win32 SEH exceptions to C++ exceptions
 // ============================================================
 //
-// On Windows, Poppler, zlib, minizip and other C/C++ libraries can
+// On Windows, the PDF engine, zlib, minizip and other C/C++ libraries can
 // raise Structured Exception Handling (SEH) exceptions — access
 // violations, stack overflows, illegal instructions — that
 // `try { ... } catch (const std::exception& e) { ... }` does NOT
@@ -13,7 +13,7 @@
 // `_set_se_translator` (MSVC-only) lets us intercept these and
 // re-throw them as a C++ `SehException` that *can* be caught. This
 // is what makes extraction crash-proof: a malformed PDF that
-// triggers an access violation inside Poppler is caught by the
+// triggers an access violation inside the PDF engine is caught by the
 // `catch (...)` in `MainWindow::onExtract()` and logged as a failed
 // file, instead of taking down the whole app.
 //
@@ -61,7 +61,7 @@ private:
 };
 
 // Install the SEH translator. Call ONCE at startup, before any
-// library that might raise SEH exceptions (Poppler, zlib, Windows.Media.Ocr).
+// library that might raise SEH exceptions (the PDF engine, zlib, Windows.Media.Ocr).
 // Safe to call multiple times — re-installs the same translator.
 void installSehTranslator();
 

@@ -32,7 +32,8 @@ jobs:
       actions: read
       id-token: write
       attestations: write
-    # Bumped from 120 to 240 minutes because Poppler is a heavy port
+    # Bumped from 120 to 240 minutes when the GPL Poppler port was used;
+    # kept at 240 for the Qt6 + vcpkg + test matrix (PDFium replaced Poppler)
     # that takes ~20-30 min to compile from source on first run
     # (subsequent runs hit the vcpkg binary cache and are much faster).
     timeout-minutes: 240
@@ -98,6 +99,32 @@ jobs:
           Get-ChildItem $qtBin -Filter "windeployqt*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "QtInstallDir=$msvcRoot" >> $env:GITHUB_ENV
           echo "$qtBin" >> $env:GITHUB_PATH
+
+      - name: Download PDFium SDK (BSD — replaces Poppler)
+        shell: pwsh
+        run: |
+          # Pre-built PDFium (Chromium's PDF engine) from bblanchon/pdfium-binaries.
+          # License: BSD-3-style — free to redistribute AND sell. Zero transitive
+          # DLL deps (unlike Poppler's openjp/freetype/fontconfig chain).
+          # Used BOTH for building (headers + import lib) and bundling (pdfium.dll).
+          $ErrorActionPreference = 'Stop'
+          $pdfiumRoot = "C:\pdfium"
+          $url = "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-windows-x64.tgz"
+          Write-Host "Downloading PDFium ..."
+          $ProgressPreference = 'SilentlyContinue'
+          $tgz = "$env:TEMP\pdfium.tgz"
+          Invoke-WebRequest -Uri $url -OutFile $tgz -UseBasicParsing
+          if (Test-Path $pdfiumRoot) { Remove-Item -Recurse -Force $pdfiumRoot }
+          New-Item -ItemType Directory -Force -Path $pdfiumRoot | Out-Null
+          tar -xzf $tgz -C $pdfiumRoot
+          # Normalize whatever layout the archive uses into <root>/include + <root>/lib + dll
+          $inc = Get-ChildItem -Path $pdfiumRoot -Recurse -Filter "fpdfview.h" | Select-Object -First 1
+          $lib = Get-ChildItem -Path $pdfiumRoot -Recurse -Filter "*.lib"   | Select-Object -First 1
+          $dll = Get-ChildItem -Path $pdfiumRoot -Recurse -Filter "pdfium.dll" | Select-Object -First 1
+          if (-not $inc -or -not $lib) { throw "PDFium archive layout unexpected: fpdfview.h or .lib not found" }
+          "PDFIUM_ROOT=$pdfiumRoot" | Add-Content $env:GITHUB_ENV
+          Write-Host "PDFium ready: include=$($inc.DirectoryName) lib=$($lib.FullName)"
+          if ($dll) { Write-Host "pdfium.dll: $($dll.FullName)" } else { Write-Host "WARNING: pdfium.dll not in archive (bundle step will fail)" }
 
       - name: Set up vcpkg
         shell: pwsh
@@ -199,7 +226,7 @@ jobs:
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add WixToolset.UI.wixext/4.0.5
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version
 
-      # NOTE: vcpkg dependencies (sqlite3, poppler, zlib)
+      # NOTE: vcpkg dependencies (sqlite3, zlib)
       # are installed automatically by CMake via the vcpkg manifest (vcpkg.json)
       # when we configure with -DCMAKE_TOOLCHAIN_FILE=vcpkg.cmake. No need for
       # a separate `vcpkg install` step. OCR is handled by Windows.Media.Ocr
@@ -246,7 +273,7 @@ jobs:
       - name: Configure CMake (this also installs vcpkg deps from vcpkg.json)
         shell: pwsh
         run: |
-          # Poppler is ENABLED for PDF text extraction (born-digital PDFs).
+          # PDFium is ENABLED for PDF rendering + text extraction (born-digital PDFs).
           # OCR is handled by Windows.Media.Ocr (the official WinRT API
           # built into Windows 10 1809+) via the separate helper exe —
           # no third-party build dependency, no redistributed DLLs,
@@ -282,7 +309,8 @@ jobs:
               -DVCPKG_MANIFEST_MODE=ON `
               -DDOCUSEARCH_BUILD_TESTS=ON `
               -DDOCUSEARCH_ENABLE_TESSERACT=OFF `
-              -DDOCUSEARCH_ENABLE_POPPLER=ON `
+              -DDOCUSEARCH_ENABLE_PDFIUM=ON `
+              -DPDFIUM_ROOT="$env:PDFIUM_ROOT" `
               -DDOCUSEARCH_HAS_ONNXRUNTIME=ON `
               -DONNXRUNTIME_ROOT="$env:ONNXRUNTIME_ROOT" 2>&1
             $exitCode = $LASTEXITCODE
@@ -408,7 +436,7 @@ jobs:
             Write-Host "FAIL: docusearch_ocr_helper.exe not found"
           }
 
-      - name: Bundle Qt DLLs (windeployqt) + Poppler DLLs
+      - name: Bundle Qt DLLs (windeployqt) + PDFium DLL
         shell: pwsh
         run: |
           $wdq = Join-Path $env:QtInstallDir "bin\windeployqt.exe"
@@ -428,67 +456,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\bin\Release\themes | Out-Null
           Copy-Item -Path resources\themes\*.qss -Destination build\bin\Release\themes -Force
 
-          # ---- Bundle non-Qt DLLs: Poppler and its transitive deps.
+          # ---- Bundle PDFium (BSD) — replaces the old Poppler + its
+          # transitive dependency chain (openjp2/freetype/fontconfig/...).
+          # PDFium is fully self-contained: a single pdfium.dll.
           # OCR is handled by Windows.Media.Ocr (WinRT API built into Windows —
           # no third-party DLLs to bundle).
-          # windeployqt only handles Qt DLLs - it doesn't know about
-          # vcpkg-installed libraries. We copy them from the vcpkg bin.
-          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
-          if (-not (Test-Path $vcpkgBin)) {
-            $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
-          }
-          if (Test-Path $vcpkgBin) {
-            Write-Host "=== Copying vcpkg runtime DLLs from $vcpkgBin ==="
-            $runtimeDlls = @(
-              'poppler-cpp.dll',
-              'poppler.dll',
-              'openjp2.dll',
-              'jpeg62.dll',
-              'libjpeg.dll',
-              'png16.dll',
-              'libpng16.dll',
-              'tiff.dll',
-              'libtiff.dll',
-              'zstd.dll',
-              'libzstd.dll',
-              'lzma.dll',
-              'liblzma.dll',
-              'brotlidec.dll',
-              'brotlicommon.dll',
-              'freetype.dll',
-              'fontconfig-1.dll',
-              'expat.dll',
-              'libexpat.dll',
-              'iconv-2.dll',
-              'libiconv.dll',
-              'charset-1.dll',
-              'libcharset.dll',
-              'lcms2.dll',
-              'liblcms2.dll'
-            )
-            $copied = 0
-            foreach ($dll in $runtimeDlls) {
-              $src = Join-Path $vcpkgBin $dll
-              if (Test-Path $src) {
-                Copy-Item $src "build\bin\Release\$dll" -Force
-                $copied++
-              }
-            }
-            Write-Host "Copied $copied runtime DLLs from vcpkg."
-
-            # Fallback: copy every *.dll that mentions poppler, openjp,
-            # jpeg, png, tiff, freetype, fontconfig.
-            Get-ChildItem -Path $vcpkgBin -Filter "*.dll" | Where-Object {
-              $_.Name -match 'poppler|openjp|jpeg|png|tiff|freetype|fontconfig|lcms|zstd|lzma|brotli|expat|iconv|charset'
-            } | ForEach-Object {
-              $dst = "build\bin\Release\$($_.Name)"
-              if (-not (Test-Path $dst)) {
-                Copy-Item $_.FullName $dst -Force
-                Write-Host "  (fallback) Copied $($_.Name)"
-              }
-            }
+          $pdfiumDll = Get-ChildItem -Path "$env:PDFIUM_ROOT" -Recurse -Filter "pdfium.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($pdfiumDll) {
+            Copy-Item $pdfiumDll.FullName "build\bin\Release\pdfium.dll" -Force
+            Write-Host ("Bundled pdfium.dll ({0} MB)" -f [math]::Round($pdfiumDll.Length/1MB,1))
           } else {
-            Write-Host "WARNING: vcpkg bin dir not found at $vcpkgBin - Poppler DLLs may be missing."
+            Write-Host "WARNING: pdfium.dll not found under $env:PDFIUM_ROOT - PDF preview/extraction will not work!"
           }
 
       - name: Copy OCR helper exe
@@ -548,6 +526,16 @@ jobs:
           if (Test-Path "docs\OCR_LICENSING.md") {
             Copy-Item "docs\OCR_LICENSING.md" "$dst\docs\OCR_LICENSING.md" -Force
             Write-Host "Bundled docs/OCR_LICENSING.md"
+          }
+          # PDFium license (BSD-3-style — from the pdfium-binaries archive)
+          if ($env:PDFIUM_ROOT) {
+            $pdfiumLic = Get-ChildItem -Path $env:PDFIUM_ROOT -Recurse -Include "LICENSE*","COPYING*","AUTHORS*" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($pdfiumLic) {
+              Copy-Item $pdfiumLic.FullName "$dst\docs\PDFIUM_LICENSE.txt" -Force
+              Write-Host "Bundled PDFium license as docs/PDFIUM_LICENSE.txt"
+            } else {
+              Write-Host "No license file inside PDFium archive - bundle one manually if redistributing"
+            }
           }
           # User-facing help docs
           if (Test-Path "HELP.md") {

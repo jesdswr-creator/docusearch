@@ -32,6 +32,9 @@
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QComboBox>
+#include <QScrollArea>
+#include <QScreen>
+#include <QGuiApplication>
 #include <sqlite3.h>
 
 namespace DocuSearch {
@@ -42,14 +45,36 @@ static constexpr int kSearchIdRole = Qt::UserRole + 1;
 // And the query text in a second role for display/edit.
 static constexpr int kSearchQueryRole = Qt::UserRole + 2;
 
+// Low-res screens (1366x768 laptops, small DPI-scaled windows) cannot fit
+// the taller settings tabs; QTabWidget silently clips the overflow — the
+// "crumbled buttons/text" report. Wrapping every page in a frameless,
+// transparent QScrollArea lets the content breathe at ANY dialog size.
+QWidget* wrapInScroll(QWidget* page) {
+    auto* sa = new QScrollArea(page->parentWidget());
+    sa->setWidgetResizable(true);
+    sa->setFrameShape(QFrame::NoFrame);
+    sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    sa->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    sa->viewport()->setAutoFillBackground(false);
+    sa->setWidget(page);
+    return sa;
+}
+
 SettingsDialog::SettingsDialog(const AppSettings& current,
                                FileRepository* repo,
                                Database* db,
                                QWidget* parent)
     : QDialog(parent), current_(current), repo_(repo), db_(db) {
     setWindowTitle("Settings - DocuSearch");
-    setMinimumWidth(780);
-    setMinimumHeight(640);
+    // Size relative to the screen actually shown on: the old fixed
+    // 780x640 minimum overflowed short displays and crushed the tab bar.
+    const QRect scr = (screen()
+        ? screen()->availableGeometry()
+        : QGuiApplication::primaryScreen()->availableGeometry());
+    setMinimumWidth(qMin(780, scr.width() - 48));
+    setMinimumHeight(qMin(640, scr.height() - 96));
+    resize(qBound(600, qMin(860, scr.width() - 64), 860),
+           qBound(480, qMin(700, scr.height() - 110), 700));
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(12, 12, 12, 12);
@@ -136,7 +161,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     idxLay->addWidget(extBox);
 
     idxLay->addStretch();
-    tabs->addTab(indexingTab, "Indexing");
+    tabs->addTab(wrapInScroll(indexingTab), "Indexing");
 
     // -------- Performance tab --------
     auto* perfTab = new QWidget(this);
@@ -168,7 +193,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     perfLay->addRow("", lazyOcrCheck_);
     perfLay->addRow("", hashFilesCheck_);
     perfLay->addRow("", monitorCheck_);
-    tabs->addTab(perfTab, "Performance");
+    tabs->addTab(wrapInScroll(perfTab), "Performance");
 
     // -------- OCR tab -------- REMOVED.
     // The OCR tab was info-only (just described Windows.Media.Ocr +
@@ -393,7 +418,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     semLay->addWidget(embGroup);
 
     semLay->addStretch();
-    tabs->addTab(semTab, "AI Search");
+    tabs->addTab(wrapInScroll(semTab), "AI Search");
 
     // -------- Saved searches tab --------
     auto* savTab = new QWidget(this);
@@ -420,7 +445,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     savLay->addLayout(savRow);
     savLay->addWidget(new QLabel(
         "Tip: saving a search with an existing name will overwrite it.", this));
-    tabs->addTab(savTab, "Saved Searches");
+    tabs->addTab(wrapInScroll(savTab), "Saved Searches");
 
     // -------- Backup / Restore tab --------
     auto* bkTab = new QWidget(this);
@@ -439,7 +464,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     bkLay->addWidget(restoreBtn);
     bkLay->addWidget(vacuumBtn);
     bkLay->addStretch();
-    tabs->addTab(bkTab, "Backup & Restore");
+    tabs->addTab(wrapInScroll(bkTab), "Backup & Restore");
 
     // -------- Buttons --------
     auto* btns = new QDialogButtonBox(

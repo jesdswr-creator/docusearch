@@ -31,10 +31,8 @@
 #include <QTextDocument>
 #include <QTextFormat>
 
-#ifdef DOCUSEARCH_HAS_POPPLER
-#  include <poppler-document.h>
-#  include <poppler-page.h>
-#  include <poppler-page-renderer.h>
+#ifdef DOCUSEARCH_HAS_PDFIUM
+#  include "../pdf/PdfiumDocument.h"
 #endif
 
 namespace DocuSearch {
@@ -469,15 +467,18 @@ void PreviewPane::renderCurrentPage() {
 }
 
 void PreviewPane::showPdfPreview() {
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     try {
-        auto doc = poppler::document::load_from_file(currentPath_.toStdString());
-        if (!doc || doc->pages() == 0) {
+        PdfiumDocument doc;
+        if (!doc.loadFromFile(currentPath_) || doc.pageCount() == 0) {
             setPreviewMode(false);
-            documentPage_->setPlainText("Failed to open PDF for preview.");
+            documentPage_->setPlainText(
+                doc.lastError().isEmpty()
+                    ? QStringLiteral("Failed to open PDF for preview.")
+                    : doc.lastError());
             return;
         }
-        totalPages_ = doc->pages();
+        totalPages_ = doc.pageCount();
         if (totalPages_ > Constants::kMaxPdfPreviewPages) {
             totalPages_ = Constants::kMaxPdfPreviewPages;
         }
@@ -486,10 +487,6 @@ void PreviewPane::showPdfPreview() {
 
         // Render ALL pages and stack them vertically in the scroll area.
         // The user scrolls to see all pages instead of clicking next/prev.
-        poppler::page_renderer renderer;
-        renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
-        renderer.set_render_hint(poppler::page_renderer::antialiasing);
-
         const int baseDpi = Constants::kPdfPreviewDpi;
         const int dpi = qMax(36, int(baseDpi * zoomPercent_ / 100));
 
@@ -501,29 +498,16 @@ void PreviewPane::showPdfPreview() {
         pagesLay->setAlignment(Qt::AlignCenter);
 
         for (int i = 0; i < totalPages_; ++i) {
-            try {
-                auto* page = doc->create_page(i);
-                if (!page) continue;
-                auto img_data = renderer.render_page(page, dpi, dpi);
-                if (!img_data.is_valid()) continue;
-                char* dataPtr = const_cast<char*>(img_data.data());
-                if (!dataPtr) continue;
-                QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
-                            img_data.width(), img_data.height(),
-                            img_data.bytes_per_row(),
-                            QImage::Format_ARGB32);
-                if (qimg.isNull()) continue;
+            QImage qimg = doc.renderPage(i, dpi);
+            if (qimg.isNull()) continue;
 
-                if (rotation_ == 90) qimg = qimg.transformed(QTransform().rotate(90));
-                else if (rotation_ == 180) qimg = qimg.transformed(QTransform().rotate(180));
-                else if (rotation_ == 270) qimg = qimg.transformed(QTransform().rotate(270));
+            if (rotation_ == 90) qimg = qimg.transformed(QTransform().rotate(90));
+            else if (rotation_ == 180) qimg = qimg.transformed(QTransform().rotate(180));
+            else if (rotation_ == 270) qimg = qimg.transformed(QTransform().rotate(270));
 
-                auto* pageLbl = new QLabel(pagesContainer);
-                pageLbl->setPixmap(QPixmap::fromImage(qimg));
-                pagesLay->addWidget(pageLbl);
-            } catch (...) {
-                // Skip this page
-            }
+            auto* pageLbl = new QLabel(pagesContainer);
+            pageLbl->setPixmap(QPixmap::fromImage(qimg));
+            pagesLay->addWidget(pageLbl);
         }
 
         setPreviewMode(true);
@@ -543,7 +527,7 @@ void PreviewPane::showPdfPreview() {
 #else
     setPreviewMode(false);
     documentPage_->setPlainText(
-        "PDF image preview requires Poppler (not linked in this build).\n\n"
+        "PDF image preview requires the PDF engine (not linked in this build).\n\n"
         "Extracted text is shown in the panel below.");
 #endif
 }

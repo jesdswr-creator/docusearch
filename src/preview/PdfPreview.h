@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================
-// PdfPreview.h - Continuous scrolling PDF preview (Poppler)
+// PdfPreview.h - Continuous scrolling PDF preview (PDFium)
 // ============================================================
 //
 // All pages are laid out vertically inside one scroll area so the
@@ -64,7 +64,7 @@ private:
     void    scrollToPage(int index);
     void    pumpRenderQueue();            // step the sequential render queue
 
-    std::shared_ptr<void> m_document;     // poppler::document (type-erased)
+    std::shared_ptr<void> m_document;     // PdfiumDocument (type-erased)
 
     QWidget*       m_pagesHost      = nullptr;
     QLabel*        m_pageLabel      = nullptr;

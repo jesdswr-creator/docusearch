@@ -36,10 +36,8 @@
 #include "../search/HybridSearchEngine.h"
 #include "../settings/SettingsManager.h"
 
-#ifdef DOCUSEARCH_HAS_POPPLER
-#  include <poppler-document.h>
-#  include <poppler-page.h>
-#  include <poppler-page-renderer.h>
+#ifdef DOCUSEARCH_HAS_PDFIUM
+#  include "../pdf/PdfiumDocument.h"
 #endif
 
 #include <QApplication>
@@ -1354,6 +1352,21 @@ void MainWindow::onSearch(const QString& query) {
                         break;
                     }
                 }
+                // Semantic-only hits (AI found the document, keywords did
+                // not) carry NO metadata through the fusion layer: no
+                // extension, no size, no date. They used to render with an
+                // empty badge ("unrecognized") and "0 B" even though the
+                // file was perfectly fine. Backfill straight from disk.
+                if (h.size <= 0 || h.extension.isEmpty()
+                    || !h.modifiedDate.isValid()) {
+                    const QFileInfo fi(h.path);
+                    if (h.extension.isEmpty())
+                        h.extension = fi.suffix().toLower();
+                    if (h.size <= 0)
+                        h.size = fi.size();
+                    if (!h.modifiedDate.isValid())
+                        h.modifiedDate = fi.lastModified();
+                }
                 merged.append(h);
             }
             resultsPane_->setResults(merged);
@@ -1708,7 +1721,15 @@ void MainWindow::onSidebarClicked(int row) {
     const QString page = item->data(Qt::UserRole).toString();
     // Momentary-action strip: run the action, then clear selection so
     // the search view (the only page) remains the resting state.
-    sidebarList_->setCurrentRow(-1);
+    // QSignalBlocker prevents the reset from re-entering this slot via
+    // currentRowChanged (the sidebar connects that signal). Without it,
+    // any stray setCurrentRow(N) here would literally CLICK nav item N
+    // again — that is exactly how clicking Help used to fire the
+    // Duplicates finder right after the help box (row 0 = Duplicates).
+    {
+        const QSignalBlocker block(sidebarList_);
+        sidebarList_->setCurrentRow(-1);
+    }
     if (page == "Settings") {
         onOpenSettings();
     } else if (page == "About") {
@@ -1729,7 +1750,10 @@ void MainWindow::onSidebarClicked(int row) {
             "<tr><td><b>date:2026</b></td><td>Files modified in 2026</td></tr>"
             "<tr><td><b>tag:Urgent</b></td><td>Files tagged 'Urgent'</td></tr>"
             "</table>");
-        sidebarList_->setCurrentRow(0);
+        // NOTE: no selection reset here — the QSignalBlocker above already
+        // cleared the strip. The old setCurrentRow(0) re-fired the sidebar
+        // slot through currentRowChanged and row 0 is "Duplicates", so
+        // every Help click also launched the duplicate finder.
     } else if (page == "Stats") {
         QMessageBox::information(this, "Index Statistics",
             QString("Total files: %1\nDatabase size: %2")
@@ -3398,24 +3422,27 @@ void MainWindow::onOcrThisFile(const QString& path) {
         QApplication::processEvents();
         ocrText = ocrEngine.ocrFile(filePath);
     }
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     else if (isPdf) {
-        // For PDFs: render each page to image, save as temp PNG,
-        // then OCR each page via the helper exe.
+        // For PDFs: render each page to image via PDFium, save as temp
+        // PNG, then OCR each page via the helper exe.
         try {
             statusBar()->showMessage("OCR: opening PDF...", 0);
             QApplication::processEvents();
 
-            auto doc = poppler::document::load_from_file(filePath.toStdString());
-            if (!doc || doc->pages() == 0) {
-                statusBar()->showMessage("OCR: failed to open PDF.", 5000);
+            PdfiumDocument doc;
+            if (!doc.loadFromFile(filePath) || doc.pageCount() == 0) {
+                statusBar()->showMessage(
+                    doc.lastError().isEmpty()
+                        ? QStringLiteral("OCR: failed to open PDF.")
+                        : QStringLiteral("OCR: %1.").arg(doc.lastError()),
+                    5000);
                 return;
             }
 
-            poppler::page_renderer renderer;
-            renderer.set_render_hint(poppler::page_renderer::text_antialiasing);
             const int dpi = 96;  // lower DPI for OCR speed
-            const int maxPages = (doc->pages() < 10) ? doc->pages() : 10;  // max 10 pages
+            const int pageTotal = doc.pageCount();
+            const int maxPages = (pageTotal < 10) ? pageTotal : 10;  // max 10 pages
 
             for (int i = 0; i < maxPages; ++i) {
                 statusBar()->showMessage(
@@ -3423,16 +3450,7 @@ void MainWindow::onOcrThisFile(const QString& path) {
                 QApplication::processEvents();
 
                 try {
-                    auto* pagePtr = doc->create_page(i);
-                    if (!pagePtr) continue;
-                    auto img_data = renderer.render_page(pagePtr, dpi, dpi);
-                    if (!img_data.is_valid()) continue;
-                    char* dataPtr = const_cast<char*>(img_data.data());
-                    if (!dataPtr) continue;
-                    QImage qimg(reinterpret_cast<const uchar*>(dataPtr),
-                                img_data.width(), img_data.height(),
-                                img_data.bytes_per_row(),
-                                QImage::Format_ARGB32);
+                    const QImage qimg = doc.renderPage(i, dpi);
                     if (qimg.isNull()) continue;
 
                     // Save page as temp PNG and OCR it.

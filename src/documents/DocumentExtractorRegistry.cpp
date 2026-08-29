@@ -58,7 +58,7 @@ ExtractionResult DocumentExtractorRegistry::extractByExtension(const QString& pa
     }
 
     // ── SEH-safe extraction wrapper ──────────────────────────
-    // Poppler, zlib and minizip can raise Win32 SEH exceptions
+    // PDFium, zlib and minizip can raise Win32 SEH exceptions
     // (access violations, stack overflows) on malformed files.
     // The SEH translator installed in main.cpp converts these into
     // catchable SehException (inherits std::exception). Combined

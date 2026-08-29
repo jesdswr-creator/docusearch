@@ -1,16 +1,13 @@
 // ============================================================
-// PdfExtractor.cpp - uses poppler-cpp when available
+// PdfExtractor.cpp - PDF text extraction via PDFium
 // ============================================================
 
 #include "PdfExtractor.h"
 #include "../core/Logger.h"
 #include "../core/StringUtils.h"
 
-#ifdef DOCUSEARCH_HAS_POPPLER
-#  include <poppler-document.h>
-#  include <poppler-page.h>
-#  include <poppler-global.h>
-#  include <type_traits>
+#ifdef DOCUSEARCH_HAS_PDFIUM
+#  include "../pdf/PdfiumDocument.h"
 #endif
 
 #include <QFile>
@@ -25,43 +22,25 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
     ExtractionResult r;
     r.source = "native";
 
-#ifdef DOCUSEARCH_HAS_POPPLER
+#ifdef DOCUSEARCH_HAS_PDFIUM
     try {
-        auto doc = poppler::document::load_from_file(path.toStdString());
-        if (!doc) {
-            r.errorMessage = "Poppler failed to open PDF";
+        PdfiumDocument doc;
+        if (!doc.loadFromFile(path)) {
+            r.errorMessage = doc.lastError().isEmpty()
+                ? QStringLiteral("PDF engine failed to open PDF")
+                : doc.lastError();
             r.needsOcr = true;
             return r;
         }
-        const int n = doc->pages();
+        const int n = doc.pageCount();
         const int maxPages = std::min(n, 200); // cap for performance
         QString all;
         all.reserve(64 * 1024);
         int emptyPages = 0;
         for (int i = 0; i < maxPages; ++i) {
-            auto p = doc->create_page(i);
-            if (!p) continue;
-            // poppler::page::text() returns poppler::ustring. Depending on
-            // the Poppler version, ustring is either:
-            //   * std::basic_string<char>      (UTF-8, older Poppler)
-            //   * std::basic_string<char16_t>  (UTF-16, newer Poppler 24.x)
-            // We detect the element type via the sizeof the element, which
-            // is reliable regardless of const/pointer decay quirks.
-            const auto txt = p->text();
-            using ElemT = std::remove_cv_t<std::remove_reference_t<
-                decltype(*txt.data())>>;
-            QString q;
-            if constexpr (sizeof(ElemT) == 1) {
-                // 1-byte element -> UTF-8
-                q = QString::fromUtf8(
-                    reinterpret_cast<const char*>(txt.data()),
-                    static_cast<int>(txt.size()));
-            } else {
-                // 2-byte element -> UTF-16
-                q = QString::fromUtf16(
-                    reinterpret_cast<const char16_t*>(txt.data()),
-                    static_cast<int>(txt.size()));
-            }
+            // PDFium returns the page's native UTF-16 text layer; scan-only
+            // pages come back empty and feed the needsOcr heuristic below.
+            const QString q = doc.pageText(i, 200000);
             if (q.trimmed().isEmpty()) ++emptyPages;
             all.append(q);
             all.append('\n');
@@ -70,7 +49,7 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
         r.text = Utils::stripControlChars(all);
         if (maxPages > 0 && emptyPages * 2 > maxPages) r.needsOcr = true;
     } catch (const std::exception& e) {
-        r.errorMessage = QString("Poppler exception: %1").arg(e.what());
+        r.errorMessage = QString("PDF exception: %1").arg(e.what());
         DS_WARN("Pdf", r.errorMessage);
     }
 #else
@@ -83,7 +62,7 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             return r;
         }
     }
-    r.errorMessage = "Poppler not linked - PDF text extraction unavailable";
+    r.errorMessage = "PDF engine not linked - PDF text extraction unavailable";
     r.needsOcr = true;
 #endif
     return r;

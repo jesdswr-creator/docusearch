@@ -22,7 +22,7 @@
 //   └──────────────────────────────────────────────────────┘
 //
 // Preview modes:
-//   - PDF: render each page to a QImage via Poppler, display as
+//   - PDF: render each page to a QImage via PDFium, display as
 //     a scrollable stack of page images.
 //   - DOCX/XLSX/PPTX/TXT: display extracted text in a QTextBrowser
 //     with basic formatting (bold headings, sheet/slide separators).

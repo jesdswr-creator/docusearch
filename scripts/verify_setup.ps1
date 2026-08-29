@@ -116,12 +116,12 @@ if ($qtDlls -and $qtDlls.Count -ge 5) {
     $failures++
 }
 
-# ── 5. Poppler DLLs ────────────────────────────────────────
-$popplerDll = Get-ChildItem -Path $TargetDir -Filter "poppler*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($popplerDll) {
-    Write-Pass "Poppler DLL found: $($popplerDll.Name)"
+# ── 5. PDFium DLL ─────────────────────────────────────────
+$pdfiumDll = Get-ChildItem -Path $TargetDir -Filter "pdfium.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($pdfiumDll) {
+    Write-Pass "PDFium DLL found: $($pdfiumDll.Name)"
 } else {
-    Write-Warn2 "No poppler*.dll found (PDF text extraction will be unavailable)"
+    Write-Warn2 "No pdfium.dll found (PDF preview/extraction will be unavailable)"
     $warnings++
 }
 
