@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.1";  // v1.7.1: AI weight/threshold sliders get live value readouts (drag updates captions in realtime), low-res Settings density restored (1.7.0 size inflation removed - scroll wrap alone fixes clipping)
+constexpr const char* kAppVersion     = "1.7.2";  // v1.7.2: garbled-PDF text layers detected + discarded -> auto-OCR; OCR pool now renders & OCRs PDFs (was silently skipping them)
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

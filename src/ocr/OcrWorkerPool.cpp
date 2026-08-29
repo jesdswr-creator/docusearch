@@ -10,6 +10,10 @@
 #include "../core/Constants.h"
 #include "../core/SehTranslator.h"
 
+#ifdef DOCUSEARCH_HAS_PDFIUM
+#  include "../pdf/PdfiumDocument.h"
+#endif
+
 #ifdef Q_OS_WIN
 #  include <windows.h>
 #  include <psapi.h>
@@ -198,6 +202,45 @@ void OcrWorkerPool::workerLoop(int workerId) {
             if (FileUtils::hasExtension(task.path, Constants::kImageExtensions)) {
                 text = engine.ocrFile(task.path);
                 if (!text.isEmpty()) ok = true;
+            } else if (FileUtils::hasExtension(task.path,
+                                               {QStringLiteral("pdf")})) {
+                // v1.7.2: OCR a PDF by rendering each page with PDFium and
+                // running the helper on the raster. Until now the pool
+                // silently skipped PDF tasks (ok=false), so files flagged
+                // needs_ocr - scanned pages, or a garbled text layer
+                // discarded by PdfExtractor - never got automatic OCR and
+                // stayed unreadable in preview/search. kMaxPdfOcrPages and
+                // kPdfOcrDpi (defined for exactly this) bound the work.
+#ifdef DOCUSEARCH_HAS_PDFIUM
+                PdfiumDocument doc;
+                if (doc.loadFromFile(task.path) && doc.pageCount() > 0) {
+                    const int pages = qMin(doc.pageCount(),
+                                           Constants::kMaxPdfOcrPages);
+                    for (int i = 0; i < pages; ++i) {
+                        if (stopping_.load()) break;
+                        const QImage page = doc.renderPage(
+                            i, double(Constants::kPdfOcrDpi));
+                        if (page.isNull()) continue;
+                        const QString pageText = engine.ocrImage(page);
+                        if (!pageText.isEmpty()) {
+                            text += pageText;
+                            text += QLatin1Char('\n');
+                        }
+                    }
+                    ok = !text.trimmed().isEmpty();
+                    if (ok) {
+                        DS_INFO("OCR", QString("PDF OCR %1: %2 pages -> %3 "
+                                               "chars").arg(task.path,
+                                               QString::number(pages),
+                                               QString::number(text.size())));
+                    }
+                } else {
+                    DS_WARN("OCR", QString("PDF OCR: cannot open %1 (%2)")
+                                       .arg(task.path, doc.lastError()));
+                }
+#else
+                DS_DEBUG("OCR", "PDF task skipped - PDF engine not linked");
+#endif
             } else {
                 ok = false;
             }

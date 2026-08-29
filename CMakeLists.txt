@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.1
+    VERSION 1.7.2
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -202,6 +202,7 @@ set(APP_SOURCES
     src/core/Logger.cpp
     src/core/Config.cpp
     src/core/StringUtils.cpp
+    src/core/TextQuality.cpp
     src/core/FileUtils.cpp
     src/core/SehTranslator.cpp
     src/core/CrashHandler.cpp

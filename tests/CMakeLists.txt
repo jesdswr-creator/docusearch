@@ -18,6 +18,7 @@ set(TEST_SOURCES
     ../src/core/Logger.cpp
     ../src/core/Config.cpp
     ../src/core/StringUtils.cpp
+    ../src/core/TextQuality.cpp
     ../src/core/FileUtils.cpp
     ../src/database/Database.cpp
     ../src/database/Schema.cpp
@@ -64,6 +65,7 @@ endfunction()
 
 # ---- The tests --------------------------------------------------------
 docusearch_add_test(tst_StringUtils)
+docusearch_add_test(tst_TextQuality)
 docusearch_add_test(tst_FileUtils)
 docusearch_add_test(tst_QueryParser)
 docusearch_add_test(tst_PriorityScheduler)

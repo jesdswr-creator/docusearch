@@ -1215,3 +1215,16 @@ Task: User feedback on v1.7.0 - low-res Settings buttons too big/fields crowded;
 Work Log:
 - Root cause of the "big buttons / buttons going into fields": the 1.7.0 scoped QDialog QSS inflated buttons (28px + padding) and inputs (26px) - on low-DPI screens that reads as bulky and crowds the inline [field][button] rows. Removed all control-size inflation; kept ONLY the QScrollArea transparency rules. The actual text-clipping fix was the 1.7.0 scroll-wrapped tabs + screen-aware dialog sizing, and both stay.
 - Slider readouts: engine wiring was already live (aiWeightChanged -> setSemanticWeight on every valueChanged), but the visible captions were not - the threshold label froze at its construction value and the weight caption never displayed a number at all. Both are now live readouts that update on every drag tick ("AI Weight: N%", "Minimum Similarity Threshold: N%"); weight caption moved below the DB read so it seeds with the REAL stored value.
+
+---
+Task ID: v1.7.2-garbled-pdf
+Agent: main
+Task: User feedback - some PDF previews show "meaningless alphabet" instead of actual words.
+
+Work Log:
+- Reproduced with pypdfium2 (same PDFium engine as the app): PDFs whose fonts carry broken/bogus /ToUnicode CMaps (cheap converters, legacy DTP / legacy-font workflows, PUA-mapping exporters) decode to alphabet soup ("xwj qvxqz xzwxv kwq...") or Private-Use-Area soup while the page still renders correctly. Fully-unmapped Identity-H CID fonts return EMPTY text (already handled by the empty-page heuristic); junk glyph names in /Encoding Differences self-heal via PDFium heuristics.
+- New src/core/TextQuality.{h,cpp}: looksLikeGarbage() with two conservative gates - (A) >2% PUA/replacement/C1 chars; (B) Latin-dominant text with common-word rate <2% AND vowel-less ratio >45% (words >=4 letters) AND >=25 tokens. Stopword list covers English + major European languages; non-Latin scripts (Devanagari, CJK, Arabic...) are never word-gated. Validated in a Python prototype against the repro corpus + adversarial negatives (all-caps legal, invoices, code, base64, short snippets).
+- PdfExtractor: confident garbage -> text discarded, needsOcr=true, DS_WARN with reason; file flows to OCR which reads the rendered page (real glyphs) instead.
+- OcrWorkerPool: fixed silent PDF skip - the pool OCR'd images only and returned ok=false for every PDF task, so needs_ocr PDFs NEVER got automatic OCR. Workers now render pages via PDFium (kMaxPdfOcrPages=20 @ kPdfOcrDpi=150 - constants existed for exactly this but were never wired) and OCR each page raster; results persist through the existing onOcrCompleted -> updateContent path.
+- Existing DB rows with already-stored garbage stay until re-index/rescan; Rescan re-extracts and now routes them to OCR.
+- Tests: new tst_TextQuality (10 cases: alphabet soup, PUA soup, legacy-font sample flagged; English/French/German/Devanagari/code/invoice/all-caps pass; short-snippet + small-PUA-share scope guards). Registered in both CMake source lists.

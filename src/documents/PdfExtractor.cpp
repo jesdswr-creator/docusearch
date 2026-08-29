@@ -5,6 +5,7 @@
 #include "PdfExtractor.h"
 #include "../core/Logger.h"
 #include "../core/StringUtils.h"
+#include "../core/TextQuality.h"
 
 #ifdef DOCUSEARCH_HAS_PDFIUM
 #  include "../pdf/PdfiumDocument.h"
@@ -47,6 +48,22 @@ ExtractionResult PdfExtractor::extract(const QString& path) {
             if (all.size() > 500'000) break; // cap text size (~500KB) for memory
         }
         r.text = Utils::stripControlChars(all);
+
+        // v1.7.2: PDFs whose fonts carry broken /ToUnicode CMaps (cheap
+        // converters, legacy DTP / legacy-font workflows) decode to
+        // "meaningless alphabet" while the page itself renders fine.
+        // Indexing that gibberish pollutes search and preview alike.
+        // Discard confident garbage and route the file to OCR instead -
+        // OCR reads the rendered page, which shows the real glyphs.
+        QString garbageReason;
+        if (!r.text.trimmed().isEmpty() &&
+            TextQuality::looksLikeGarbage(r.text, &garbageReason)) {
+            DS_WARN("Pdf", QString("Garbled text layer (%1), routing to "
+                                   "OCR: %2").arg(garbageReason, path));
+            r.text.clear();
+            r.needsOcr = true;
+        }
+
         if (maxPages > 0 && emptyPages * 2 > maxPages) r.needsOcr = true;
     } catch (const std::exception& e) {
         r.errorMessage = QString("PDF exception: %1").arg(e.what());
