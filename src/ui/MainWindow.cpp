@@ -307,10 +307,11 @@ MainWindow::MainWindow(QWidget* parent)
     // (liveSearchTimer_ kept for potential future use but not started.)
 
     // Auto-scan timer: 1 hour interval, runs on MAIN THREAD.
+    // v1.7.3: no tick-level busy guard here — the function itself retries
+    // 10 min later when the pipeline is busy instead of losing the tick.
     autoScanTimer_ = new QTimer(this);
     autoScanTimer_->setInterval(3600 * 1000);  // 1 hour
     connect(autoScanTimer_, &QTimer::timeout, this, [this]{
-        if (contentExtractionRunning_) return;
         autoScanIndexedFolders();
     });
     autoScanTimer_->start();
@@ -1266,6 +1267,28 @@ void MainWindow::refreshSavedSearches() {
 // ============================================================
 // Search & results
 // ============================================================
+namespace {
+// v1.7.3: hide results whose file no longer exists (deleted or moved while
+// the app was closed — the FileWatcher only catches changes while we run).
+// The hourly scan prunes them from the index; this covers the gap until
+// the next scan so users never click a result that opens to nothing.
+// Returns how many stale entries were removed.
+int hideStaleResults(QList<SearchHit>& hits) {
+    QList<SearchHit> kept;
+    kept.reserve(hits.size());
+    int removed = 0;
+    for (const SearchHit& h : hits) {
+        if (!h.path.isEmpty() && !QFileInfo::exists(h.path)) {
+            ++removed;
+            continue;
+        }
+        kept.append(h);
+    }
+    hits = kept;
+    return removed;
+}
+} // namespace
+
 void MainWindow::onSearch(const QString& query) {
     if (!repo_ || !db_ || !search_) return;
     if (query.isEmpty()) {
@@ -1369,7 +1392,18 @@ void MainWindow::onSearch(const QString& query) {
                 }
                 merged.append(h);
             }
+            // v1.7.3: hide stale entries (file deleted/moved while the
+            // app was closed) before display — see hideStaleResults().
+            const int staleHidden = hideStaleResults(merged);
             resultsPane_->setResults(merged);
+            if (staleHidden > 0) {
+                statusBar()->showMessage(
+                    QStringLiteral("%1 stale result%2 hidden (file deleted "
+                                   "or moved) — rescan to clean the index")
+                        .arg(staleHidden)
+                        .arg(staleHidden == 1 ? "" : "s"),
+                    6000);
+            }
             // Phase 2: surface AI debug info so user can SEE that AI ran.
             //   Status bar now shows: result count + how many had AI
             //   contribution + total time. This directly addresses the
@@ -1457,12 +1491,22 @@ void MainWindow::onSearch(const QString& query) {
             }
         } else {
             // Keyword-only search (existing behavior).
+            // v1.7.3: hide stale entries (file deleted/moved while the app
+            // was closed) before display — see hideStaleResults().
+            const int staleHidden = hideStaleResults(hits);
             resultsPane_->setResults(hits);
             resultsPane_->setAiSummary(QString());
-            statusBar()->showMessage(QString("%1 result%2 in %3 ms")
-                                     .arg(hits.size())
-                                     .arg(hits.size() == 1 ? "" : "s")
-                                     .arg(t.elapsed()));
+            statusBar()->showMessage(
+                staleHidden > 0
+                    ? QStringLiteral("%1 result%2 in %3 ms · %4 stale hidden")
+                          .arg(hits.size())
+                          .arg(hits.size() == 1 ? "" : "s")
+                          .arg(t.elapsed())
+                          .arg(staleHidden)
+                    : QString("%1 result%2 in %3 ms")
+                          .arg(hits.size())
+                          .arg(hits.size() == 1 ? "" : "s")
+                          .arg(t.elapsed()));
         }
 
         // Highlight search terms in the extracted text pane (yellow).
@@ -2204,31 +2248,57 @@ void MainWindow::onExtract() {
 
 void MainWindow::autoScanIndexedFolders() {
     if (!repo_ || !db_) return;
-    if (contentExtractionRunning_) return;
-    if (autoScanRunning_) return;
+
+    // v1.7.3: the old guard DROPPED the hourly tick silently whenever an
+    // extraction session or a full re-index was busy - with long runs that
+    // made the scan "never happen". Retry shortly after instead of losing
+    // the tick.
+    const bool busy = contentExtractionRunning_
+                      || (indexer_ && indexer_->isRunning());
+    if (busy) {
+        QTimer::singleShot(10 * 60 * 1000, this, [this]{
+            autoScanIndexedFolders();
+        });
+        return;
+    }
+
+    // v1.7.3 watchdog: a scan stuck for >30 min (network share gone
+    // silent, dead drive) used to block EVERY future scan via
+    // autoScanRunning_. Re-arm and let a fresh scan proceed.
+    if (autoScanRunning_) {
+        const qint64 elapsedMs =
+            QDateTime::currentMSecsSinceEpoch() - autoScanStartedMs_;
+        if (elapsedMs < 30 * 60 * 1000) return;   // previous scan still OK
+        DS_WARN("Scan", "Auto-scan watchdog: previous scan stuck >30 min - re-arming");
+        autoScanRunning_ = false;
+    }
 
     // CRITICAL: Only scan the folders the user explicitly added via Settings
-    // → Indexing → Indexed Drives. The old code derived folders from existing
-    // DB entries (SELECT path FROM Files), which meant:
-    //   - If you ever had a file from D:\ in the DB, it would re-scan D:\
-    //   - If you removed a folder from Settings, it would STILL scan it
-    //   - Files from other sources (file watcher, manual add) would cause
-    //     their parent folders to be scanned on next startup
-    // This was the "scanning not only selected folders but other source too" bug.
+    // -> Indexing -> Indexed Drives (see v1.6 notes for why DB-derived
+    // folders were wrong).
     if (settings_.indexedDrives.isEmpty()) {
         autoScanRunning_ = false;
         return;
     }
 
     autoScanRunning_ = true;
+    autoScanStartedMs_ = QDateTime::currentMSecsSinceEpoch();
     statusBar()->showMessage("Auto-scanning indexed folders...");
+
+    struct ScanStats {
+        int newFiles = 0;
+        int updatedFiles = 0;
+        int removedFiles = 0;
+        int unavailable = 0;
+    };
+    auto stats = std::make_shared<ScanStats>();
 
     const QStringList folderList = settings_.indexedDrives;
     QString dbPath = Config::instance().dbPath();
     bool hashEnabled = settings_.hashLargeFiles;
-    QStringList foldersCopy = folderList;
 
-    QFuture<void> future = QtConcurrent::run([foldersCopy, dbPath, hashEnabled]() {
+    QFuture<void> future = QtConcurrent::run(
+        [folderList, dbPath, hashEnabled, stats]() {
         sqlite3* workerDb = nullptr;
         if (sqlite3_open_v2(dbPath.toUtf8().constData(), &workerDb,
                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
@@ -2236,68 +2306,292 @@ void MainWindow::autoScanIndexedFolders() {
             return;
         }
 
-        int newFiles = 0, updatedFiles = 0;
-
-        for (const auto& folder : foldersCopy) {
+        for (const auto& folder : folderList) {
             try {
-                QStringList emptyExcludes;
-                FileUtils::walkDirectory(folder, emptyExcludes,
-                    [&](const QFileInfo& fi) -> bool {
-                        const QString path = FileUtils::toNative(fi.absoluteFilePath());
+                const QString root = FileUtils::toNative(folder);
 
-                        sqlite3_stmt* chk = nullptr;
+                // v1.7.3: if the folder is temporarily unavailable
+                // (unplugged drive, disconnected share) DO NOT walk and
+                // DO NOT prune - pruning would wipe the entire index for
+                // it and the files would have to be re-extracted from
+                // scratch on return. Skip and report instead.
+                if (!QDir(root).exists()) { ++stats->unavailable; continue; }
+
+                // ---- Pass 1: walk + upsert, remembering what we saw ----
+                QSet<QString> seen;              // case-folded native paths
+                seen.reserve(1024);
+                FileUtils::walkDirectory(folder, QStringList(),
+                    [&](const QFileInfo& fi) -> bool {
+                        const QString path =
+                            FileUtils::toNative(fi.absoluteFilePath());
+                        seen.insert(path.toLower());
+
+                        // Read the existing row (if any) so we can tell
+                        // "same file, metadata refresh" from "file CHANGED".
+                        qint64 oldSize = -1, oldModified = -1;
+                        QString oldHash;
                         bool isNew = true;
+                        sqlite3_stmt* chk = nullptr;
                         if (sqlite3_prepare_v2(workerDb,
-                                "SELECT id FROM Files WHERE path = ?1;",
+                                "SELECT id, size, modified_date, hash FROM "
+                                "Files WHERE path = ?1;",
                                 -1, &chk, nullptr) == SQLITE_OK) {
-                            sqlite3_bind_text(chk, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(chk, 1,
+                                              path.toUtf8().constData(), -1,
+                                              SQLITE_TRANSIENT);
                             if (sqlite3_step(chk) == SQLITE_ROW) {
-                                isNew = false;
+                                isNew       = false;
+                                oldSize     = sqlite3_column_int64(chk, 1);
+                                oldModified = sqlite3_column_int64(chk, 2);
+                                const unsigned char* h =
+                                    sqlite3_column_text(chk, 3);
+                                oldHash = h ? QString::fromUtf8(
+                                    reinterpret_cast<const char*>(h))
+                                            : QString();
                             }
                             sqlite3_finalize(chk);
                         }
 
-                        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath());
-                        const QString hash = hashEnabled
-                            ? FileUtils::sha256OfFile(path, 64 * 1024 * 1024)
-                            : QString();
+                        const QString ext =
+                            FileUtils::extensionOf(fi.absoluteFilePath());
                         const qint64 size = fi.size();
-                        const qint64 created = fi.birthTime().toSecsSinceEpoch();
-                        const qint64 modified = fi.lastModified().toSecsSinceEpoch();
+                        const qint64 modified =
+                            fi.lastModified().toSecsSinceEpoch();
+                        // Same size + same mtime = untouched file.
+                        const bool changed =
+                            !isNew && (size != oldSize ||
+                                       modified != oldModified);
 
-                        sqlite3_stmt* upd = nullptr;
-                        sqlite3_prepare_v2(workerDb,
-                            "INSERT INTO Files (path, filename, extension, size, "
-                            "  created_date, modified_date, hash, indexing_status, ocr_status) "
-                            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) "
-                            "ON CONFLICT(path) DO UPDATE SET "
-                            "  filename=excluded.filename, extension=excluded.extension, "
-                            "  size=excluded.size, modified_date=excluded.modified_date, "
-                            "  hash=excluded.hash;",
-                            -1, &upd, nullptr);
-                        if (upd) {
-                            sqlite3_bind_text(upd, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                            sqlite3_bind_text(upd, 2, fi.fileName().toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                            sqlite3_bind_text(upd, 3, ext.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                            sqlite3_bind_int64(upd, 4, size);
-                            sqlite3_bind_int64(upd, 5, created);
-                            sqlite3_bind_int64(upd, 6, modified);
-                            sqlite3_bind_text(upd, 7, hash.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-                            const char* idxStat = isNew ? "metadata_only" : "content_done";
-                            sqlite3_bind_text(upd, 8, idxStat, -1, SQLITE_TRANSIENT);
-                            const char* ocrStat = (Constants::kDocumentExtensions.contains(ext) ||
-                                                   Constants::kImageExtensions.contains(ext))
-                                                  ? (isNew ? "pending" : "not_needed")
-                                                  : "not_needed";
-                            sqlite3_bind_text(upd, 9, ocrStat, -1, SQLITE_TRANSIENT);
-                            sqlite3_step(upd);
-                            sqlite3_finalize(upd);
+                        // (Re)compute the hash only when it can have
+                        // changed - brand-new, modified, or rows whose hash
+                        // was never computed (backfill so the duplicates
+                        // finder stays meaningful). Otherwise preserve the
+                        // stored hash: re-hashing every unchanged file on
+                        // every scan would hammer the disk for nothing.
+                        QString hash;
+                        if (!hashEnabled) {
+                            hash = oldHash;              // preserve whatever exists
+                        } else if (isNew || changed || oldHash.isEmpty()) {
+                            hash = FileUtils::sha256OfFile(
+                                path, 64 * 1024 * 1024);
+                        } else {
+                            hash = oldHash;
                         }
 
-                        if (isNew) ++newFiles;
-                        else ++updatedFiles;
+                        if (isNew) {
+                            sqlite3_stmt* upd = nullptr;
+                            sqlite3_prepare_v2(workerDb,
+                                "INSERT INTO Files (path, filename, "
+                                "  extension, size, created_date, "
+                                "  modified_date, hash, indexing_status, "
+                                "  ocr_status) "
+                                "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                -1, &upd, nullptr);
+                            if (upd) {
+                                sqlite3_bind_text(upd, 1,
+                                                  path.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 2, fi.fileName()
+                                                          .toUtf8()
+                                                          .constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 3,
+                                                  ext.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_int64(upd, 4, size);
+                                sqlite3_bind_int64(
+                                    upd, 5, fi.birthTime().toSecsSinceEpoch());
+                                sqlite3_bind_int64(upd, 6, modified);
+                                sqlite3_bind_text(
+                                    upd, 7, hash.toUtf8().constData(), -1,
+                                    SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 8, "metadata_only",
+                                                  -1, SQLITE_TRANSIENT);
+                                const char* ocrStat =
+                                    (Constants::kDocumentExtensions.contains(
+                                         ext) ||
+                                     Constants::kImageExtensions.contains(ext))
+                                        ? "pending" : "not_needed";
+                                sqlite3_bind_text(upd, 9, ocrStat, -1,
+                                                  SQLITE_TRANSIENT);
+                                sqlite3_step(upd);
+                                sqlite3_finalize(upd);
+                            }
+                            ++stats->newFiles;
+                        } else if (changed) {
+                            // v1.7.3 CRITICAL FIX: the old upsert set
+                            // indexing_status='content_done' for EVERY
+                            // existing row on EVERY scan - silently
+                            // "completing" files that were still queued
+                            // (metadata_only) or waiting for OCR
+                            // (needs_ocr) without doing any work. That
+                            // froze visible progress and read as "hourly
+                            // scanning is not happening". Now: refresh
+                            // metadata, and ONLY when the file actually
+                            // changed re-queue it for extraction/OCR.
+                            sqlite3_stmt* upd = nullptr;
+                            sqlite3_prepare_v2(workerDb,
+                                "UPDATE Files SET filename = ?2, "
+                                "  extension = ?3, size = ?4, "
+                                "  modified_date = ?6, hash = ?7, "
+                                "  indexing_status = 'metadata_only', "
+                                "  ocr_status = ?9 "
+                                "WHERE id = (SELECT id FROM Files "
+                                "            WHERE path = ?1)",
+                                -1, &upd, nullptr);
+                            if (upd) {
+                                sqlite3_bind_text(upd, 1,
+                                                  path.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 2, fi.fileName()
+                                                          .toUtf8()
+                                                          .constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 3,
+                                                  ext.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_int64(upd, 4, size);
+                                sqlite3_bind_int64(upd, 6, modified);
+                                sqlite3_bind_text(
+                                    upd, 7, hash.toUtf8().constData(), -1,
+                                    SQLITE_TRANSIENT);
+                                const char* ocrStat =
+                                    (Constants::kDocumentExtensions.contains(
+                                         ext) ||
+                                     Constants::kImageExtensions.contains(ext))
+                                        ? "pending" : "not_needed";
+                                sqlite3_bind_text(upd, 9, ocrStat, -1,
+                                                  SQLITE_TRANSIENT);
+                                sqlite3_step(upd);
+                                sqlite3_finalize(upd);
+                            }
+                            ++stats->updatedFiles;
+                        } else if (hashEnabled && !hash.isEmpty()) {
+                            // Unchanged file: refresh metadata + (preserved
+                            // or backfilled) hash. NEVER touch
+                            // indexing_status/ocr_status here - queued
+                            // (metadata_only), needs-OCR and failed rows
+                            // must survive scans untouched.
+                            sqlite3_stmt* upd = nullptr;
+                            sqlite3_prepare_v2(workerDb,
+                                "UPDATE Files SET filename = ?2, "
+                                "  extension = ?3, size = ?4, "
+                                "  modified_date = ?6, hash = ?7 "
+                                "WHERE id = (SELECT id FROM Files "
+                                "            WHERE path = ?1)",
+                                -1, &upd, nullptr);
+                            if (upd) {
+                                sqlite3_bind_text(upd, 1,
+                                                  path.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 2, fi.fileName()
+                                                          .toUtf8()
+                                                          .constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 3,
+                                                  ext.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_int64(upd, 4, size);
+                                sqlite3_bind_int64(upd, 6, modified);
+                                sqlite3_bind_text(
+                                    upd, 7, hash.toUtf8().constData(), -1,
+                                    SQLITE_TRANSIENT);
+                                sqlite3_step(upd);
+                                sqlite3_finalize(upd);
+                            }
+                        } else {
+                            // Unchanged, no hash refresh: filename/ext
+                            // metadata only.
+                            sqlite3_stmt* upd = nullptr;
+                            sqlite3_prepare_v2(workerDb,
+                                "UPDATE Files SET filename = ?2, "
+                                "  extension = ?3, size = ?4, "
+                                "  modified_date = ?6 "
+                                "WHERE id = (SELECT id FROM Files "
+                                "            WHERE path = ?1)",
+                                -1, &upd, nullptr);
+                            if (upd) {
+                                sqlite3_bind_text(upd, 1,
+                                                  path.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 2, fi.fileName()
+                                                          .toUtf8()
+                                                          .constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_text(upd, 3,
+                                                  ext.toUtf8().constData(),
+                                                  -1, SQLITE_TRANSIENT);
+                                sqlite3_bind_int64(upd, 4, size);
+                                sqlite3_bind_int64(upd, 6, modified);
+                                sqlite3_step(upd);
+                                sqlite3_finalize(upd);
+                            }
+                        }
                         return true;
                     });
+
+                // ---- Pass 2: prune rows the walk did not see ----
+                // The FileWatcher only removes rows for deletions that
+                // happen WHILE the app runs. Files deleted or moved while
+                // it was closed stayed in the index forever - showing up
+                // in search results and skewing the duplicates finder and
+                // the "N indexed" badge. Reconcile now: any row under this
+                // folder whose case-folded path was not seen is gone.
+                // (Hidden/system files are also skipped by the walk; a
+                // row for one would be pruned and re-added next scan -
+                // accepted churn, far better than permanent ghosts.)
+                QString prefix = root;
+                while (prefix.endsWith('\\')) prefix.chop(1);
+                prefix += QLatin1Char('\\');
+
+                QList<qint64> staleIds;
+                sqlite3_stmt* q = nullptr;
+                if (sqlite3_prepare_v2(workerDb,
+                        "SELECT id, path FROM Files "
+                        "WHERE upper(substr(path, 1, ?1)) = upper(?2);",
+                        -1, &q, nullptr) == SQLITE_OK) {
+                    const QByteArray prefixUtf8 = prefix.toUtf8();
+                    sqlite3_bind_int(q, 1, prefix.length());
+                    sqlite3_bind_text(q, 2, prefixUtf8.constData(),
+                                      -1, SQLITE_TRANSIENT);
+                    while (sqlite3_step(q) == SQLITE_ROW) {
+                        const qint64 id = sqlite3_column_int64(q, 0);
+                        const unsigned char* p = sqlite3_column_text(q, 1);
+                        const QString rowPath = p
+                            ? QString::fromUtf8(
+                                  reinterpret_cast<const char*>(p))
+                            : QString();
+                        if (seen.contains(rowPath.toLower())) continue;
+                        staleIds.append(id);
+                    }
+                    sqlite3_finalize(q);
+                }
+                if (!staleIds.isEmpty()) {
+                    sqlite3_exec(workerDb, "BEGIN;", nullptr, nullptr,
+                                 nullptr);
+                    for (const qint64 id : staleIds) {
+                        // Mirror FileRepository::deleteFile: cascade
+                        // handles Tags/Notes/DocumentText; SearchIndex and
+                        // BgeEmbeddings need explicit deletes.
+                        static const char* kDelSql[] = {
+                            "DELETE FROM Files WHERE id = ?1;",
+                            "DELETE FROM SearchIndex WHERE file_id = ?1;",
+                            "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
+                        };
+                        for (const char* sql : kDelSql) {
+                            sqlite3_stmt* d = nullptr;
+                            if (sqlite3_prepare_v2(workerDb, sql, -1, &d,
+                                                   nullptr) == SQLITE_OK) {
+                                sqlite3_bind_int64(d, 1, id);
+                                sqlite3_step(d);
+                                sqlite3_finalize(d);
+                            }
+                        }
+                        ++stats->removedFiles;
+                    }
+                    sqlite3_exec(workerDb, "COMMIT;", nullptr, nullptr,
+                                 nullptr);
+                }
             } catch (...) {}
         }
 
@@ -2305,15 +2599,39 @@ void MainWindow::autoScanIndexedFolders() {
     });
 
     auto* watcher = new QFutureWatcher<void>(this);
-    connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
+    connect(watcher, &QFutureWatcher<void>::finished, this,
+            [this, watcher, stats]() {
         autoScanRunning_ = false;
         updateIndexStats();
-        statusBar()->showMessage("Auto-scan complete. Starting extraction...", 3000);
+
+        const QString unavailableNote = stats->unavailable > 0
+            ? QStringLiteral(" (%1 folder%2 unavailable)")
+                  .arg(stats->unavailable)
+                  .arg(stats->unavailable == 1 ? "" : "s")
+            : QString();
+
+        if (stats->newFiles > 0 || stats->updatedFiles > 0) {
+            statusBar()->showMessage(
+                QStringLiteral("Auto-scan complete: %1 new, %2 changed, %3 "
+                               "removed%4")
+                    .arg(stats->newFiles)
+                    .arg(stats->updatedFiles)
+                    .arg(stats->removedFiles)
+                    .arg(unavailableNote),
+                8000);
+            // Only wake the extraction pipeline when there is actual work;
+            // waking it on every idle tick was pure noise.
+            QTimer::singleShot(500, this, [this]() {
+                if (!contentExtractionRunning_) onExtract();
+            });
+        } else {
+            statusBar()->showMessage(
+                QStringLiteral("Auto-scan complete: index up to date "
+                               "(%1 removed%2)")
+                    .arg(stats->removedFiles).arg(unavailableNote),
+                5000);
+        }
         watcher->deleteLater();
-        // Auto-extract any newly found files after hourly scan
-        QTimer::singleShot(500, this, [this]() {
-            if (!contentExtractionRunning_) onExtract();
-        });
     });
     watcher->setFuture(future);
 }
@@ -3846,8 +4164,14 @@ void MainWindow::onDetectDuplicates() {
         QStringList uniqueHashes;
         int staleRows = 0;
         for (int i = 0; i < hits.size(); ++i) {
-            if (seenPaths.contains(hits[i].path)) { ++staleRows; continue; }
-            seenPaths.insert(hits[i].path);
+            // v1.7.3: case-fold the key — Windows paths are
+            // case-insensitive, and two rows for the SAME physical file
+            // that differ only in case (accumulated across scan eras)
+            // used to survive this dedupe and pair up as a "duplicate
+            // group of two" for a single file.
+            const QString pathKey = hits[i].path.toLower();
+            if (seenPaths.contains(pathKey)) { ++staleRows; continue; }
+            seenPaths.insert(pathKey);
             uniqueHits.append(hits[i]);
             uniqueHashes.append(hashes[i]);
         }

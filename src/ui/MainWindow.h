@@ -265,6 +265,7 @@ public:
     std::atomic<bool> extractCancelFlag_{false};
 
     bool            autoScanRunning_      = false;
+    qint64          autoScanStartedMs_    = 0;    // v1.7.3: watchdog clock
     bool            maximized_            = false;
     bool            ocrBtnEnabled_        = true;  // false while OCR is running
     qint64          selectedFileId_       = 0;

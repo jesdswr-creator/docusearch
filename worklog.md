@@ -1228,3 +1228,15 @@ Work Log:
 - OcrWorkerPool: fixed silent PDF skip - the pool OCR'd images only and returned ok=false for every PDF task, so needs_ocr PDFs NEVER got automatic OCR. Workers now render pages via PDFium (kMaxPdfOcrPages=20 @ kPdfOcrDpi=150 - constants existed for exactly this but were never wired) and OCR each page raster; results persist through the existing onOcrCompleted -> updateContent path.
 - Existing DB rows with already-stored garbage stay until re-index/rescan; Rescan re-extracts and now routes them to OCR.
 - Tests: new tst_TextQuality (10 cases: alphabet soup, PUA soup, legacy-font sample flagged; English/French/German/Devanagari/code/invoice/all-caps pass; short-snippet + small-PUA-share scope guards). Registered in both CMake source lists.
+
+---
+Task ID: v1.7.3-scan-reconcile
+Agent: main
+Task: User feedback - hourly scan not happening; top-right "N indexed" not realtime; deleted/moved files still in search results and duplicates.
+
+Work Log:
+- Root causes found: (1) the hourly-tick lambda dropped the tick silently whenever contentExtractionRunning_ was set - long extractions meant the scan "never happened"; a stuck autoScanRunning_ (hung network walk) blocked all future scans too. (2) the scan's UPSERT forced indexing_status='content_done' on EVERY existing row EVERY scan - silently "completing" queued (metadata_only) and needs_ocr files without any work, freezing visible progress. (3) the scan never reconciled the DB: files deleted or moved while the app was closed stayed in Files forever (watcher only covers live deletions) - they kept appearing in search results, polluting the duplicates finder and inflating the badge. (4) search results had no staleness filter at display time.
+- autoScanIndexedFolders rewritten: busy -> retry in 10 min instead of dropping the tick; 30-min watchdog re-arms a stuck scan; walk + upsert with change detection (size+mtime) - statuses preserved for unchanged files, ONLY genuinely changed files re-queue (metadata_only + OCR pending); hash recomputed only for new/changed/never-hashed rows, preserved otherwise; after each successful walk, prune (Files + SearchIndex + BgeEmbeddings, transactional) every row under that folder whose case-folded path was not seen; unavailable folders (unplugged drive) are skipped WITHOUT pruning (would have wiped their whole index); status bar reports "N new, U changed, M removed" and extraction wakes only when work exists.
+- Search display: hideStaleResults() filters hits whose file no longer exists at both display sites (hybrid + keyword), with a "N stale hidden - rescan to clean the index" note.
+- Duplicates: path-dedupe key is now case-folded (Windows case-insensitivity made two case-variant rows of the SAME file pair up as a duplicate group - "single file is showing").
+- Startup scan at t+2s now prunes too, so stale rows vanish at every launch.

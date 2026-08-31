@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.2";  // v1.7.2: garbled-PDF text layers detected + discarded -> auto-OCR; OCR pool now renders & OCRs PDFs (was silently skipping them)
+constexpr const char* kAppVersion     = "1.7.3";  // v1.7.3: hourly scan reconciles the index (prunes deleted/moved files, change-detection upsert that no longer clobbers queued/needs-OCR states), tick retries when busy + 30-min watchdog, stale search results hidden, case-folded duplicate dedupe  // v1.7.2: garbled-PDF text layers detected + discarded -> auto-OCR; OCR pool now renders & OCRs PDFs (was silently skipping them)
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 
