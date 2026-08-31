@@ -75,7 +75,41 @@ int main(int argc, char* argv[]) {
     // instead of the handful of manual processEvents() pumps the old
     // synchronous construction produced. A minimum display time keeps
     // the animation visible even on very fast machines.
+    //
+    // v1.7.6 THEME MATCH: the splash used a hardcoded navy palette that
+    // clashed with the app's theme. It now derives from the SAME tokens
+    // as MainWindow::applyTheme() — the card and text follow the active
+    // theme's surfaces, and the progress chunk + magnifier use the exact
+    // button color (@primary@) of the saved theme. Reading the saved
+    // darkMode here also keeps the splash consistent with the fixed
+    // theme wiring (the window renders the same theme right after).
     DocuSearch::SplashOverlay splash;
+    {
+        SplashOverlay::ThemeColors c;
+        const AppSettings saved = DocuSearch::Config::instance().load();
+        if (saved.darkMode) {
+            // Midnight palette — buttons are #4d8df6.
+            c.cardTop    = QColor("#1b212b");
+            c.cardBottom = QColor("#2b3547");
+            c.title      = QColor("#e8edf5");
+            c.muted      = QColor("#97a3b8");
+            c.caption    = QColor("#cbd5e1");
+            c.accent     = QColor("#4d8df6");
+            c.slot       = QColor(255, 255, 255, 28);
+            c.shadow     = QColor(2, 8, 20, 120);
+        } else {
+            // Daylight palette — buttons are #2563eb.
+            c.cardTop    = QColor("#ffffff");
+            c.cardBottom = QColor("#f2f4f8");
+            c.title      = QColor("#151f2c");
+            c.muted      = QColor("#667188");
+            c.caption    = QColor("#3f4b5e");
+            c.accent     = QColor("#2563eb");
+            c.slot       = QColor(21, 31, 44, 26);
+            c.shadow     = QColor(21, 31, 44, 50);
+        }
+        splash.setThemeColors(c);
+    }
     splash.show();
     app.processEvents();  // Force paint the splash immediately
 

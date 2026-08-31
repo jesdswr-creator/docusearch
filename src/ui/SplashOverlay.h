@@ -33,6 +33,22 @@ namespace DocuSearch {
 
 class SplashOverlay : public QWidget {
 public:
+    // v1.7.6: the splash is now THEMED — the card, text and progress bar
+    // derive from the same palette tokens as the main window, with the
+    // progress chunk + magnifier rendered in the exact button color
+    // (@primary@) of the active theme. Defaults below keep the classic
+    // navy look when no theme is applied.
+    struct ThemeColors {
+        QColor cardTop;
+        QColor cardBottom;
+        QColor title;
+        QColor muted;      // subtitle line
+        QColor caption;    // cycling status line
+        QColor accent;     // button color: progress chunk + magnifier
+        QColor slot;       // progress track
+        QColor shadow;     // soft drop shadow under the card
+    };
+
     explicit SplashOverlay(QWidget* parent = nullptr)
         : QWidget(parent,
                   Qt::SplashScreen | Qt::FramelessWindowHint
@@ -62,6 +78,12 @@ public:
         m_animTimer.start();
     }
 
+    // Apply the active theme's colors (call before show()).
+    void setThemeColors(const ThemeColors& c) {
+        m_colors = c;
+        update();
+    }
+
 protected:
     void showEvent(QShowEvent* e) override {
         QWidget::showEvent(e);
@@ -78,32 +100,32 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
 
-        // ---- Card: navy rounded rect with a soft drop shadow ----
+        // ---- Card: rounded rect with a soft drop shadow (themed) ----
         const QRectF card(20, 20, width() - 40, height() - 40);
         p.setPen(Qt::NoPen);
 
         QPainterPath shadow;
         shadow.addRoundedRect(card.translated(0, 4), 18, 18);
-        p.fillPath(shadow, QColor(2, 8, 20, 90));
+        p.fillPath(shadow, m_colors.shadow);
 
         QPainterPath cardPath;
         cardPath.addRoundedRect(card, 18, 18);
         QLinearGradient bg(card.topLeft(), card.bottomRight());
-        bg.setColorAt(0.0, QColor("#0f172a"));
-        bg.setColorAt(1.0, QColor("#1c2c50"));
+        bg.setColorAt(0.0, m_colors.cardTop);
+        bg.setColorAt(1.0, m_colors.cardBottom);
         p.fillPath(cardPath, bg);
 
         // ---- Magnifier glyph (drawn, not a font/asset dependency) ----
         const QPointF c(card.left() + 52, card.top() + 58);
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(QColor("#60a5fa"), 5, Qt::SolidLine, Qt::RoundCap));
+        p.setPen(QPen(m_colors.accent, 5, Qt::SolidLine, Qt::RoundCap));
         p.drawEllipse(c, 17, 17);
         QLineF handle(c.x() + 12, c.y() + 12,
                       c.x() + 24, c.y() + 24);
         p.drawLine(handle);
 
         // ---- Title + subtitle ----
-        p.setPen(QColor("#f8fafc"));
+        p.setPen(m_colors.title);
         QFont title = font();
         title.setPixelSize(34);
         title.setBold(true);
@@ -112,7 +134,7 @@ protected:
                           card.width() - 120, 46),
                    Qt::AlignLeft | Qt::AlignVCenter, "DocuSearch");
 
-        p.setPen(QColor("#94a3b8"));
+        p.setPen(m_colors.muted);
         QFont sub = font();
         sub.setPixelSize(14);
         p.setFont(sub);
@@ -126,7 +148,7 @@ protected:
                           card.width() - 60, 7);
         QPainterPath slotPath;
         slotPath.addRoundedRect(slot, 3.5, 3.5);
-        p.fillPath(slotPath, QColor(255, 255, 255, 28));
+        p.fillPath(slotPath, m_colors.slot);
 
         // Sliding highlight: a smooth chunk moving left-to-right,
         // fading in/out at the edges (material-style determinate-less).
@@ -145,12 +167,12 @@ protected:
                            slot.top(), kChunk, slot.height());
         QPainterPath chunkPath;
         chunkPath.addRoundedRect(chunk, 3.5, 3.5);
-        QColor chunkColor("#3b82f6");
+        QColor chunkColor(m_colors.accent);   // the button color
         chunkColor.setAlphaF(alpha);
         p.fillPath(chunkPath, chunkColor);
 
         // ---- Cycling status caption ----
-        p.setPen(QColor("#cbd5e1"));
+        p.setPen(m_colors.caption);
         QFont cap = font();
         cap.setPixelSize(13);
         p.setFont(cap);
@@ -168,6 +190,17 @@ private:
     QTimer         m_animTimer;
     QElapsedTimer  m_clock;        // v1.7.4: time-based animation source
     static constexpr double kChunk = 72.0;
+    // v1.7.6 themed colors — defaults = the classic navy splash.
+    ThemeColors m_colors = {
+        QColor("#0f172a"),          // cardTop
+        QColor("#1c2c50"),          // cardBottom
+        QColor("#f8fafc"),          // title
+        QColor("#94a3b8"),          // muted subtitle
+        QColor("#cbd5e1"),          // caption
+        QColor("#3b82f6"),          // accent (chunk + magnifier)
+        QColor(255, 255, 255, 28),  // slot
+        QColor(2, 8, 20, 90),       // shadow
+    };
     const QStringList m_statuses = {
         "Loading your library...",
         "Preparing AI search...",

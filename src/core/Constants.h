@@ -13,7 +13,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.5";  // v1.7.5: AI fusion is strictly additive (keyword order never changes, AI only appends new finds — "keyword better than AI" gone); live file edits re-index through the shared add/modify pipeline (dead indexer_ path removed) and invalidate stale AI embeddings; duplicates dedupe on canonical paths (case/separators/junctions/overlapping roots can no longer pair one file with itself); PDF preview failures show a readable overlay + locked-file retry; splash animates under the real event loop with a minimum display time; title bar carries the real DocuSearch logo; similarity threshold seeds aligned at 0.45
+constexpr const char* kAppVersion     = "1.7.6";  // v1.7.6: PDF preview use-after-free fixed (PDFium memory-buffer contract — the bytes now live with the document; flaky "error opening PDF" and garbled OCR/text gone); OCR auto-orients scans stored sideways (90/180/270 fallback via native PDFium rotation); duplicates: results list cleared when nothing found + stale-hash gate drops files whose content changed since scanning; theme wiring fixed (saved dark mode actually applies + toggle persists); splash matches the active theme (button-color accent). v1.7.5: AI fusion strictly additive; canonical duplicate identity; live edit indexing; PDF preview error overlay; splash animation under the event loop; real logo
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

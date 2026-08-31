@@ -1322,6 +1322,11 @@ void MainWindow::refreshAllIcons() {
 void MainWindow::loadSettings() {
     settings_ = Config::instance().load();
     darkMode_ = settings_.darkMode;
+    // v1.7.6: pastelTheme_ is what applyTheme() actually renders. It used
+    // to stay 0 (Light) forever — the saved dark mode was IGNORED at
+    // startup and the toggle never persisted. Keep the two in sync at
+    // every site that changes the theme.
+    pastelTheme_ = darkMode_ ? 1 : 0;
 }
 
 void MainWindow::saveSettings() {
@@ -4182,6 +4187,7 @@ void MainWindow::onOpenSettings() {
             this, [this](const AppSettings& s){
                 settings_ = s;
                 darkMode_ = settings_.darkMode;
+                pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
                 saveSettings();
                 applyTheme();
                 updateIndexStats();
@@ -4280,6 +4286,7 @@ void MainWindow::onOpenSettings() {
             AppSettings oldSettings = settings_;
             settings_ = dlg.result();
             darkMode_ = settings_.darkMode;
+            pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
             saveSettings();
             applyTheme();
             updateIndexStats();
@@ -4356,7 +4363,13 @@ void MainWindow::onToggleTheme() {
     try {
         // Fluent Design — toggle between Light (0) and Dark (1) only.
         // Was previously cycling 4 Pastel Pop themes — too many options.
-        pastelTheme_ = (pastelTheme_ + 1) % 2;
+        // v1.7.6: persist the ACTUAL setting (darkMode) and re-derive the
+        // render index from it. Before this, the toggle only flipped the
+        // in-memory pastelTheme_ and saved the stale darkMode value, so
+        // the chosen theme was lost on every restart.
+        settings_.darkMode = !settings_.darkMode;
+        darkMode_ = settings_.darkMode;
+        pastelTheme_ = darkMode_ ? 1 : 0;
         QString names[] = {"Light", "Dark"};
         saveSettings();
         applyTheme();
@@ -4454,6 +4467,7 @@ void MainWindow::onDetectDuplicates() {
         QList<SearchHit> hits;
         QStringList hashes;      // aligned with hits — used to regroup below
         int skippedMissing = 0;
+        int staleHashRows  = 0;  // v1.7.6: content changed since the scan
         // v1.7.4: collected DURING the walk, purged AFTER finalize — never
         // delete from the Files table while a SELECT on it is stepping.
         QStringList stalePaths;
@@ -4483,6 +4497,27 @@ void MainWindow::onDetectDuplicates() {
                 ++skippedMissing;
                 if (storageRootReachable(h.path)) stalePaths.append(h.path);
                 continue;
+            }
+
+            // v1.7.6 STALE-HASH GATE: the stored hash describes the file
+            // as it was at scan time. If the content changed since (size
+            // or mtime moved), that hash no longer proves the file equals
+            // its "partner" — e.g. the user deleted the duplicate and a
+            // different file later appeared under the same name. Listing
+            // such rows produced false duplicate pairs and lone files
+            // whose twin was already deleted. Drop the row from the
+            // candidate set; the next scan refreshes its hash.
+            // (2 s mtime tolerance for FAT's coarse timestamps.)
+            {
+                const QFileInfo fi(h.path);
+                const qint64 nowSize  = fi.size();
+                const qint64 nowMtime = fi.lastModified().toSecsSinceEpoch();
+                const qint64 rowMtime = h.modifiedDate.toSecsSinceEpoch();
+                if (nowSize != h.size ||
+                    (rowMtime > 0 && qAbs(nowMtime - rowMtime) > 2)) {
+                    ++staleHashRows;
+                    continue;
+                }
             }
 
             hits.append(h);
@@ -4580,19 +4615,29 @@ void MainWindow::onDetectDuplicates() {
         }
 
         if (hits.isEmpty()) {
+            // v1.7.6: empty the results list too. Previously the listing
+            // from the PREVIOUS duplicate check stayed on screen after the
+            // message box — so a pair whose duplicate the user had just
+            // deleted kept showing its lone survivor ("duplicate file
+            // still returns a single file").
+            resultsPane_->setResults({});
             QMessageBox::information(this, "Duplicates",
-                (skippedMissing > 0 || droppedSingletons > 0 || staleRows > 0)
+                (skippedMissing > 0 || droppedSingletons > 0 ||
+                 staleRows > 0 || staleHashRows > 0)
                     ? QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "%1 file%2 whose duplicate partner was deleted, "
-                        "%3 stale index entr%4 and %5 duplicate row%6 "
-                        "for the same file were excluded.")
+                        "%3 stale index entr%4, %5 duplicate row%6 "
+                        "for the same file and %7 entr%8 whose content "
+                        "changed since scanning were excluded.")
                         .arg(droppedSingletons)
                         .arg(droppedSingletons == 1 ? "y" : "ies")
                         .arg(skippedMissing)
                         .arg(skippedMissing == 1 ? "y" : "ies")
                         .arg(staleRows)
                         .arg(staleRows == 1 ? "" : "s")
+                        .arg(staleHashRows)
+                        .arg(staleHashRows == 1 ? "y" : "ies")
                     : QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "Duplicate search covers documents only: "
@@ -4604,7 +4649,7 @@ void MainWindow::onDetectDuplicates() {
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)%3%4")
+            QString("Found %1 duplicate groups (%2 files)%3%4%5")
                 .arg(groupCount).arg(hits.size())
                 .arg(droppedSingletons > 0
                     ? QString(
@@ -4616,6 +4661,11 @@ void MainWindow::onDetectDuplicates() {
                     ? QString("; %1 duplicate row%2 for the same file excluded")
                         .arg(staleRows)
                         .arg(staleRows == 1 ? "" : "s")
+                    : QString())
+                .arg(staleHashRows > 0
+                    ? QString("; %1 stale hash%2 (content changed) excluded")
+                        .arg(staleHashRows)
+                        .arg(staleHashRows == 1 ? "" : "es")
                     : QString()),
             8000);
     } catch (const std::exception& e) {
