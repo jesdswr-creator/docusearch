@@ -5,6 +5,7 @@
 // ============================================================
 
 #include <QString>
+#include <QStringList>
 #include <cstdint>
 
 namespace DocuSearch {
@@ -12,7 +13,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.4";  // v1.7.4: splash animation actually animates (time-based phase + event pumps during startup); filename matches rank first and AI fusion can no longer drop keyword hits; two-pass fallback no longer lists the same file twice; removing a folder in Settings purges its rows + unwatches it; stale rows self-heal on search/duplicates/click; watcher overflow self-recovers; auto-extract starts 60 s after launch ("Stop Extracting" button); EULA + installer README updated
+constexpr const char* kAppVersion     = "1.7.5";  // v1.7.5: AI fusion is strictly additive (keyword order never changes, AI only appends new finds — "keyword better than AI" gone); live file edits re-index through the shared add/modify pipeline (dead indexer_ path removed) and invalidate stale AI embeddings; duplicates dedupe on canonical paths (case/separators/junctions/overlapping roots can no longer pair one file with itself); PDF preview failures show a readable overlay + locked-file retry; splash animates under the real event loop with a minimum display time; title bar carries the real DocuSearch logo; similarity threshold seeds aligned at 0.45
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

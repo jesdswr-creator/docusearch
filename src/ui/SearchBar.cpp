@@ -25,7 +25,15 @@ public:
         setPlaceholderText("Search documents...");
         setMinimumHeight(36);
         setMaximumHeight(36);
-        setTextMargins(36, 0, 36, 0);
+        // NOTE: no setTextMargins here. The horizontal padding comes
+        // from the #searchInput QSS rule (padding: 0 40px), which
+        // clears the search icon on the left and the clear button on
+        // the right. Setting BOTH textMargins and QSS padding made
+        // them stack (14px + 36px inset) and the old QSS also added
+        // 9px top/bottom padding inside a fixed 36px box — the ~18px
+        // of remaining text space clipped the descenders of
+        // 'g', 'y', 'p', 'q'. Vertical padding is now 0; QLineEdit
+        // centers the text vertically on its own.
     }
     void setSearchIconPixmap(const QPixmap& pm) { searchPixmap_ = pm; update(); }
 protected:

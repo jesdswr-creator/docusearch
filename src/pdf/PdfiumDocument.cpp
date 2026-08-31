@@ -16,9 +16,11 @@
 #include "PdfiumDocument.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QVector>
+#include <QThread>
 
 #include <fpdfview.h>
 #include <fpdf_text.h>
@@ -67,8 +69,18 @@ bool PdfiumDocument::loadFromFile(const QString& path) {
     // us distinguish "file missing" from "file corrupt" precisely.
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        m_lastError = "File not found or locked";
-        return false;
+        // v1.7.5: a failed open is frequently transient — antivirus
+        // engines and cloud-sync providers briefly hold new files. One
+        // short retry removes a whole class of spurious "error opening
+        // pdf preview" reports; if it still fails, report the lock
+        // explicitly so the user knows it is not a corrupt file.
+        QThread::msleep(120);
+        if (!f.open(QIODevice::ReadOnly)) {
+            m_lastError = QFileInfo(path).exists()
+                ? QStringLiteral("File is in use by another program (locked)")
+                : QStringLiteral("File not found or locked");
+            return false;
+        }
     }
     const QByteArray bytes = f.readAll();
     f.close();

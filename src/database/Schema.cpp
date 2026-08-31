@@ -30,7 +30,8 @@ bool Schema::initialize(Database& db) {
     // kept 0.65 forever — and BGE-small-en-v1.5 almost never scores that
     // high on real content, so semantic search silently returned zero hits
     // on every query (the "AI is on but found nothing" report). Databases
-    // created later use 0.40; anything still >= 0.55 is a stale legacy
+    // created later use 0.45 (v1.7.5 aligned every seed with the engine
+    // default); anything still >= 0.55 is a stale legacy
     // value (or a user-tuned value so strict it blocks every match) and is
     // reset to the engine's current default of 0.45.
     {
@@ -189,7 +190,7 @@ bool Schema::createSchemaV1(Database& db) {
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
         "('model_path',           './models/bge-small-en-v1.5/model.onnx');",
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
-        "('similarity_threshold', '0.40');",
+        "('similarity_threshold', '0.45');",
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
         "('semantic_weight',      '0.40');",
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
@@ -280,7 +281,7 @@ bool Schema::migrateV1ToV2(Database& db) {
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
             "('model_path',           './models/bge-small-en-v1.5/model.onnx');");
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
-            "('similarity_threshold', '0.40');");
+            "('similarity_threshold', '0.45');");
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
             "('semantic_weight',      '0.40');");
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "

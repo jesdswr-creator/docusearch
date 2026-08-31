@@ -100,6 +100,13 @@ private slots:
     void onFileModified(const QString& path);
     void onFileRenamed(const QString& oldPath, const QString& newPath);
     void onFileDeleted(const QString& path);
+
+    // v1.7.5: shared single-file pipeline used by the watcher handlers.
+    // Upserts the Files row, re-extracts the content, refreshes the FTS
+    // row, clears now-stale AI embeddings (rebuilt by the backfill) and
+    // wakes the embedding backfill. Returns false when the file is not
+    // an indexable document (unsupported type, excluded folder, gone).
+    bool extractAndIndexFile(const QString& path);
     void onSavedSearchSelected(const QString& name);
     void onTagAdded(qint64 fileId, const QString& tag);
     void onTagRemoved(qint64 fileId, const QString& tag);

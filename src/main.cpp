@@ -6,11 +6,11 @@
 // Just: QApplication → MainWindow → show → exec.
 // ============================================================
 
-#include "../core/Config.h"
-#include "../core/Constants.h"
-#include "../core/Logger.h"
-#include "../core/SehTranslator.h"
-#include "../core/CrashHandler.h"
+#include "core/Config.h"
+#include "core/Constants.h"
+#include "core/Logger.h"
+#include "core/SehTranslator.h"
+#include "core/CrashHandler.h"
 #include "ui/MainWindow.h"
 #include "ui/SplashOverlay.h"
 
@@ -21,6 +21,9 @@
 #include <QIcon>
 #include <QThread>
 #include <QThreadPool>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <memory>
 
 using namespace DocuSearch;
 
@@ -64,6 +67,14 @@ int main(int argc, char* argv[]) {
     // outline was visible on any background), crisp at every DPI, and
     // it carries a live indeterminate progress bar + cycling status
     // caption so startup visibly moves.
+    //
+    // v1.7.5 SMOOTHNESS: MainWindow is now constructed AFTER app.exec()
+    // starts (deferred by a 0 ms single-shot). With the event loop live,
+    // the splash's 16 ms animation timer actually fires while the heavy
+    // constructor runs, so the sliding bar animates at full frame rate
+    // instead of the handful of manual processEvents() pumps the old
+    // synchronous construction produced. A minimum display time keeps
+    // the animation visible even on very fast machines.
     DocuSearch::SplashOverlay splash;
     splash.show();
     app.processEvents();  // Force paint the splash immediately
@@ -85,13 +96,37 @@ int main(int argc, char* argv[]) {
     pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
     QApplication::setPalette(pal);
 
-    // ── Construct MainWindow (this is the slow part) ──
-    DocuSearch::MainWindow w;
+    // ── Construct MainWindow once the event loop is running ──
+    // The window must outlive app.exec(), so it lives here in main()
+    // and is created from a 0 ms single-shot. The splash stays visible
+    // (and animating) until the window is shown.
+    std::unique_ptr<DocuSearch::MainWindow> w;
+    QElapsedTimer splashClock;
+    splashClock.start();
+    constexpr int kMinSplashMs = 1000;  // let the animation breathe on fast machines
 
-    // Show the real window first, then drop the splash in the same
-    // event-loop turn — no desktop gap, no lingering splash frame.
-    w.show();
-    splash.close();
+    auto showWindowAndDropSplash = [&]() {
+        if (w) w->show();
+        splash.close();
+    };
+
+    QTimer::singleShot(0, &app, [&]() {
+        try {
+            w = std::make_unique<DocuSearch::MainWindow>();
+        } catch (...) {
+            // Constructor failure (e.g. DB locked) — the ctor shows its
+            // own message box; just drop the splash and quit cleanly.
+            splash.close();
+            QTimer::singleShot(0, &app, []() { QApplication::quit(); });
+            return;
+        }
+        const int remain = kMinSplashMs - static_cast<int>(splashClock.elapsed());
+        if (remain > 0) {
+            QTimer::singleShot(remain, &app, showWindowAndDropSplash);
+        } else {
+            showWindowAndDropSplash();
+        }
+    });
 
     return app.exec();
 }

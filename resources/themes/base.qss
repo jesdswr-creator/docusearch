@@ -114,11 +114,13 @@ QPushButton#closeBtn {
 QPushButton#closeBtn:hover { background: #ef4444; border-color: #ef4444; }
 QPushButton#closeBtn:pressed { background: #dc2626; border-color: #dc2626; }
 
-/* ── App logo — accent-colored rounded square with subtle gradient ── */
+/* ── App logo — the real DocuSearch brand mark (PNG with its own
+      rounded corners + transparent margins). No background/border here:
+      the artwork fills the 28px label, so a painted square behind it
+      would show through the transparent corners and mis-frame it. ── */
 QLabel#appLogo {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @primary@, stop:1 @primaryStrong@);
-    border-radius: 9px;
+    background: transparent;
+    border: none;
 }
 
 /* ── Metadata edit button — accent gradient ── */
@@ -722,7 +724,11 @@ QLineEdit#searchInput {
     background: @field@; color: @text@;
     border: 1px solid @border2@;
     border-radius: 10px;
-    padding: 9px 14px;
+    /* Horizontal-only padding: vertical padding inside the fixed 36px
+       field clipped descenders (g/y/p/q); QLineEdit centers the text
+       vertically by itself. 40px sides clear the search icon (left)
+       and the clear button (right). */
+    padding: 0 40px;
     font-size: 13px; font-weight: 500;
     selection-background-color: @primary@; selection-color: @btnText@;
 }
@@ -810,6 +816,13 @@ QLabel#pdfPageCard {
     border: 1px solid @border2@;
     border-radius: 4px;
     color: @muted@; font-size: 12px;
+}
+QLabel#pdfLoadError {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+    padding: 18px;
+    color: @text@;
 }
 
 /* ── Ghost icon buttons (More and friends) ── */
