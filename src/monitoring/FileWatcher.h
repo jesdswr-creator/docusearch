@@ -32,6 +32,17 @@ public:
     // Add multiple at once.
     void addWatches(const QStringList& roots);
 
+    // v1.7.4: stop watching ONE root (Settings -> remove indexed folder).
+    // The old API could only stop everything or nothing, so a folder
+    // removed from Settings stayed watched forever and its file events
+    // kept landing on the index ("removed the folders ... nothing happens").
+    // Returns true if a matching watch was found and stopped.
+    bool removeWatch(const QString& rootDir);
+
+    // True if a watch is currently active for the given root
+    // (path comparison is case-insensitive, native separators).
+    bool isWatched(const QString& rootDir) const;
+
     // Stop all watchers and free handles.
     void stop();
 
@@ -41,6 +52,12 @@ signals:
     void fileRenamed(const QString& oldPath, const QString& newPath);
     void fileDeleted(const QString& path);
     void logMessage(const QString& msg);
+    // v1.7.4: the kernel change buffer for a root overflowed (deep trees,
+    // high-frequency edits). Events were LOST. The old code killed the
+    // watch thread and never resumed — live tracking silently died for
+    // that root and the index went stale until the next manual scan.
+    // The thread now stays alive and asks for a reconciling scan instead.
+    void rescanRequested(const QString& rootDir);
 
 #ifdef Q_OS_WIN
 public:

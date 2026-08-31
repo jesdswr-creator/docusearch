@@ -362,9 +362,14 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
 
     // Build IN clause for file IDs (max 999 params).
     const int batchCount = std::min(static_cast<int>(fileIds.size()), 999);
+    // v1.7.4: INNER JOIN Files — (a) chunks whose Files row is gone
+    // (deleted/moved file that was not yet purged) can no longer surface
+    // as ghost AI hits, (b) hits carry path/filename so the fusion layer
+    // and the results pane can show and open them properly.
     QString sql = QString(
-        "SELECT file_id, embedding FROM EmbeddingChunks "
-        "WHERE status = 'ready' AND file_id IN (");
+        "SELECT c.file_id, c.embedding, f.path, f.filename "
+        "FROM EmbeddingChunks c INNER JOIN Files f ON f.id = c.file_id "
+        "WHERE c.status = 'ready' AND c.file_id IN (");
     for (int i = 0; i < batchCount; ++i) {
         if (i > 0) sql += ",";
         sql += "?";
@@ -382,11 +387,22 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
     // Compute cosine similarity for each chunk. Group by file_id,
     // keep the MAX similarity per file (best chunk wins).
     std::map<int, float> bestPerFile;
+    std::map<int, std::pair<QString, QString>> pathPerFile;  // v1.7.4
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const int fileId = sqlite3_column_int(stmt, 0);
         const void* blob = sqlite3_column_blob(stmt, 1);
         const int size = sqlite3_column_bytes(stmt, 1);
         if (!blob || size != EMBEDDING_BYTES) continue;
+
+        {
+            const unsigned char* pth = sqlite3_column_text(stmt, 2);
+            const unsigned char* fn  = sqlite3_column_text(stmt, 3);
+            pathPerFile[fileId] = {
+                pth ? QString::fromUtf8(reinterpret_cast<const char*>(pth))
+                    : QString(),
+                fn  ? QString::fromUtf8(reinterpret_cast<const char*>(fn))
+                    : QString() };
+        }
 
         std::vector<float> emb(EMBEDDING_DIM);
         std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
@@ -405,6 +421,11 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
             SemanticHit hit;
             hit.fileId = fileId;
             hit.similarity = sim;
+            const auto pit = pathPerFile.find(fileId);
+            if (pit != pathPerFile.end()) {
+                hit.filePath = pit->second.first;
+                hit.filename = pit->second.second;
+            }
             results.push_back(hit);
         }
     }
@@ -431,15 +452,19 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
     // Scan all chunks in batches of 500 rows to limit RAM.
     // Group by file_id, keep MAX similarity per file (best chunk wins).
     std::map<int, float> bestPerFile;
+    std::map<int, std::pair<QString, QString>> pathPerFile;  // v1.7.4
     int offset = 0;
     const int BATCH = 500;
     m_lastBestSimilarity = -1.0f;
 
     while (true) {
         sqlite3_stmt* stmt = nullptr;
+        // v1.7.4: INNER JOIN Files — ghost chunks of deleted/moved files
+        // are skipped at the source, and every hit carries its path.
         QString sql = QString(
-            "SELECT file_id, embedding FROM EmbeddingChunks "
-            "WHERE status = 'ready' "
+            "SELECT c.file_id, c.embedding, f.path, f.filename "
+            "FROM EmbeddingChunks c INNER JOIN Files f ON f.id = c.file_id "
+            "WHERE c.status = 'ready' "
             "LIMIT %1 OFFSET %2;").arg(BATCH).arg(offset);
 
         if (sqlite3_prepare_v2(m_db, sql.toUtf8().constData(), -1, &stmt, nullptr) != SQLITE_OK) {
@@ -453,6 +478,16 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
             const void* blob = sqlite3_column_blob(stmt, 1);
             const int size = sqlite3_column_bytes(stmt, 1);
             if (!blob || size != EMBEDDING_BYTES) continue;
+
+            {
+                const unsigned char* pth = sqlite3_column_text(stmt, 2);
+                const unsigned char* fn  = sqlite3_column_text(stmt, 3);
+                pathPerFile[fileId] = {
+                    pth ? QString::fromUtf8(reinterpret_cast<const char*>(pth))
+                        : QString(),
+                    fn  ? QString::fromUtf8(reinterpret_cast<const char*>(fn))
+                        : QString() };
+            }
 
             std::vector<float> emb(EMBEDDING_DIM);
             std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
@@ -476,6 +511,11 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
             SemanticHit hit;
             hit.fileId = fileId;
             hit.similarity = sim;
+            const auto pit = pathPerFile.find(fileId);
+            if (pit != pathPerFile.end()) {
+                hit.filePath = pit->second.first;
+                hit.filename = pit->second.second;
+            }
             results.push_back(hit);
         }
     }

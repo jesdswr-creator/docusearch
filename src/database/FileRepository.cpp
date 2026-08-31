@@ -182,6 +182,15 @@ bool FileRepository::deleteFile(qint64 fileId) {
     sqlite3_step(s3);
     sqlite3_finalize(s3);
 
+    // v1.7.4: also delete the chunked embeddings. Orphan chunk rows kept
+    // feeding deleted/moved files back into semantic ("AI") search — the
+    // chunk scan never joined Files, so ghost hits kept resurfacing.
+    sqlite3_stmt* s4 = nullptr;
+    sqlite3_prepare_v2(raw, "DELETE FROM EmbeddingChunks WHERE file_id = ?1;", -1, &s4, nullptr);
+    sqlite3_bind_int64(s4, 1, fileId);
+    sqlite3_step(s4);
+    sqlite3_finalize(s4);
+
     db_.commit();
     return rc == SQLITE_DONE;
 }

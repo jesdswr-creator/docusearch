@@ -116,6 +116,22 @@ private slots:
     void onOpenLocation();
     void autoScanIndexedFolders();
 
+    // v1.7.4: AUTO-wake of the extraction pipeline (startup timer, scan
+    // completion, new folder). Unlike the Extract button's toggle
+    // semantics, this NEVER cancels a run already in flight and yields
+    // (with retries) while a scan is still walking the folders.
+    void requestAutoExtract();
+    // v1.7.4: remove every index row under `folder` (Settings -> Indexed
+    // Folders removal). Cascades to SearchIndex, BgeEmbeddings and
+    // EmbeddingChunks so no ghost of the removed folder can resurface
+    // in keyword or AI search.
+    void purgeFolderFromIndex(const QString& folder);
+    // v1.7.4: self-heal — delete index rows whose file no longer exists
+    // on a REACHABLE drive (an unplugged drive must never be purged;
+    // those rows are only hidden from display instead). Returns the
+    // number of rows actually removed.
+    int purgeStaleRows(const QStringList& paths, const QString& context);
+
 private:
     // UI builders
     void buildTitleBar();
@@ -266,6 +282,8 @@ public:
 
     bool            autoScanRunning_      = false;
     qint64          autoScanStartedMs_    = 0;    // v1.7.3: watchdog clock
+    int             autoExtractRetryLeft_ = 0;    // v1.7.4: startup auto-extract retries while a scan is busy
+    qint64          lastWatcherRescanMs_  = 0;    // v1.7.4: throttle for overflow-triggered rescans
     bool            maximized_            = false;
     bool            ocrBtnEnabled_        = true;  // false while OCR is running
     qint64          selectedFileId_       = 0;

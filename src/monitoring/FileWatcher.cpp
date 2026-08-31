@@ -88,6 +88,48 @@ void FileWatcher::addWatches(const QStringList& roots) {
     for (const auto& r : roots) addWatch(r);
 }
 
+// v1.7.4: stop exactly one root's watch thread. Mirrors the teardown
+// sequence of stop() but only for the matching context, then removes it
+// from the context list so a later addWatch for the same root starts fresh.
+bool FileWatcher::removeWatch(const QString& rootDir) {
+    const QString wanted = QDir::toNativeSeparators(rootDir);
+#ifdef Q_OS_WIN
+    for (auto it = contexts_.begin(); it != contexts_.end(); ++it) {
+        if ((*it)->rootDir.compare(wanted, Qt::CaseInsensitive) != 0) continue;
+        WatchCtx* ctx = it->get();
+        ctx->stopping.store(true);
+        if (ctx->overlapped) SetEvent(ctx->overlapped);
+        CancelIoEx(ctx->dirHandle, nullptr);
+        if (ctx->thread && ctx->thread->isRunning()) {
+            ctx->thread->quit();
+            ctx->thread->wait(2000);
+        }
+        if (ctx->overlapped) CloseHandle(ctx->overlapped);
+        if (ctx->dirHandle != INVALID_HANDLE_VALUE) CloseHandle(ctx->dirHandle);
+        contexts_.erase(it);
+        DS_INFO("FileWatcher", QString("Stopped watching: %1").arg(wanted));
+        return true;
+    }
+    DS_WARN("FileWatcher", QString("removeWatch: no active watch for %1").arg(wanted));
+    return false;
+#else
+    Q_UNUSED(rootDir);
+    return false;
+#endif
+}
+
+bool FileWatcher::isWatched(const QString& rootDir) const {
+    const QString wanted = QDir::toNativeSeparators(rootDir);
+#ifdef Q_OS_WIN
+    for (const auto& ctx : contexts_) {
+        if (ctx->rootDir.compare(wanted, Qt::CaseInsensitive) == 0) return true;
+    }
+#else
+    Q_UNUSED(rootDir);
+#endif
+    return false;
+}
+
 void FileWatcher::stop() {
 #ifdef Q_OS_WIN
     for (auto& ctx : contexts_) {
@@ -149,16 +191,24 @@ void FileWatcher::workerLoop(WatchCtx* ctx) {
             // ERROR_NOTIFY_ENUM_DIR: the kernel buffer overflowed —
             // file changes were lost. This happens on deep directory
             // trees or high-frequency changes. We must do a full rescan
-            // to catch up. See MISSED-1 in the review report.
+            // to catch up.
+            // v1.7.4 FIX: the old code set stopping=true and broke out of
+            // the loop, which PERMANENTLY killed this root's watch thread —
+            // every later change was invisible and the index went stale
+            // (deleted/moved files kept showing in search). Now: report,
+            // ask the owner to reconcile with a scan, and keep watching.
             if (err == ERROR_NOTIFY_ENUM_DIR) {
                 DS_WARN("FileWatcher",
                     "Buffer overflow — some file changes were missed. "
-                    "Triggering full rescan to catch up.");
-                // Emit a synthetic "rescan needed" event by adding an
-                // empty path to the queue. The watcher thread will
-                // emit fileAdded for all files during the next scan.
-                ctx->stopping.store(true);
-                break;
+                    "Requesting reconciling rescan; watch stays active.");
+                emit rescanRequested(ctx->rootDir);
+                // Brief cool-down before re-arming, chopped into short
+                // slices so a stop()/removeWatch() request is honored
+                // within ~100 ms (a plain Sleep(3000) here would ignore
+                // the stop flag and race the handle teardown).
+                for (int i = 0; i < 30 && !ctx->stopping.load(); ++i)
+                    Sleep(100);
+                continue;
             }
             DS_WARN("FileWatcher", "GetOverlappedResult failed");
             continue;

@@ -26,6 +26,7 @@
 #include <QLinearGradient>
 #include <QLineF>
 #include <QStringList>
+#include <QElapsedTimer>
 #include <cmath>
 
 namespace DocuSearch {
@@ -39,14 +40,25 @@ public:
         setAttribute(Qt::WA_TranslucentBackground, true);
         setFixedSize(540, 340);
 
-        // 60 fps-ish indeterminate animation.
-        m_animTimer.setInterval(28);
+        // v1.7.4 FIX — the splash previously looked FROZEN: MainWindow is
+        // constructed synchronously BEFORE app.exec() starts, so this 28 ms
+        // animation timer could not fire during the 1-3 s constructor run
+        // (timers only fire inside an event loop). The widget painted exactly
+        // one static frame, then main() closed the splash — the animation
+        // never ran at all.
+        //
+        // Two-part fix:
+        //  1. The animation is now TIME-BASED: paintEvent derives the bar
+        //     position and the caption index from a QElapsedTimer, so every
+        //     repaint — even one forced by an event pump halfway through the
+        //     constructor — shows the true, continuously-advancing state.
+        //  2. main()/MainWindow now pump the event loop at construction
+        //     milestones, which is what actually triggers the repaints.
+        m_animTimer.setInterval(16);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
-            m_phase += 0.045;
-            if (++m_tick % 32 == 0) m_statusIndex =
-                (m_statusIndex + 1) % m_statuses.size();
-            update();   // repaint
+            update();   // repaint from the current elapsed time
         });
+        m_clock.start();
         m_animTimer.start();
     }
 
@@ -118,8 +130,12 @@ protected:
 
         // Sliding highlight: a smooth chunk moving left-to-right,
         // fading in/out at the edges (material-style determinate-less).
+        // v1.7.4: phase is derived from ELAPSED TIME, not from timer ticks —
+        // a tick-driven phase freezes whenever the event loop is busy
+        // (exactly what happens while MainWindow constructs).
+        const double phase = double(m_clock.elapsed()) * 0.0016;  // ~0.045/tick at 28 ms pace
         const double travel = slot.width() - kChunk;
-        const double t = (std::sin(m_phase * 2.0) + 1.0) / 2.0;
+        const double t = (std::sin(phase * 2.0) + 1.0) / 2.0;
         double x = slot.left() + t * travel;
         double alpha = 1.0;
         // Soften near the ends so the bounce does not look mechanical.
@@ -138,17 +154,19 @@ protected:
         QFont cap = font();
         cap.setPixelSize(13);
         p.setFont(cap);
+        // Caption cycles on elapsed time too (~1.5 s per line), so it keeps
+        // rotating even if repaints are sparse during startup.
+        const qint64 elapsedMs = m_clock.elapsed();
+        const int captionIndex = int((elapsedMs / 1500) % m_statuses.size());
         p.drawText(QRectF(card.left() + 30, slot.bottom() + 12,
                           card.width() - 60, 22),
                    Qt::AlignLeft | Qt::AlignVCenter,
-                   m_statuses[m_statusIndex]);
+                   m_statuses[captionIndex]);
     }
 
 private:
-    QTimer  m_animTimer;
-    double  m_phase       = 0.0;
-    int     m_tick        = 0;
-    int     m_statusIndex = 0;
+    QTimer         m_animTimer;
+    QElapsedTimer  m_clock;        // v1.7.4: time-based animation source
     static constexpr double kChunk = 72.0;
     const QStringList m_statuses = {
         "Loading your library...",

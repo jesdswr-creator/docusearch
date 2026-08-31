@@ -247,7 +247,16 @@ std::vector<HybridResult> HybridSearchEngine::search(
                 return a.combinedScore > b.combinedScore;
             });
 
-        const int cap = std::max(1, m_topK * 2);
+        // v1.7.4 CRITICAL: the cap below used to be a blind `m_topK * 2`.
+        // With the default top-K (10-20) that truncated the fused list to
+        // 20-40 rows while the keyword search had returned up to 50 — any
+        // keyword hit ranked below the cap was silently DROPPED whenever AI
+        // mode was on ("with ai the intended result not at all showing").
+        // Fusion is a RANKING layer: it must reorder the keyword results,
+        // never shrink them. The cap therefore never cuts below the number
+        // of keyword hits; it only bounds semantic-only ADDITIONS.
+        const int floorKeep = static_cast<int>(keywordResults.size());
+        const int cap = std::max(std::max(1, m_topK * 2), floorKeep);
         if (static_cast<int>(out.size()) > cap) {
             out.resize(cap);
         }

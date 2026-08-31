@@ -41,6 +41,7 @@
 #endif
 
 #include <QApplication>
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QMenuBar>
@@ -162,6 +163,14 @@ private:
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
 
+    // v1.7.4: The splash screen is visible while this constructor runs, but
+    // app.exec() has not started yet — nothing animates unless we pump the
+    // event loop by hand. SplashOverlay's animation is time-based now, so
+    // each pump below repaints the splash at the correct animation phase.
+    auto pumpSplash = []() {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 30);
+    };
+
     setWindowTitle(QString("%1 %2 - Offline Document Search")
                    .arg(Constants::kAppName, Constants::kAppVersion));
 
@@ -197,10 +206,12 @@ MainWindow::MainWindow(QWidget* parent)
     }
     Schema::initialize(*db_);
     Schema::migrate(*db_);
+    pumpSplash();  // keep the splash animating during the heavy startup path
 
     search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
 
     loadSettings();
+    pumpSplash();
 
     // --- UI ---
     auto* centralWidget = new QWidget(this);
@@ -213,14 +224,17 @@ MainWindow::MainWindow(QWidget* parent)
     // Title bar at top
     buildTitleBar();
     mainLay->addWidget(titleBar_);
+    pumpSplash();
 
     // Main 4-area layout in the middle (sidebar + center + right panel).
     // buildCentral() creates a horizontal layout that holds sidebar +
     // center + right panel and adds it to mainLay.
     buildCentral();
+    pumpSplash();
 
     // Status bar at bottom (created by QMainWindow::statusBar()).
     buildStatusBar();
+    pumpSplash();
 
     // Probe the OCR engine NOW (cheap helper-exe existence check —
     // no WinRT init, no language pack load). This sets
@@ -251,6 +265,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     applyTheme();
+    pumpSplash();
 
     // --- Signals (only the ones that don't need crash-prone subsystems) ---
     connect(searchBar_, &SearchBar::searchRequested,
@@ -334,10 +349,41 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // v1.7.4: AUTO-EXTRACT — 60 s after launch, start extracting pending
+    // files automatically (user request: "automatically start extracting
+    // after 1 min of app opening"). The Extract button switches to
+    // "Stop Extracting" while it runs. If the startup scan is still
+    // walking folders, requestAutoExtract() retries every 30 s instead of
+    // fighting it for the database; the scan's own completion handler
+    // would wake extraction anyway when it finds work.
+    autoExtractRetryLeft_ = 20;   // 20 x 30 s = up to 10 min of patience
+    QTimer::singleShot(60 * 1000, this, [this]() {
+        requestAutoExtract();
+    });
+
     // Phase 9: Wire up FileWatcher with debounce.
     // The watcher monitors indexed folders in real-time. Events are
     // debounced (500ms) to merge rapid add+modify sequences.
     watcher_ = std::make_unique<FileWatcher>(this);
+
+    // v1.7.4: a FileWatcher whose kernel change buffer overflowed used to
+    // DIE silently (stopping=true + break) — live tracking silently ended
+    // for that root and the index went stale. The watcher now stays alive
+    // and asks for a reconciling scan instead. Throttled to one rescan per
+    // minute so a storm of overflows cannot hammer the disk.
+    connect(watcher_.get(), &FileWatcher::rescanRequested, this,
+            [this](const QString& root) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastWatcherRescanMs_ < 60 * 1000) return;
+        lastWatcherRescanMs_ = now;
+        DS_WARN("Watcher", QString("Change buffer overflowed for %1 - "
+                                   "running reconciling scan").arg(root));
+        statusBar()->showMessage(
+            QStringLiteral("Many files changed at once under %1 — "
+                           "reconciling the index...").arg(root), 6000);
+        autoScanIndexedFolders();
+    });
+
     fileEventDebounceTimer_ = new QTimer(this);
     fileEventDebounceTimer_->setInterval(500);
     fileEventDebounceTimer_->setSingleShot(true);
@@ -1268,24 +1314,49 @@ void MainWindow::refreshSavedSearches() {
 // Search & results
 // ============================================================
 namespace {
+// v1.7.4: True when the STORAGE ROOT of an absolute path is reachable.
+// Used to tell "this file was deleted" apart from "the whole drive is
+// offline": an unplugged USB drive or disconnected network share must
+// NEVER cause index purges (the hourly scan skips unavailable folders
+// for exactly the same reason). Only hide results for offline roots.
+bool storageRootReachable(const QString& path) {
+    if (path.isEmpty()) return false;
+    const QString abs = QDir::toNativeSeparators(
+        QFileInfo(path).absoluteFilePath());
+    if (abs.startsWith(QLatin1String("\\\\"))) {
+        // UNC: \\server\share\... — the share is the storage root.
+        const QStringList parts = abs.split('\\', Qt::SkipEmptyParts);
+        if (parts.size() < 2) return false;
+        const QString root = QLatin1String("\\\\") + parts.at(0)
+                           + QLatin1Char('\\') + parts.at(1);
+        return QFileInfo::exists(root);
+    }
+    if (abs.size() >= 3 && abs.at(1) == QLatin1Char(':')) {
+        return QFileInfo::exists(abs.left(3));   // e.g. "D:\"
+    }
+    return QFileInfo::exists(abs);
+}
+
 // v1.7.3: hide results whose file no longer exists (deleted or moved while
 // the app was closed — the FileWatcher only catches changes while we run).
 // The hourly scan prunes them from the index; this covers the gap until
 // the next scan so users never click a result that opens to nothing.
-// Returns how many stale entries were removed.
-int hideStaleResults(QList<SearchHit>& hits) {
+// v1.7.4: returns the hidden paths so the caller can PURGE the rows whose
+// drive is still reachable (self-healing index); rows on offline roots are
+// only hidden — purging those would wipe live data.
+QStringList hideStaleResults(QList<SearchHit>& hits) {
     QList<SearchHit> kept;
     kept.reserve(hits.size());
-    int removed = 0;
+    QStringList removedPaths;
     for (const SearchHit& h : hits) {
         if (!h.path.isEmpty() && !QFileInfo::exists(h.path)) {
-            ++removed;
+            removedPaths.append(h.path);
             continue;
         }
         kept.append(h);
     }
     hits = kept;
-    return removed;
+    return removedPaths;
 }
 } // namespace
 
@@ -1392,16 +1463,24 @@ void MainWindow::onSearch(const QString& query) {
                 }
                 merged.append(h);
             }
-            // v1.7.3: hide stale entries (file deleted/moved while the
-            // app was closed) before display — see hideStaleResults().
-            const int staleHidden = hideStaleResults(merged);
+            // v1.7.3/1.7.4: hide stale entries (file deleted/moved while the
+            // app was closed) before display, then PURGE the rows whose
+            // drive is still reachable so they never come back.
+            const QStringList stalePaths = hideStaleResults(merged);
+            const int staleHidden = stalePaths.size();
+            const int stalePurged = purgeStaleRows(stalePaths, QStringLiteral("hybrid search"));
             resultsPane_->setResults(merged);
             if (staleHidden > 0) {
                 statusBar()->showMessage(
                     QStringLiteral("%1 stale result%2 hidden (file deleted "
-                                   "or moved) — rescan to clean the index")
+                                   "or moved)%3")
                         .arg(staleHidden)
-                        .arg(staleHidden == 1 ? "" : "s"),
+                        .arg(staleHidden == 1 ? "" : "s")
+                        .arg(stalePurged > 0
+                            ? QStringLiteral(" — %1 stale index entr%2 removed")
+                                  .arg(stalePurged)
+                                  .arg(stalePurged == 1 ? "y" : "ies")
+                            : QString()),
                     6000);
             }
             // Phase 2: surface AI debug info so user can SEE that AI ran.
@@ -1491,9 +1570,10 @@ void MainWindow::onSearch(const QString& query) {
             }
         } else {
             // Keyword-only search (existing behavior).
-            // v1.7.3: hide stale entries (file deleted/moved while the app
-            // was closed) before display — see hideStaleResults().
-            const int staleHidden = hideStaleResults(hits);
+            // v1.7.3/1.7.4: hide stale entries, purge the purgeable ones.
+            const QStringList stalePaths = hideStaleResults(hits);
+            const int staleHidden = stalePaths.size();
+            purgeStaleRows(stalePaths, QStringLiteral("keyword search"));
             resultsPane_->setResults(hits);
             resultsPane_->setAiSummary(QString());
             statusBar()->showMessage(
@@ -1532,6 +1612,26 @@ void MainWindow::onFileSelected(qint64 fileId, const QString& path) {
     if (!repo_ || !db_) return;
     selectedFileId_ = fileId;
     selectedPath_   = path;
+
+    // v1.7.4 SELF-HEAL: a result row whose file no longer exists used to
+    // land here and surface as "File not found or locked" / "Cannot open
+    // PDF" in the preview ("error in opening pdf preview"). When the
+    // storage root is still reachable the row is a genuine ghost — remove
+    // it from the index right now and say so. On an offline root we keep
+    // the row (the file may simply be unplugged).
+    if (!path.isEmpty() && !QFileInfo::exists(path)) {
+        if (storageRootReachable(path)) {
+            const QStringList one{ path };
+            purgeStaleRows(one, QStringLiteral("file selection"));
+            statusBar()->showMessage(
+                QStringLiteral("File no longer on disk — stale index entry "
+                               "removed: %1").arg(path), 6000);
+        } else {
+            statusBar()->showMessage(
+                QStringLiteral("File is on a drive that is currently "
+                               "unavailable: %1").arg(path), 6000);
+        }
+    }
 
     try {
         FileRecord r;
@@ -1716,6 +1816,15 @@ void MainWindow::onAddFolder() {
     try {
         statusBar()->showMessage("Scanning " + folder + " ...");
         QApplication::processEvents();
+
+        // v1.7.4: watch the folder LIVE. addWatches() ran once at startup
+        // only, so folders added through this button were scanned but not
+        // monitored — later changes in them went unseen until the next
+        // hourly scan (another "deleted files still show up" contributor).
+        if (watcher_ && !watcher_->isWatched(folder)) {
+            watcher_->addWatch(folder);
+        }
+
         scanFolderFast(folder);
 
         // Auto-start extraction immediately after scanning.
@@ -1725,9 +1834,8 @@ void MainWindow::onAddFolder() {
         statusBar()->showMessage("Scan complete. Starting auto-extraction...", 3000);
         QApplication::processEvents();
         QTimer::singleShot(500, this, [this]() {
-            if (!contentExtractionRunning_) {
-                onExtract();
-            }
+            autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
+            requestAutoExtract();
         });
     } catch (...) {
         statusBar()->showMessage("Folder scan failed.", 5000);
@@ -1917,7 +2025,7 @@ void MainWindow::onExtract() {
     // continue with the next 30.
     const int maxFilesThisSession = qMin(total, 30);
     statusBar()->showMessage(
-        QString("Extracting %1 of %2 files... (click Extract again to cancel)")
+        QString("Extracting %1 of %2 files... (click Stop Extracting to cancel)")
             .arg(maxFilesThisSession).arg(total));
 
     // Show progress bar
@@ -2029,7 +2137,10 @@ void MainWindow::onExtract() {
                 // pacing keeps UI responsive exactly as before; this only
                 // removes the mandatory click between batches.
                 QTimer::singleShot(60 * 1000, this, [this]() {
-                    if (!contentExtractionRunning_) onExtract();
+                    // v1.7.4: fresh patience budget for this wake so a scan
+                    // that happens to be running can never starve the queue.
+                    autoExtractRetryLeft_ = 20;
+                    requestAutoExtract();
                 });
             }
             return;
@@ -2232,6 +2343,11 @@ void MainWindow::onExtract() {
         // Sleep(100) on the main thread) was removed — it blocked the UI
         // for an extra 100ms per file and wasn't necessary with the 30-file
         // batch limit.
+
+        // v1.7.4: refresh the "N indexed" badge after EVERY file so the
+        // counter visibly climbs while extraction runs (the 20 s poll
+        // alone read as a frozen number).
+        updateIndexStats();
 
         ++state->idx;
       } catch (const std::exception& e) {
@@ -2622,7 +2738,8 @@ void MainWindow::autoScanIndexedFolders() {
             // Only wake the extraction pipeline when there is actual work;
             // waking it on every idle tick was pure noise.
             QTimer::singleShot(500, this, [this]() {
-                if (!contentExtractionRunning_) onExtract();
+                autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
+                requestAutoExtract();
             });
         } else {
             statusBar()->showMessage(
@@ -2634,6 +2751,109 @@ void MainWindow::autoScanIndexedFolders() {
         watcher->deleteLater();
     });
     watcher->setFuture(future);
+}
+
+// ============================================================
+// v1.7.4: AUTO extraction wake (never cancels, yields to scans)
+// ============================================================
+void MainWindow::requestAutoExtract() {
+    if (!repo_ || !db_) return;
+    // A run already in flight — the Extract button is its "Stop Extracting"
+    // control. Auto-wakes must NEVER touch the cancel flag (the old inline
+    // auto-wakes called onExtract() directly, and two wakes landing close
+    // together meant the second one CANCELLED the run the first had just
+    // started).
+    if (contentExtractionRunning_) return;
+    // The startup/hourly scan walks the very files we would extract and
+    // writes to its own DB connection. Rather than racing it, wait; its
+    // finished handler wakes extraction when work exists anyway.
+    if (autoScanRunning_ || (indexer_ && indexer_->isRunning())) {
+        if (autoExtractRetryLeft_ > 0) {
+            --autoExtractRetryLeft_;
+            QTimer::singleShot(30 * 1000, this, [this]() {
+                requestAutoExtract();
+            });
+        }
+        return;
+    }
+    onExtract();
+}
+
+// ============================================================
+// v1.7.4: purge every index row under a folder (Settings removal)
+// ============================================================
+void MainWindow::purgeFolderFromIndex(const QString& folder) {
+    if (!db_) return;
+    sqlite3* raw = db_->raw();
+    if (!raw) return;
+
+    QString prefix = FileUtils::toNative(folder);
+    while (prefix.endsWith('\\')) prefix.chop(1);
+    if (prefix.isEmpty()) return;
+    prefix += QLatin1Char('\\');
+
+    QList<qint64> ids;
+    sqlite3_stmt* q = nullptr;
+    if (sqlite3_prepare_v2(raw,
+            "SELECT id FROM Files "
+            "WHERE upper(substr(path, 1, ?1)) = upper(?2);",
+            -1, &q, nullptr) == SQLITE_OK) {
+        const QByteArray prefixUtf8 = prefix.toUtf8();
+        sqlite3_bind_int(q, 1, prefix.length());
+        sqlite3_bind_text(q, 2, prefixUtf8.constData(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(q) == SQLITE_ROW) {
+            ids.append(sqlite3_column_int64(q, 0));
+        }
+        sqlite3_finalize(q);
+    }
+    if (ids.isEmpty()) return;
+
+    // Mirror FileRepository::deleteFile (Files + SearchIndex +
+    // BgeEmbeddings + EmbeddingChunks; cascades cover Tags/Notes/Text).
+    sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
+    static const char* kDelSql[] = {
+        "DELETE FROM Files WHERE id = ?1;",
+        "DELETE FROM SearchIndex WHERE file_id = ?1;",
+        "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
+        "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
+    };
+    for (const qint64 id : ids) {
+        for (const char* sql : kDelSql) {
+            sqlite3_stmt* d = nullptr;
+            if (sqlite3_prepare_v2(raw, sql, -1, &d, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(d, 1, id);
+                sqlite3_step(d);
+                sqlite3_finalize(d);
+            }
+        }
+    }
+    sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
+
+    updateIndexStats();
+    DS_INFO("Settings", QString("Purged %1 index rows under removed folder %2")
+                          .arg(ids.size()).arg(folder));
+}
+
+// ============================================================
+// v1.7.4: self-healing purge of rows whose file is gone
+// ============================================================
+int MainWindow::purgeStaleRows(const QStringList& paths, const QString& context) {
+    if (!repo_ || paths.isEmpty()) return 0;
+    int purged = 0;
+    for (const QString& path : paths) {
+        if (path.isEmpty()) continue;
+        // The CALLER has already decided this row is purgeable (file
+        // missing AND storage root reachable). Double-check defensively:
+        // if the file reappeared between check and purge, keep it.
+        if (QFileInfo::exists(path)) continue;
+        if (repo_->deleteByPath(path)) ++purged;
+    }
+    if (purged > 0) {
+        updateIndexStats();
+        DS_INFO("Index", QString("[%1] purged %2 stale index row(s)")
+                             .arg(context).arg(purged));
+    }
+    return purged;
 }
 
 // ============================================================
@@ -4004,16 +4224,67 @@ void MainWindow::onOpenSettings() {
             applyTheme();
             updateIndexStats();
 
+            // v1.7.4: case-fold the folder lists before diffing — Windows
+            // paths are case-insensitive and QStringList::contains is not,
+            // so "D:\Docs" vs "d:\docs" used to look like two folders.
+            auto toFolded = [](const QStringList& list) {
+                QSet<QString> folded;
+                folded.reserve(list.size());
+                for (const QString& f : list)
+                    folded.insert(FileUtils::toNative(f).toLower());
+                return folded;
+            };
+            const QSet<QString> oldFolded = toFolded(oldSettings.indexedDrives);
+            const QSet<QString> newFolded = toFolded(settings_.indexedDrives);
+
+            // ---- REMOVED folders: stop watching + purge their rows ----
+            // v1.7.4 fix for "removed the folders from settings menu,
+            // nothing happens": the rows used to stay in Files/SearchIndex
+            // forever (still searchable, still in duplicates) and the
+            // watcher kept watching the removed root. Now the whole index
+            // footprint of the folder is deleted on the spot.
+            int removedFolders = 0;
+            for (const QString& drive : oldSettings.indexedDrives) {
+                if (newFolded.contains(FileUtils::toNative(drive).toLower()))
+                    continue;  // still indexed
+                ++removedFolders;
+                statusBar()->showMessage(
+                    QStringLiteral("Removing '%1' from the index...")
+                        .arg(drive));
+                QApplication::processEvents();
+                if (watcher_) watcher_->removeWatch(drive);
+                purgeFolderFromIndex(drive);
+            }
+
+            // ---- ADDED folders: watch live, scan now, auto-extract ----
+            // v1.7.4 fix: a newly added folder was scanned but NEVER
+            // watched (addWatches ran once at startup only), so live
+            // changes in it went unnoticed until the next hourly scan.
             for (const QString& drive : settings_.indexedDrives) {
-                if (!oldSettings.indexedDrives.contains(drive)) {
-                    statusBar()->showMessage("Scanning " + drive + " ...");
-                    QApplication::processEvents();
-                    scanFolderFast(drive);
-                    // Auto-extract after scanning new drives
-                    QTimer::singleShot(500, this, [this]() {
-                        if (!contentExtractionRunning_) onExtract();
-                    });
-                }
+                if (oldFolded.contains(FileUtils::toNative(drive).toLower()))
+                    continue;  // unchanged
+                if (watcher_ && !watcher_->isWatched(drive))
+                    watcher_->addWatch(drive);
+                statusBar()->showMessage("Scanning " + drive + " ...");
+                QApplication::processEvents();
+                scanFolderFast(drive);
+                // Auto-extract after scanning new drives
+                QTimer::singleShot(500, this, [this]() {
+                    autoExtractRetryLeft_ = 20;  // fresh budget
+                    requestAutoExtract();
+                });
+            }
+
+            if (removedFolders > 0) {
+                statusBar()->showMessage(
+                    QStringLiteral("%1 folder%2 removed from the index — "
+                                   "their files no longer appear in search")
+                        .arg(removedFolders)
+                        .arg(removedFolders == 1 ? "" : "s"), 6000);
+                // Drop rows from the removed folder out of the current
+                // result list immediately.
+                const QString currentQuery = searchBar_->text();
+                if (!currentQuery.isEmpty()) onSearch(currentQuery);
             }
         }
     } catch (...) {
@@ -4123,6 +4394,9 @@ void MainWindow::onDetectDuplicates() {
         QList<SearchHit> hits;
         QStringList hashes;      // aligned with hits — used to regroup below
         int skippedMissing = 0;
+        // v1.7.4: collected DURING the walk, purged AFTER finalize — never
+        // delete from the Files table while a SELECT on it is stepping.
+        QStringList stalePaths;
 
         while (sqlite3_step(s) == SQLITE_ROW) {
             SearchHit h;
@@ -4139,9 +4413,17 @@ void MainWindow::onDetectDuplicates() {
             const QString currentHash =
                 hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
 
-            // Index rows can outlive their files (deleted after scanning).
+            // Index rows can outlive their files (deleted after scanning,
+            // or the file was MOVED and the old row was not yet pruned).
             // A "duplicate" pointing at nothing helps nobody — skip it.
-            if (!QFile::exists(h.path)) { ++skippedMissing; continue; }
+            // v1.7.4: and when the drive is still reachable, the ghost row
+            // is deleted from the index afterwards, so the "other file of
+            // the same name (deleted or moved)" can never pair up again.
+            if (!QFile::exists(h.path)) {
+                ++skippedMissing;
+                if (storageRootReachable(h.path)) stalePaths.append(h.path);
+                continue;
+            }
 
             hits.append(h);
             hashes.append(currentHash);
@@ -4152,6 +4434,12 @@ void MainWindow::onDetectDuplicates() {
                 QApplication::processEvents();
         }
         sqlite3_finalize(s);
+
+        // v1.7.4: purge the ghost rows gathered above (drive reachable = a
+        // genuine deletion/move; offline roots are left untouched).
+        if (!stalePaths.isEmpty()) {
+            purgeStaleRows(stalePaths, QStringLiteral("duplicates"));
+        }
 
         // Stale index rows: the SAME path can sit in the Files table twice
         // after aggressive re-scans. One physical file must never pass as

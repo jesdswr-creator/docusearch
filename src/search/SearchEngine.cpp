@@ -14,6 +14,7 @@
 #include <QSettings>
 #include <QVariant>
 #include <QSet>
+#include <QHash>
 #include <QRegularExpression>
 #include <algorithm>
 
@@ -217,21 +218,49 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
     }
 
     // ---------------------------------------------------------------
-    // Merge: content matches (with snippet) first, then filename
-    // matches by date. Dedupe by fileId.
+    // Merge: v1.7.4 — FILENAME matches first, then content matches.
+    // The old order (content first, filename last) pushed the file the
+    // user was actually looking for to the END of the list: every
+    // document that merely MENTIONS the query words outranked a document
+    // whose NAME matches ("intended result came at last"). A filename
+    // hit is the strongest intent signal we have, so it now leads.
+    // Dedupe by fileId keeps a file that matches both by name and
+    // content exactly once (the content version carries the snippet —
+    // re-point it onto the hoisted hit below).
     // ---------------------------------------------------------------
-    QSet<qint64> seen;
-    seen.reserve(ftsHits.size() + filenameHits.size());
-    for (const auto& h : ftsHits) {
-        if (seen.contains(h.fileId)) continue;
-        seen.insert(h.fileId);
-        results.append(h);
-    }
-    // filenameHits is already ordered by modified_date DESC from SQL.
-    for (const auto& h : filenameHits) {
-        if (seen.contains(h.fileId)) continue;
-        seen.insert(h.fileId);
-        results.append(h);
+    {
+        // Map fileId → FTS hit so name+content matches keep their snippet.
+        QHash<qint64, int> ftsIdx;
+        for (int i = 0; i < ftsHits.size(); ++i)
+            ftsIdx.insert(ftsHits[i].fileId, i);
+
+        QSet<qint64> seen;
+        seen.reserve(ftsHits.size() + filenameHits.size());
+        // Pass 1: filename matches (modified_date DESC from SQL), with the
+        // FTS snippet/score attached when the file also matched by content.
+        for (const auto& h : filenameHits) {
+            if (seen.contains(h.fileId)) continue;
+            seen.insert(h.fileId);
+            const auto it = ftsIdx.constFind(h.fileId);
+            if (it != ftsIdx.constEnd()) {
+                SearchHit merged = ftsHits[*it];   // snippet + bm25 score
+                if (merged.filename.isEmpty())    merged.filename = h.filename;
+                if (merged.path.isEmpty())        merged.path = h.path;
+                if (merged.extension.isEmpty())   merged.extension = h.extension;
+                if (merged.size <= 0)             merged.size = h.size;
+                if (!merged.modifiedDate.isValid()) merged.modifiedDate = h.modifiedDate;
+                merged.isFavorite = merged.isFavorite || h.isFavorite;
+                results.append(merged);
+            } else {
+                results.append(h);
+            }
+        }
+        // Pass 2: remaining content matches by BM25 rank.
+        for (const auto& h : ftsHits) {
+            if (seen.contains(h.fileId)) continue;
+            seen.insert(h.fileId);
+            results.append(h);
+        }
     }
     if (results.size() > limit) results = results.mid(0, limit);
 
@@ -354,17 +383,33 @@ QList<SearchHit> SearchEngine::search(const QString& rawQuery, int limit) {
                 } catch (...) {}
             }
 
-            // Merge fallback results.
-            QSet<qint64> seen2;
-            for (const auto& h : ftsHits) {
-                if (seen2.contains(h.fileId)) continue;
-                seen2.insert(h.fileId);
-                results.append(h);
-            }
-            for (const auto& h : filenameHits) {
-                if (seen2.contains(h.fileId)) continue;
-                seen2.insert(h.fileId);
-                results.append(h);
+            // Merge fallback results (same v1.7.4 order: filename first).
+            // v1.7.4 CRITICAL: `results` must be REBUILT here, not appended
+            // to. ftsHits/filenameHits ACCUMULATE across both passes, so the
+            // old append-only merge re-added every strict-pass hit a second
+            // time — the user literally saw the same file listed twice
+            // ("duplicates ... single file is showing") whenever the
+            // two-pass fallback fired (queries containing letter/note/
+            // report-style words).
+            {
+                results.clear();
+                QHash<qint64, int> ftsIdx2;
+                for (int i = 0; i < ftsHits.size(); ++i)
+                    ftsIdx2.insert(ftsHits[i].fileId, i);
+                QSet<qint64> seen2;
+                seen2.reserve(ftsHits.size() + filenameHits.size());
+                for (const auto& h : filenameHits) {
+                    if (seen2.contains(h.fileId)) continue;
+                    seen2.insert(h.fileId);
+                    const auto it = ftsIdx2.constFind(h.fileId);
+                    if (it != ftsIdx2.constEnd()) results.append(ftsHits[*it]);
+                    else                          results.append(h);
+                }
+                for (const auto& h : ftsHits) {
+                    if (seen2.contains(h.fileId)) continue;
+                    seen2.insert(h.fileId);
+                    results.append(h);
+                }
             }
             if (results.size() > limit) results = results.mid(0, limit);
         }

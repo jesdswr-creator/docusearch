@@ -40,7 +40,7 @@
        installer is now versioned from the single source of truth, and
        the define below is only the fallback for local builds. -->
   <?ifndef ProductVersion ?>
-  <?define ProductVersion    = "1.6.5.0" ?>
+  <?define ProductVersion    = "1.7.4.0" ?>
   <?endif ?>
   <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
 
@@ -111,6 +111,7 @@
       <ComponentGroupRef Id="HarvestedFiles" />
       <ComponentRef Id="ApplicationShortcut" />
       <ComponentRef Id="ApplicationShortcutDesktop" />
+      <ComponentRef Id="ReadmeTxt" />
       <ComponentRef Id="FileAssocPdf" />
       <ComponentRef Id="FileAssocDocx" />
       <ComponentRef Id="FileAssocXlsx" />
@@ -157,6 +158,17 @@
                        Type="string" />
       </Component>
     </ComponentGroup>
+
+    <!-- ============================================================
+         v1.7.4: README with usage instructions, installed next to bin\.
+         The EULA (LICENSE.rtf) covers the legal side; this covers the
+         "what do I do after installing" side.
+         ============================================================ -->
+    <Component Id="ReadmeTxt" Directory="INSTALLFOLDER"
+               Guid="A1B2C3D4-5EAD-4E55-9D14-C0DE00000A01">
+      <File Id="ReadmeTxtFile" Name="README.txt"
+            Source="installer\README.txt" KeyPath="yes" />
+    </Component>
 
     <!-- ============================================================
          Start Menu shortcut

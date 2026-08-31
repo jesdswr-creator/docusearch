@@ -12,7 +12,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.3";  // v1.7.3: hourly scan reconciles the index (prunes deleted/moved files, change-detection upsert that no longer clobbers queued/needs-OCR states), tick retries when busy + 30-min watchdog, stale search results hidden, case-folded duplicate dedupe  // v1.7.2: garbled-PDF text layers detected + discarded -> auto-OCR; OCR pool now renders & OCRs PDFs (was silently skipping them)
+constexpr const char* kAppVersion     = "1.7.4";  // v1.7.4: splash animation actually animates (time-based phase + event pumps during startup); filename matches rank first and AI fusion can no longer drop keyword hits; two-pass fallback no longer lists the same file twice; removing a folder in Settings purges its rows + unwatches it; stale rows self-heal on search/duplicates/click; watcher overflow self-recovers; auto-extract starts 60 s after launch ("Stop Extracting" button); EULA + installer README updated
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 

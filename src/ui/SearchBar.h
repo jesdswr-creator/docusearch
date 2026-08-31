@@ -50,10 +50,12 @@ signals:
     void filtersRequested();
 
 public:
-    // Phase 1.4: Update extract button text to show extraction state.
+    // Phase 1.4 / v1.7.4: Update extract button text to show extraction state.
+    // v1.7.4: the running label is "Stop Extracting" (user request) —
+    // clearer than the old "Cancel" about what clicking it actually does.
     void setExtracting(bool running) {
         if (extractBtn_) {
-            extractBtn_->setText(running ? "Cancel" : "Extract");
+            extractBtn_->setText(running ? "Stop Extracting" : "Extract");
         }
     }
 
