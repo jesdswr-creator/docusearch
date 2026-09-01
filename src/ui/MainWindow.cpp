@@ -2163,7 +2163,11 @@ void MainWindow::onExtract() {
     ocrReceived_ = 0;
     ocrExpected_ = 0;
     if (ocrPool_ && !ocrTodo.isEmpty()) {
-        ocrPool_->enqueueBatch(ocrTodo);
+        QList<OcrTask> tasks;
+        tasks.reserve(ocrTodo.size());
+        for (const TodoItem& it : ocrTodo)
+            tasks.append(OcrTask{it.fileId, it.path, it.ext});
+        ocrPool_->enqueueBatch(tasks);
         ocrExpected_ = ocrTodo.size();
         statusBar()->showMessage(
             QString("OCR queued for %1 scanned/image file%2...")
