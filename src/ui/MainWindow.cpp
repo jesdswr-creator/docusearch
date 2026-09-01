@@ -240,17 +240,18 @@ MainWindow::MainWindow(QWidget* parent)
 
     // v1.7.7: one-time cleanup — older versions indexed EVERY file type
     // they walked (md notes, installers, archives, OS junk) because the
-    // hourly scan and the full indexer had no extension filter. Delete
-    // every row whose extension is not in kIndexableExtensions (plus its
-    // SearchIndex/embedding rows). The scan gate + watcher gate guarantee
-    // these rows can never be re-added, so an unconditional purge is safe
-    // even when a folder's drive happens to be offline right now.
-    const int purgedNonDocs = purgeNonIndexableRows();
-    if (purgedNonDocs > 0) {
-        DS_INFO("Index", QString("Startup purge: removed %1 non-document "
-                                 "index entries (md/txt/exe/archive/...)")
-                             .arg(purgedNonDocs));
-    }
+    // hourly scan and the full indexer had no extension filter.
+    // v1.7.8: THE PURGE NO LONGER RUNS HERE — it was the reason the app
+    // could look stuck on the splash forever. Legacy indexes hold tens
+    // of thousands of non-document rows (plus their SearchIndex and
+    // embedding rows); deleting them all before the window ever showed
+    // froze the splash for minutes, and killing the app mid-purge rolled
+    // the single transaction back, so the very next launch froze again —
+    // a "stuck at splash" loop. The scan gate + watcher gate guarantee
+    // non-documents can never be re-added, so the cleanup is cosmetic:
+    // it is now scheduled AFTER the window is visible (t+4.5 s, near the
+    // t+2 s change scan) and reports its own progress. See
+    // purgeNonIndexableRows().
     pumpSplash();  // keep the splash animating during the heavy startup path
 
     search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
@@ -300,13 +301,6 @@ MainWindow::MainWindow(QWidget* parent)
     // border-radius produces REAL rounded corners (see eventFilter).
     qApp->installEventFilter(this);
     pumpSplash();  // v1.7.7: OCR probe + QSS install can take a beat
-
-    if (purgedNonDocs > 0) {
-        statusBar()->showMessage(
-            QString("Index cleanup: removed %1 non-document entries "
-                    "(md, txt, exe, archives...) — only documents and "
-                    "images are indexed now.").arg(purgedNonDocs), 10000);
-    }
 
     // DEFER semantic search init to after the window is shown.
     // initializeSemanticSearch() creates a BgeService + QtConcurrent::run
@@ -401,6 +395,14 @@ MainWindow::MainWindow(QWidget* parent)
             autoScanIndexedFolders();
         }
     });
+
+    // v1.7.8: one-time non-document purge, scheduled AFTER the window is
+    // visible — never inside the constructor (see the v1.7.8 note at the
+    // top of this ctor for why). 4.5 s lands past the splash window and
+    // just behind the t+2 s change scan; the purge commits in 500-row
+    // batches and pumps the event loop between them, so it can slow
+    // nothing down and freeze nothing.
+    QTimer::singleShot(4500, this, [this]() { purgeNonIndexableRows(); });
 
     // v1.7.4: AUTO-EXTRACT — 60 s after launch, start extracting pending
     // files automatically (user request: "automatically start extracting
@@ -2972,31 +2974,67 @@ int MainWindow::purgeNonIndexableRows() {
     }
     if (ids.isEmpty()) return 0;
 
-    // Mirror FileRepository::deleteFile: explicit deletes for the
-    // side tables that lack FK cascades; Tags/Notes/DocumentText
-    // cascade from the Files row.
-    sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
+    // v1.7.8 REWRITE — this used to run INSIDE the constructor and was
+    // the reason the app could look stuck on the splash forever:
+    //   • it re-PREPARED the same 4 DELETE statements for EVERY row
+    //     (4 × N prepares — and N was huge on indexes built by versions
+    //     that indexed every file type they walked),
+    //   • it deleted ALL rows in ONE transaction — kill the app mid-purge
+    //     and everything rolled back, so the next launch started the
+    //     identical purge from zero (a "stuck at splash" loop),
+    //   • it never pumped the event loop, so the splash froze.
+    // Now: each statement is prepared ONCE, rows are committed in
+    // 500-row batches (progress survives a kill), and the event loop is
+    // pumped between batches. It is also scheduled AFTER the window is
+    // visible, so startup can never block on it.
     static const char* kDelSql[] = {
         "DELETE FROM Files WHERE id = ?1;",
         "DELETE FROM SearchIndex WHERE file_id = ?1;",
         "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
         "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
     };
-    for (const qint64 id : ids) {
-        for (const char* sqlDel : kDelSql) {
-            sqlite3_stmt* d = nullptr;
-            if (sqlite3_prepare_v2(raw, sqlDel, -1, &d,
-                                   nullptr) == SQLITE_OK) {
-                sqlite3_bind_int64(d, 1, id);
+    sqlite3_stmt* del[4] = {nullptr, nullptr, nullptr, nullptr};
+    bool prepared = true;
+    for (int i = 0; i < 4 && prepared; ++i)
+        prepared = sqlite3_prepare_v2(raw, kDelSql[i], -1,
+                                      &del[i], nullptr) == SQLITE_OK;
+    if (!prepared) {
+        for (sqlite3_stmt* d : del) if (d) sqlite3_finalize(d);
+        return 0;
+    }
+
+    constexpr int kPurgeBatch = 500;
+    int purged = 0;
+    const qsizetype total = ids.size();
+    for (qsizetype start = 0; start < total; start += kPurgeBatch) {
+        const qsizetype end = qMin(start + kPurgeBatch, total);
+        sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
+        for (qsizetype i = start; i < end; ++i) {
+            for (sqlite3_stmt* d : del) {
+                sqlite3_reset(d);
+                sqlite3_clear_bindings(d);
+                sqlite3_bind_int64(d, 1, ids.at(i));
                 sqlite3_step(d);
-                sqlite3_finalize(d);
             }
         }
-    }
-    sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
+        sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
+        purged = end;
 
+        // Keep the UI alive during a long cleanup — the window is
+        // already on screen by the time this runs (v1.7.8 scheduling).
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
+    }
+    for (sqlite3_stmt* d : del) if (d) sqlite3_finalize(d);
+
+    DS_INFO("Index", QString("Startup purge: removed %1 non-document "
+                             "index entries (md/txt/exe/archive/...)")
+                         .arg(purged));
     updateIndexStats();
-    return ids.size();
+    statusBar()->showMessage(
+        QString("Index cleanup: removed %1 non-document entries "
+                "(md, txt, exe, archives...) — only documents and "
+                "images are indexed now.").arg(purged), 10000);
+    return purged;
 }
 
 // ============================================================

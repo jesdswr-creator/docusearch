@@ -23,6 +23,8 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QSharedMemory>
+#include <QMessageBox>
 #include <memory>
 
 using namespace DocuSearch;
@@ -46,6 +48,33 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(Constants::kAppVersion);
     app.setOrganizationName(Constants::kOrgName);
     app.setOrganizationDomain(Constants::kOrgDomain);
+
+    // ── v1.7.8: SINGLE-INSTANCE GUARD ──
+    // Two instances share one SQLite database. The old instance holds
+    // write locks during scans; a second copy launched on top of it (an
+    // easy accident when installing an upgrade, because the previous
+    // version keeps running) then stalls or errors during startup. This
+    // runs BEFORE the splash exists, so the message below can never be
+    // hidden behind it. The guard object is intentionally leaked for the
+    // process lifetime: on Windows the segment dies with the process, so
+    // a crashed/closed instance never blocks the next launch.
+    auto* instanceGuard =
+        new QSharedMemory(QStringLiteral("docusearch-single-instance"));
+    bool anotherInstance = false;
+    if (instanceGuard->attach(QSharedMemory::ReadOnly)) {
+        anotherInstance = true;
+        instanceGuard->detach();
+    } else if (!instanceGuard->create(1)) {
+        anotherInstance = true;   // create failed = someone owns it
+    }
+    if (anotherInstance) {
+        QMessageBox::warning(nullptr, QStringLiteral("DocuSearch"),
+            QStringLiteral("DocuSearch is already running.\n\n"
+                           "Close the other DocuSearch window (it may be "
+                           "minimized to the system tray) and try again."));
+        delete instanceGuard;
+        return 0;
+    }
 
     // Initialize the logger AFTER QApplication.
     DocuSearch::Logger::instance().init(
@@ -139,10 +168,28 @@ int main(int argc, char* argv[]) {
     splashClock.start();
     constexpr int kMinSplashMs = 1000;  // let the animation breathe on fast machines
 
+    bool windowShown = false;
     auto showWindowAndDropSplash = [&]() {
+        windowShown = true;
         if (w) w->show();
         splash.close();
     };
+
+    // ── v1.7.8: SPLASH SAFETY NET ──
+    // The splash is an always-on-top window; if anything ever blocks the
+    // constructor (a modal error dialog opened behind it, a slow one-time
+    // cleanup, a stalled USB/network volume), the user must never be
+    // trapped staring at it forever. After 30 s without a visible main
+    // window, drop the splash: anything that was hiding behind it becomes
+    // visible and clickable, and the main window still shows whenever it
+    // is ready.
+    QTimer::singleShot(30 * 1000, &app, [&splash, &windowShown]() {
+        if (!windowShown) {
+            DS_WARN("App", "Main window not visible 30 s after launch — "
+                           "dropping the splash so nothing hides behind it.");
+            splash.close();
+        }
+    });
 
     QTimer::singleShot(0, &app, [&]() {
         try {
