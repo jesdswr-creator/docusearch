@@ -46,6 +46,18 @@ public:
     void setTypeFilter(const QString& ext) { m_typeFilter = ext.toLower(); }
 
     // Combine keyword results with semantic results.
+    // v1.7.5 CONTRACT — AI is strictly ADDITIVE:
+    //   • Keyword results are copied verbatim in their exact BM25 order.
+    //     Nothing below ever re-ranks or drops them, so turning AI ON can
+    //     never make a keyword hit disappear or sink (the old RRF fusion
+    //     let a weak keyword+semantic pairing outscore the #1 keyword hit,
+    //     and its topK*2 cap deleted keyword rows 41..50).
+    //   • Keyword hits that ALSO matched semantically keep their position
+    //     and just get their semanticScore annotated (UI badge only).
+    //   • Documents the keyword search missed entirely are APPENDED after
+    //     the keyword list (sorted by similarity), gated by the similarity
+    //     threshold, the type filter, and a count budget of
+    //     min(topK, max(1, round(semanticWeight * topK))).
     // Never throws — on any error, returns keyword results as-is.
     std::vector<HybridResult> search(
         const QString& queryText,
@@ -53,7 +65,6 @@ public:
 
 private:
     static float normalizeScore(float bm25Score);
-    float computeAiWeight(const QString& query) const;
 
     BgeService* m_bgeService     = nullptr;  // not owned
     bool        m_semanticRequested = false; // what the user/UI asked for

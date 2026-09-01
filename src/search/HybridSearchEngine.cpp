@@ -49,216 +49,120 @@ float HybridSearchEngine::normalizeScore(float bm25Score) {
     return 1.0f / (1.0f + std::exp(-posScore * 0.5f));
 }
 
-float HybridSearchEngine::computeAiWeight(const QString& query) const {
-    // Task 3 Fix E: Query-adaptive AI/keyword weighting.
-    // Natural language questions get more AI weight.
-    // Short keyword-like queries get less AI weight.
-    float base = m_semanticWeight;
-
-    bool hasFieldFilter = query.contains(':');
-    bool hasQuotedPhrase = query.contains('"');
-    int wordCount = query.split(' ', Qt::SkipEmptyParts).size();
-
-    // Detect natural language patterns.
-    static const QStringList nlPatterns = {
-        "what", "which", "find", "show", "about",
-        "related", "similar", "regarding", "concerning",
-        "where", "how", "who", "when", "why"
-    };
-    bool isNaturalLanguage = false;
-    const QString lowerQuery = query.toLower();
-    for (const auto& pattern : nlPatterns) {
-        if (lowerQuery.startsWith(pattern) ||
-            lowerQuery.contains(" " + pattern + " ")) {
-            isNaturalLanguage = true;
-            break;
-        }
-    }
-
-    // Field filters (type:pdf) = user knows what they want → less AI.
-    if (hasFieldFilter) return std::min(base, 0.15f);
-    // Quoted phrases = exact match intent → less AI.
-    if (hasQuotedPhrase) return std::min(base, 0.20f);
-    // Natural language questions → more AI.
-    if (isNaturalLanguage && wordCount > 4) return std::min(base + 0.20f, 0.60f);
-    // Short queries (1-2 words): these dominate live-search as the user
-    // types, and the old 0.25 cap made the RRF deltas (~0.004) too small
-    // to produce any perceivable reordering — the single biggest reason
-    // toggling AI felt like a no-op. 0.35 keeps keyword relevance primary
-    // while letting chunk-level semantic matches genuinely reshuffle the
-    // tail of the result list.
-    if (wordCount <= 2) return std::min(base, 0.35f);
-    return base;
-}
-
 std::vector<HybridResult> HybridSearchEngine::search(
     const QString& queryText,
     const std::vector<ExistingSearchResult>& keywordResults) {
 
     try {
-        const float aiWeight = computeAiWeight(queryText);
-        const int K = 60;  // RRF constant
+        // ── Phase 4: Keyword-first, AI-additive fusion ──────────────
+        // The old Phase 2/3 RRF (Reciprocal Rank Fusion) re-ranked the
+        // whole list by (1-aiWeight)/(K+kwRank) + aiWeight/(K+semRank).
+        // Two fatal flaws, both reported by users:
+        //
+        //   1. A file with a middling keyword rank AND any semantic rank
+        //      could outscore the #1 keyword hit — turning AI ON moved
+        //      (or buried) the exact document the user wanted. That is
+        //      why "keyword-only is giving accurate result than
+        //      AI-enabled result".
+        //   2. The fused list was capped at topK*2 (default 40) —
+        //      keyword results ranked 41..50 were silently DELETED in
+        //      AI mode. (v1.7.4 raised the cap to the keyword count but
+        //      kept the re-ranking, so flaw 1 survived.)
+        //
+        // New contract: AI can only ADD. Keyword results keep their
+        // exact BM25 order, every one of them, always. Semantic matches
+        // that keyword search missed are APPENDED after the keyword
+        // list (sorted by similarity) and only if they clear the
+        // similarity threshold. Keyword hits that also have a semantic
+        // match just get annotated (badge "AI + keyword") — their
+        // position does not move.
 
-        // ── Phase 2: Adaptive RRF (Reciprocal Rank Fusion) ─────────
-        // OLD (Phase 1): hardcoded `3*kwRrf + 1*semRrf` — keyword
-        //   always dominated regardless of query type. Users saw no
-        //   AI contribution → "AI has no role in search" complaint.
-        // NEW (Phase 2): weight each side by `aiWeight` computed from
-        //   query shape. Natural-language questions get up to 60%
-        //   AI weight; short keyword queries get <=25% AI weight.
-        //   This is the design that was intended but never wired up.
-
-        // ── Phase 3: RRF (Reciprocal Rank Fusion) ──────────────
-        // Run keyword and semantic searches INDEPENDENTLY, then merge
-        // by rank. This fixes the fundamental flaw where semantic search
-        // could only rank files already found by keyword search.
-
-        // List A: Keyword results (already ranked by BM25).
-        // List B: Semantic results (independent — finds docs keyword missed).
-
-        std::vector<SemanticHit> semanticHits;
-        if (m_semanticEnabled && m_bgeService && m_bgeService->isReady()) {
-            // Phase 3: Search ALL chunks, not just keyword-filtered ones.
-            // This lets AI find documents that keyword search missed.
-            semanticHits = m_bgeService->searchChunksAll(queryText, m_topK * 2, m_threshold);
-
-            // If no chunks, fall back to document-level search (all docs).
-            if (semanticHits.empty()) {
-                semanticHits = m_bgeService->search(queryText, m_topK * 2, m_threshold);
-            }
-        }
-
-        // Build rank maps: fileId → rank (0-based, lower = better).
-        std::map<int, int> keywordRank;
-        for (size_t i = 0; i < keywordResults.size(); ++i) {
-            keywordRank[keywordResults[i].fileId] = static_cast<int>(i);
-        }
-
-        std::map<int, int> semanticRank;
-        for (size_t i = 0; i < semanticHits.size(); ++i) {
-            semanticRank[semanticHits[i].fileId] = static_cast<int>(i);
-        }
-
-        // Collect all unique file IDs from both lists.
-        std::set<int> allFileIds;
-        for (const auto& r : keywordResults) allFileIds.insert(r.fileId);
-        for (const auto& sh : semanticHits) allFileIds.insert(sh.fileId);
-
-        // Apply type filter to semantic-only results.
-        auto passesTypeFilter = [&](int fileId) -> bool {
-            if (m_typeFilter.isEmpty()) return true;
-            // Check if this file is in keyword results (already filtered).
-            if (keywordRank.count(fileId)) return true;
-            // For semantic-only results, check extension.
-            for (const auto& sh : semanticHits) {
-                if (sh.fileId == fileId) {
-                    QFileInfo fi(sh.filePath);
-                    return fi.suffix().toLower() == m_typeFilter;
-                }
-            }
-            return false;
-        };
-
-        // Compute RRF score for each file.
-        std::map<int, HybridResult> resultMap;
-        for (int fileId : allFileIds) {
-            if (!passesTypeFilter(fileId)) continue;
-
-            HybridResult h;
-            h.fileId = fileId;
-
-            // Get filename/path from whichever list has it.
-            auto kwIt = std::find_if(keywordResults.begin(), keywordResults.end(),
-                [fileId](const ExistingSearchResult& r) { return r.fileId == fileId; });
-            if (kwIt != keywordResults.end()) {
-                h.filename  = kwIt->filename;
-                h.path      = kwIt->path;
-                h.extension = kwIt->extension;
-                h.keywordScore = normalizeScore(kwIt->bm25Score);
-            } else {
-                // From semantic results.
-                for (const auto& sh : semanticHits) {
-                    if (sh.fileId == fileId) {
-                        h.filename  = sh.filename;
-                        h.path      = sh.filePath;
-                        h.semanticScore = sh.similarity;
-                        break;
-                    }
-                }
-            }
-
-            // Get semantic score if available.
-            for (const auto& sh : semanticHits) {
-                if (sh.fileId == fileId) {
-                    h.semanticScore = sh.similarity;
-                    break;
-                }
-            }
-
-            // RRF: rrf_score = (1-aiWeight)/(K+keyword_rank) + aiWeight/(K+semantic_rank)
-            // Phase 2: Use adaptive AI weight — natural-language queries
-            // get more AI influence, short keyword queries get less.
-            // This is what makes AI visibly contribute to ranking.
-            int kwRank = 999, semRank = 999;
-            auto krIt = keywordRank.find(fileId);
-            if (krIt != keywordRank.end()) kwRank = krIt->second;
-            auto srIt = semanticRank.find(fileId);
-            if (srIt != semanticRank.end()) semRank = srIt->second;
-
-            // Phase 2: Weighted RRF — each side scaled by aiWeight.
-            float kwRrf  = (kwRank  < 999) ? (1.0f - aiWeight) / (K + kwRank)  : 0.0f;
-            float semRrf = (semRank < 999) ? aiWeight           / (K + semRank) : 0.0f;
-
-            // Semantic-only results (not in keyword list) must clear the
-            // configured similarity bar to be included. This now follows
-            // m_threshold (user-tunable via Settings, default 0.40 seeded
-            // in SemanticSettings). The previous HARDCODED 0.50 gate sat
-            // ABOVE the configured 0.40 threshold, so the DB happily
-            // returned hits the fusion layer then threw away — a classic
-            // "AI feels dead" bug: semantic-only finds were silently
-            // dropped no matter what the user configured.
-            if (kwRank >= 999 && semRank < 999) {
-                float semSim = 0.0f;
-                for (const auto& sh : semanticHits) {
-                    if (sh.fileId == fileId) { semSim = sh.similarity; break; }
-                }
-                if (semSim < m_threshold) {
-                    continue;  // skip — not similar enough to surface standalone
-                }
-            }
-
-            float rrfScore = kwRrf + semRrf;
-            h.combinedScore = rrfScore;
-
-            // Store normalized scores for display.
-            h.keywordScore = (kwRank < 999) ? h.keywordScore : 0.0f;
-            h.semanticScore = (semRank < 999) ? h.semanticScore : 0.0f;
-
-            resultMap[fileId] = h;
-        }
-
-        // Convert to vector + sort by RRF score descending.
+        // 1. Copy ALL keyword results in their original order. This is
+        //    the backbone of the output — nothing below ever drops or
+        //    reorders them.
         std::vector<HybridResult> out;
-        out.reserve(resultMap.size());
-        for (auto& [id, h] : resultMap) out.push_back(h);
+        out.reserve(keywordResults.size() +
+                    static_cast<size_t>(std::max(1, m_topK)));
+        std::set<int> keywordFileIds;
+        for (const auto& r : keywordResults) {
+            HybridResult h;
+            h.fileId        = r.fileId;
+            h.filename      = r.filename;
+            h.path          = r.path;
+            h.extension     = r.extension;
+            h.keywordScore  = normalizeScore(r.bm25Score);
+            h.semanticScore = 0.0f;
+            h.combinedScore = h.keywordScore;
+            out.push_back(h);
+            keywordFileIds.insert(r.fileId);
+        }
 
-        std::sort(out.begin(), out.end(),
-            [](const HybridResult& a, const HybridResult& b) {
-                return a.combinedScore > b.combinedScore;
-            });
+        // 2. AI off / model not ready → pure keyword (unchanged list).
+        if (!m_semanticEnabled || !m_bgeService || !m_bgeService->isReady()) {
+            return out;
+        }
 
-        // v1.7.4 CRITICAL: the cap below used to be a blind `m_topK * 2`.
-        // With the default top-K (10-20) that truncated the fused list to
-        // 20-40 rows while the keyword search had returned up to 50 — any
-        // keyword hit ranked below the cap was silently DROPPED whenever AI
-        // mode was on ("with ai the intended result not at all showing").
-        // Fusion is a RANKING layer: it must reorder the keyword results,
-        // never shrink them. The cap therefore never cuts below the number
-        // of keyword hits; it only bounds semantic-only ADDITIONS.
-        const int floorKeep = static_cast<int>(keywordResults.size());
-        const int cap = std::max(std::max(1, m_topK * 2), floorKeep);
-        if (static_cast<int>(out.size()) > cap) {
-            out.resize(cap);
+        // 3. Run the semantic scan INDEPENDENTLY over all chunks (this
+        //    finds documents the keyword search missed entirely).
+        const int semanticBudget = std::max(40, m_topK * 2);
+        std::vector<SemanticHit> semanticHits =
+            m_bgeService->searchChunksAll(queryText, semanticBudget, m_threshold);
+
+        // No chunk hits → fall back to document-level search (all docs).
+        if (semanticHits.empty()) {
+            semanticHits = m_bgeService->search(queryText, semanticBudget, m_threshold);
+        }
+
+        // Map fileId → semantic similarity for annotation + additions.
+        std::map<int, float> simByFile;
+        for (const auto& sh : semanticHits) {
+            simByFile[sh.fileId] = sh.similarity;
+        }
+
+        // 4. Annotate keyword hits that also have a semantic match.
+        //    Position untouched — the score only feeds the UI badge.
+        for (auto& h : out) {
+            auto it = simByFile.find(h.fileId);
+            if (it != simByFile.end()) {
+                h.semanticScore = it->second;
+            }
+        }
+
+        // 5. Append semantic-only finds (files keyword search missed).
+        //    The number of additions is scaled by the user's AI weight
+        //    and capped by topK ("Maximum AI Results").
+        if (m_semanticWeight > 0.0f && !semanticHits.empty()) {
+            const int additionsAllowed = std::min(
+                m_topK,
+                std::max(1, static_cast<int>(std::lround(
+                    m_semanticWeight * static_cast<float>(m_topK)))));
+
+            int added = 0;
+            for (const auto& sh : semanticHits) {
+                if (added >= additionsAllowed) break;
+                if (keywordFileIds.count(sh.fileId)) continue;  // already listed
+                if (sh.similarity < m_threshold) continue;      // below the bar
+
+                // Respect the type filter (e.g. type:pdf must not show .txt).
+                if (!m_typeFilter.isEmpty()) {
+                    if (sh.filePath.isEmpty()) continue;  // no way to verify
+                    if (QFileInfo(sh.filePath).suffix().toLower() != m_typeFilter)
+                        continue;
+                }
+
+                HybridResult h;
+                h.fileId        = sh.fileId;
+                h.filename      = sh.filename;
+                h.path          = sh.filePath;
+                h.extension     = sh.filePath.isEmpty()
+                    ? QString()
+                    : QFileInfo(sh.filePath).suffix().toLower();
+                h.keywordScore  = 0.0f;
+                h.semanticScore = sh.similarity;
+                h.combinedScore = sh.similarity;
+                out.push_back(h);
+                ++added;
+            }
         }
         return out;
     } catch (const std::exception& e) {

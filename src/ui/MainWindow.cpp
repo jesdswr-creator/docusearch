@@ -57,6 +57,7 @@
 #include <QUrl>
 #include <QTimer>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QFile>
 #include <QTextStream>
 #include <QProgressDialog>
@@ -101,6 +102,29 @@
 #include <memory>
 
 namespace DocuSearch {
+
+// ── Brand logo pixmap ─────────────────────────────────────────
+// The title bar must carry the REAL DocuSearch logo (the same artwork
+// the taskbar icon uses: :/icons/DocuSearch-256.png) — not a generic
+// white magnifier glyph. The old title-bar logo was a plain Lucide
+// "search" icon that did not match the app's branding ("top-left logo
+// is not correct"). The PNG is 256x256 with its own rounded corners and
+// transparent margins; it is downscaled with smooth transforms to the
+// label size (28 logical px) at the current device pixel ratio, so it
+// stays crisp on HiDPI displays.
+inline QPixmap appLogoPixmap(qreal dpr = 1.0) {
+    const int px = qMax(1, qRound(28.0 * dpr));
+    QPixmap pm(QStringLiteral(":/icons/DocuSearch-256.png"));
+    if (pm.isNull()) {
+        // Fallback if the resource is ever missing: draw the same
+        // white search glyph the old code used, so the spot never
+        // renders as an empty hole.
+        return loadLucidePixmap("search", QColor("#ffffff"), 28, dpr);
+    }
+    pm = pm.scaled(px, px, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    pm.setDevicePixelRatio(dpr);
+    return pm;
+}
 
 // ============================================================
 // Custom title bar widget — handles mouse dragging to move window
@@ -649,11 +673,12 @@ void MainWindow::buildTitleBar() {
     h->setContentsMargins(16, 8, 12, 8);
     h->setSpacing(10);
 
-    // App logo (28x28 blue square with white search icon)
+    // App logo (28x28 — the real DocuSearch brand mark, same artwork as
+    // the taskbar icon; v1.7.5 replaced the generic Lucide magnifier).
     appLogoLbl_ = new QLabel(titleBar_);
     appLogoLbl_->setObjectName("appLogo");
     appLogoLbl_->setFixedSize(28, 28);
-    appLogoLbl_->setPixmap(loadLucidePixmap("search", QColor("#ffffff"), 16, devicePixelRatio()));
+    appLogoLbl_->setPixmap(appLogoPixmap(devicePixelRatio()));
     h->addWidget(appLogoLbl_);
 
     // Title text: "DocuSearch" (bold). No version subtitle — keep it minimal.
@@ -1253,9 +1278,9 @@ void MainWindow::refreshAllIcons() {
     }
 
     // ---- Title bar icons ----
-    // App logo: white search icon on blue background (set in ctor, but
-    // re-set here in case the device pixel ratio changed).
-    appLogoLbl_->setPixmap(loadLucidePixmap("search", whiteText, 16, devicePixelRatio()));
+    // App logo: the real DocuSearch brand mark (set in ctor, but re-set
+    // here in case the device pixel ratio changed).
+    appLogoLbl_->setPixmap(appLogoPixmap(devicePixelRatio()));
 
     // No theme button — light mode only
 
@@ -1297,6 +1322,11 @@ void MainWindow::refreshAllIcons() {
 void MainWindow::loadSettings() {
     settings_ = Config::instance().load();
     darkMode_ = settings_.darkMode;
+    // v1.7.6: pastelTheme_ is what applyTheme() actually renders. It used
+    // to stay 0 (Light) forever — the saved dark mode was IGNORED at
+    // startup and the toggle never persisted. Keep the two in sync at
+    // every site that changes the theme.
+    pastelTheme_ = darkMode_ ? 1 : 0;
 }
 
 void MainWindow::saveSettings() {
@@ -1483,11 +1513,10 @@ void MainWindow::onSearch(const QString& query) {
                             : QString()),
                     6000);
             }
-            // Phase 2: surface AI debug info so user can SEE that AI ran.
-            //   Status bar now shows: result count + how many had AI
-            //   contribution + total time. This directly addresses the
-            //   user complaint "AI has no role in search" — every search
-            //   now reports its AI contribution in the status bar.
+            // Phase 4: surface the AI contribution honestly. The fusion
+            // is now strictly ADDITIVE — keyword results are never
+            // reordered or dropped — so the status line reports the
+            // keyword count and the AI-only additions separately.
             int aiContribCount = 0;
             int aiOnlyCount = 0;
             for (const auto& hr : hybridResults) {
@@ -1495,25 +1524,34 @@ void MainWindow::onSearch(const QString& query) {
                 if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
             }
             statusBar()->showMessage(
-                QString("%1 result%2 · AI refined %3 · %4 ms")
+                QString("%1 result%2 · keyword %3 · AI-found %4 · %5 ms")
                     .arg(merged.size())
                     .arg(merged.size() == 1 ? "" : "s")
-                    .arg(aiContribCount)
+                    .arg(merged.size() - aiOnlyCount)
+                    .arg(aiOnlyCount)
                     .arg(t.elapsed()));
             // Persistent summary pill directly above the results list —
             // the status-bar toast disappears, this stays until the next
             // search so users can actually SEE what AI did.
-            if (aiContribCount > 0) {
+            if (aiOnlyCount > 0) {
                 resultsPane_->setAiSummary(QString(
-                    "<b>Semantic ranking active</b> — AI refined %1 of %2 "
-                    "results%3")
-                    .arg(aiContribCount)
-                    .arg(merged.size())
-                    .arg(aiOnlyCount > 0
-                        ? QString(", including %1 found by semantic match "
-                          "alone (no keyword overlap)")
-                          .arg(aiOnlyCount)
-                        : QString()));
+                    "<b>AI added %1 document%2</b> that keyword search "
+                    "missed (listed after your %3 keyword result%4). "
+                    "Keyword order is never changed.")
+                    .arg(aiOnlyCount)
+                    .arg(aiOnlyCount == 1 ? "" : "s")
+                    .arg(merged.size() - aiOnlyCount)
+                    .arg(merged.size() - aiOnlyCount == 1 ? "" : "s"));
+            } else if (aiContribCount > 0) {
+                // AI confirmed keyword hits only — no new documents
+                // cleared the similarity bar this pass.
+                const int confirmed = aiContribCount - aiOnlyCount;
+                resultsPane_->setAiSummary(QString(
+                    "<b>AI confirmed %1 keyword match%2</b> — no new "
+                    "documents scored above the similarity bar. Keyword "
+                    "order is never changed.")
+                    .arg(confirmed)
+                    .arg(confirmed == 1 ? "" : "es"));
             } else if (bgeService_ && bgeService_->isReady()) {
                 // Zero semantic contribution: explain exactly why, with the
                 // real numbers from the scan, instead of a vague complaint.
@@ -3638,143 +3676,8 @@ void MainWindow::onIndexingFinished() {
 void MainWindow::onFileAdded(const QString& path) {
     if (!repo_ || !db_) return;
     try {
-        // SAFETY: Only process files that are under one of the user's
-        // indexed folders. The file watcher should only fire for these,
-        // but this is a defensive check in case a watch was added for
-        // a folder the user later removed from Settings.
-        bool underIndexed = false;
-        for (const QString& drive : settings_.indexedDrives) {
-            if (path.startsWith(drive, Qt::CaseInsensitive)) {
-                underIndexed = true;
-                break;
-            }
-        }
-        if (!underIndexed) return;
-
-        if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return;
-
-        // Check if extension is supported.
-        const QString ext = FileUtils::extensionOf(path).toLower();
-        static const QSet<QString> supportedExts = {
-            "pdf","doc","docx","xls","xlsx","xlsm","ppt","pptx",
-            "txt","csv","md","rtf",
-            "png","jpg","jpeg","bmp","gif","tiff","tif","webp"
-        };
-        if (!supportedExts.contains(ext)) return;
-
+        if (!extractAndIndexFile(path)) return;
         const QFileInfo fi(path);
-        FileRecord r;
-        r.path         = FileUtils::toNative(path);
-        r.filename     = fi.fileName();
-        r.extension    = FileUtils::extensionOf(path);
-        r.size         = fi.size();
-        r.createdDate  = fi.birthTime();
-        r.modifiedDate = fi.lastModified();
-        r.indexingStatus = Constants::IndexingStatus::kPending;
-        r.ocrStatus      = Constants::OcrStatus::kPending;
-        repo_->upsertFile(r);
-
-        // Task 2 Part A: Extract text immediately for the new file
-        // (don't wait for the user to click Extract or the hourly scan).
-        // This is a single-file extraction — fast and non-blocking enough
-        // for the main thread.
-        if (fi.size() <= Constants::kMaxFilesizeToExtract) {
-            auto& registry = DocumentExtractorRegistry::instance();
-            try {
-                auto result = registry.extractByExtension(path, ext);
-                QString extractedText = result.text;
-                if (extractedText.size() > Constants::kMaxExtractTextChars) {
-                    extractedText = extractedText.left(Constants::kMaxExtractTextChars);
-                }
-
-                if (!extractedText.isEmpty()) {
-                    sqlite3* raw = db_->raw();
-                    if (raw) {
-                        qint64 now = QDateTime::currentSecsSinceEpoch();
-                        sqlite3_stmt* upd = nullptr;
-                        sqlite3_prepare_v2(raw,
-                            "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                            "VALUES (?1, ?2, ?3, ?4, ?5) "
-                            "ON CONFLICT(file_id) DO UPDATE SET "
-                            "  extracted_text=excluded.extracted_text, "
-                            "  text_source=excluded.text_source, "
-                            "  char_count=excluded.char_count, "
-                            "  updated_at=excluded.updated_at;",
-                            -1, &upd, nullptr);
-                        if (upd) {
-                            // Look up the file_id we just inserted.
-                            FileRecord rec;
-                            if (repo_->getByPath(r.path, rec)) {
-                                QByteArray textBytes = extractedText.toUtf8();
-                                QByteArray srcBytes = (result.source.isEmpty() ? "native" : result.source).toUtf8();
-                                sqlite3_bind_int64(upd, 1, rec.id);
-                                sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_int64(upd, 4, extractedText.size());
-                                sqlite3_bind_int64(upd, 5, now);
-                                sqlite3_step(upd);
-                                sqlite3_finalize(upd);
-
-                                // Update Files status.
-                                sqlite3_exec(raw,
-                                    QString("UPDATE Files SET indexing_status='content_done' WHERE id=%1;")
-                                        .arg(rec.id).toUtf8().constData(),
-                                    nullptr, nullptr, nullptr);
-
-                                // Update SearchIndex.
-                                sqlite3_stmt* del = nullptr;
-                                sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;", -1, &del, nullptr);
-                                if (del) { sqlite3_bind_int64(del, 1, rec.id); sqlite3_step(del); sqlite3_finalize(del); }
-
-                                QByteArray fn = fi.fileName().toUtf8();
-                                QByteArray pth = r.path.toUtf8();
-                                QByteArray extB = ext.toUtf8();
-                                sqlite3_stmt* ins = nullptr;
-                                sqlite3_prepare_v2(raw,
-                                    "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                                    "VALUES (?1, ?2, ?3, ?4, ?5);",
-                                    -1, &ins, nullptr);
-                                if (ins) {
-                                    sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                                    sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                                    sqlite3_bind_text(ins, 4, extB.constData(), -1, SQLITE_TRANSIENT);
-                                    sqlite3_bind_int64(ins, 5, rec.id);
-                                    sqlite3_step(ins);
-                                    sqlite3_finalize(ins);
-                                }
-
-                                // NOTE: BGE embedding generation during file-add is DISABLED.
-                                // Same reason as in onExtract(): runs ONNX inference on the
-                                // main thread — SEH exceptions from ONNX Runtime bypass
-                                // catch(...) and crash the app.
-                                // Users can generate embeddings via Settings → AI Search →
-                                // "Generate AI Embeddings" (runs in a background thread).
-                                //
-                                // if (bgeService_ && bgeService_->isReady()) {
-                                //     try { bgeService_->embedDocument(rec.id, extractedText); } catch (...) {}
-                                // }
-                            }
-                        }
-                    }
-                } else if (result.needsOcr) {
-                    // Scanned PDF — mark as needs_ocr.
-                    FileRecord rec;
-                    if (repo_->getByPath(r.path, rec)) {
-                        sqlite3* raw = db_->raw();
-                        if (raw) {
-                            sqlite3_exec(raw,
-                                QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                                    .arg(rec.id).toUtf8().constData(),
-                                nullptr, nullptr, nullptr);
-                        }
-                    }
-                }
-            } catch (...) {
-                // Extraction failed — file stays as 'pending', user can retry.
-            }
-        }
-
         statusBar()->showMessage("New file indexed: " + fi.fileName(), 3000);
         updateIndexStats();
         DS_INFO("Watcher", "Added + extracted: " + path);
@@ -3783,16 +3686,178 @@ void MainWindow::onFileAdded(const QString& path) {
     }
 }
 
+// Shared single-file pipeline for the watcher handlers (file ADDED and
+// file MODIFIED). The old onFileModified routed through indexer_ — which
+// is never constructed in this build ("indexer disabled in this build")
+// — so EVERY live modify event was silently dropped: the FTS row, the
+// extracted text and the AI embeddings all stayed stale until the next
+// hourly scan reconciled them. v1.7.5 routes both events through this
+// one pipeline and additionally invalidates the old AI embeddings so a
+// modified file is re-embedded from its new text via the background
+// backfill queue (ONNX never runs on the main thread — the old inline
+// embedDocument call crashed with SEH exceptions that bypass catch(...)).
+bool MainWindow::extractAndIndexFile(const QString& path) {
+    if (!repo_ || !db_) return false;
+
+    // SAFETY: only files under one of the user's indexed folders. The
+    // file watcher should only fire for these, but this is a defensive
+    // check in case a watch was added for a folder the user later
+    // removed from Settings.
+    bool underIndexed = false;
+    for (const QString& drive : settings_.indexedDrives) {
+        if (path.startsWith(drive, Qt::CaseInsensitive)) {
+            underIndexed = true;
+            break;
+        }
+    }
+    if (!underIndexed) return false;
+
+    if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return false;
+
+    // Check if extension is supported.
+    const QString ext = FileUtils::extensionOf(path).toLower();
+    static const QSet<QString> supportedExts = {
+        "pdf","doc","docx","xls","xlsx","xlsm","ppt","pptx",
+        "txt","csv","md","rtf",
+        "png","jpg","jpeg","bmp","gif","tiff","tif","webp"
+    };
+    if (!supportedExts.contains(ext)) return false;
+
+    const QFileInfo fi(path);
+    if (!fi.exists()) return false;
+
+    FileRecord r;
+    r.path         = FileUtils::toNative(path);
+    r.filename     = fi.fileName();
+    r.extension    = FileUtils::extensionOf(path);
+    r.size         = fi.size();
+    r.createdDate  = fi.birthTime();
+    r.modifiedDate = fi.lastModified();
+    r.indexingStatus = Constants::IndexingStatus::kPending;
+    r.ocrStatus      = Constants::OcrStatus::kPending;
+    repo_->upsertFile(r);
+
+    // Extract text immediately for the new/changed file (single-file
+    // extraction — fast and non-blocking enough for the main thread).
+    if (fi.size() <= Constants::kMaxFilesizeToExtract) {
+        auto& registry = DocumentExtractorRegistry::instance();
+        try {
+            auto result = registry.extractByExtension(path, ext);
+            QString extractedText = result.text;
+            if (extractedText.size() > Constants::kMaxExtractTextChars) {
+                extractedText = extractedText.left(Constants::kMaxExtractTextChars);
+            }
+
+            sqlite3* raw = db_->raw();
+            if (!raw) return true;
+
+            FileRecord rec;
+            if (!repo_->getByPath(r.path, rec)) return true;  // row vanished
+            const qint64 fileId = rec.id;
+
+            if (!extractedText.isEmpty()) {
+                const qint64 now = QDateTime::currentSecsSinceEpoch();
+                sqlite3_stmt* upd = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5) "
+                    "ON CONFLICT(file_id) DO UPDATE SET "
+                    "  extracted_text=excluded.extracted_text, "
+                    "  text_source=excluded.text_source, "
+                    "  char_count=excluded.char_count, "
+                    "  updated_at=excluded.updated_at;",
+                    -1, &upd, nullptr);
+                if (upd) {
+                    QByteArray textBytes = extractedText.toUtf8();
+                    QByteArray srcBytes = (result.source.isEmpty() ? "native" : result.source).toUtf8();
+                    sqlite3_bind_int64(upd, 1, fileId);
+                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 4, extractedText.size());
+                    sqlite3_bind_int64(upd, 5, now);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
+
+                    // Update Files status.
+                    sqlite3_exec(raw,
+                        QString("UPDATE Files SET indexing_status='content_done' WHERE id=%1;")
+                            .arg(fileId).toUtf8().constData(),
+                        nullptr, nullptr, nullptr);
+
+                    // Update SearchIndex (delete + insert = clean FTS row).
+                    sqlite3_stmt* del = nullptr;
+                    sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;", -1, &del, nullptr);
+                    if (del) { sqlite3_bind_int64(del, 1, fileId); sqlite3_step(del); sqlite3_finalize(del); }
+
+                    QByteArray fn = fi.fileName().toUtf8();
+                    QByteArray pth = r.path.toUtf8();
+                    QByteArray extB = ext.toUtf8();
+                    sqlite3_stmt* ins = nullptr;
+                    sqlite3_prepare_v2(raw,
+                        "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
+                        "VALUES (?1, ?2, ?3, ?4, ?5);",
+                        -1, &ins, nullptr);
+                    if (ins) {
+                        sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(ins, 4, extB.constData(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_int64(ins, 5, fileId);
+                        sqlite3_step(ins);
+                        sqlite3_finalize(ins);
+                    }
+                }
+            } else if (result.needsOcr) {
+                // Scanned PDF / image — mark as needs_ocr.
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
+                        .arg(fileId).toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+            }
+
+            // v1.7.5: the file's content just changed — any stored AI
+            // embedding was computed from the OLD text and must not
+            // survive. Drop both embedding tables for this file; the
+            // background backfill queue re-embeds it from the new text
+            // (ensureEmbeddingsBackfill runs ONNX off the main thread).
+            for (const char* delSql : {
+                     "DELETE FROM BgeEmbeddings WHERE file_id=?1;",
+                     "DELETE FROM EmbeddingChunks WHERE file_id=?1;" }) {
+                sqlite3_stmt* delE = nullptr;
+                if (sqlite3_prepare_v2(raw, delSql, -1, &delE, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_int64(delE, 1, fileId);
+                    sqlite3_step(delE);
+                    sqlite3_finalize(delE);
+                }
+            }
+            ensureEmbeddingsBackfill();
+        } catch (...) {
+            // Extraction failed — file stays as 'pending', user can retry.
+            DS_INFO("Watcher", "Extraction failed for: " + path);
+        }
+    }
+    return true;
+}
 void MainWindow::onFileModified(const QString& path) {
     if (!repo_ || !db_) return;
     try {
-        if (!indexer_) return;
-        FileRecord r;
-        if (repo_->getByPath(path, r)) {
-            indexer_->reindexFile(path);
-            DS_INFO("Watcher", "Reindexing modified: " + path);
-        } else {
-            onFileAdded(path);
+        // v1.7.5: the old code routed through indexer_->reindexFile(),
+        // but indexer_ is never constructed in this build — the guard
+        // below returned for EVERY event and live file edits were
+        // silently dropped until the next hourly scan. Reuse the shared
+        // add/modify pipeline instead (it also invalidates the stale AI
+        // embedding so the modified file is re-embedded from new text).
+        if (!extractAndIndexFile(path)) return;
+        const QFileInfo fi(path);
+        statusBar()->showMessage("File updated: " + fi.fileName(), 3000);
+        updateIndexStats();
+        DS_INFO("Watcher", "Reindexed modified: " + path);
+
+        // Keep the visible results honest: if the user is looking at a
+        // search that includes this file, re-run it so the new snippet
+        // and metadata show up immediately.
+        if (!searchBar_->text().trimmed().isEmpty()) {
+            onSearch(searchBar_->text());
         }
     } catch (...) {
         DS_INFO("Watcher", "Failed to handle modify: " + path);
@@ -4122,6 +4187,7 @@ void MainWindow::onOpenSettings() {
             this, [this](const AppSettings& s){
                 settings_ = s;
                 darkMode_ = settings_.darkMode;
+                pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
                 saveSettings();
                 applyTheme();
                 updateIndexStats();
@@ -4220,6 +4286,7 @@ void MainWindow::onOpenSettings() {
             AppSettings oldSettings = settings_;
             settings_ = dlg.result();
             darkMode_ = settings_.darkMode;
+            pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
             saveSettings();
             applyTheme();
             updateIndexStats();
@@ -4296,7 +4363,13 @@ void MainWindow::onToggleTheme() {
     try {
         // Fluent Design — toggle between Light (0) and Dark (1) only.
         // Was previously cycling 4 Pastel Pop themes — too many options.
-        pastelTheme_ = (pastelTheme_ + 1) % 2;
+        // v1.7.6: persist the ACTUAL setting (darkMode) and re-derive the
+        // render index from it. Before this, the toggle only flipped the
+        // in-memory pastelTheme_ and saved the stale darkMode value, so
+        // the chosen theme was lost on every restart.
+        settings_.darkMode = !settings_.darkMode;
+        darkMode_ = settings_.darkMode;
+        pastelTheme_ = darkMode_ ? 1 : 0;
         QString names[] = {"Light", "Dark"};
         saveSettings();
         applyTheme();
@@ -4394,6 +4467,7 @@ void MainWindow::onDetectDuplicates() {
         QList<SearchHit> hits;
         QStringList hashes;      // aligned with hits — used to regroup below
         int skippedMissing = 0;
+        int staleHashRows  = 0;  // v1.7.6: content changed since the scan
         // v1.7.4: collected DURING the walk, purged AFTER finalize — never
         // delete from the Files table while a SELECT on it is stepping.
         QStringList stalePaths;
@@ -4425,6 +4499,27 @@ void MainWindow::onDetectDuplicates() {
                 continue;
             }
 
+            // v1.7.6 STALE-HASH GATE: the stored hash describes the file
+            // as it was at scan time. If the content changed since (size
+            // or mtime moved), that hash no longer proves the file equals
+            // its "partner" — e.g. the user deleted the duplicate and a
+            // different file later appeared under the same name. Listing
+            // such rows produced false duplicate pairs and lone files
+            // whose twin was already deleted. Drop the row from the
+            // candidate set; the next scan refreshes its hash.
+            // (2 s mtime tolerance for FAT's coarse timestamps.)
+            {
+                const QFileInfo fi(h.path);
+                const qint64 nowSize  = fi.size();
+                const qint64 nowMtime = fi.lastModified().toSecsSinceEpoch();
+                const qint64 rowMtime = h.modifiedDate.toSecsSinceEpoch();
+                if (nowSize != h.size ||
+                    (rowMtime > 0 && qAbs(nowMtime - rowMtime) > 2)) {
+                    ++staleHashRows;
+                    continue;
+                }
+            }
+
             hits.append(h);
             hashes.append(currentHash);
 
@@ -4441,25 +4536,51 @@ void MainWindow::onDetectDuplicates() {
             purgeStaleRows(stalePaths, QStringLiteral("duplicates"));
         }
 
-        // Stale index rows: the SAME path can sit in the Files table twice
-        // after aggressive re-scans. One physical file must never pass as
-        // a "group of two" with itself — a unique document then appeared
-        // in the duplicate list as its own pair (reported as "single files
-        // are also listing"). Dedupe by path BEFORE the survivors-only
-        // pass so every physical file is counted exactly once.
+        // Stale index rows: the SAME physical file can sit in the Files
+        // table more than once — after aggressive re-scans, or under two
+        // spellings of the same path. One physical file must never pass
+        // as a "group of two" with itself — a unique document then
+        // appeared in the duplicate list as its own pair (reported as
+        // "single files are also listing"). Dedupe on the identity key
+        // BELOW BEFORE the survivors-only pass so every physical file is
+        // counted exactly once.
+        //
+        // v1.7.5: the key is the CANONICAL path (QFileInfo::canonicalFilePath),
+        // not a case-folded string. Case folding alone still pairs a file
+        // with itself when two rows spell the same path differently:
+        //   • mixed separators        D:\Docs\a.pdf  vs  D:/Docs/a.pdf
+        //   • dot segments            D:\Docs\a.pdf  vs  D:\Docs\.\a.pdf
+        //   • junctions / symlinks    D:\Real\a.pdf  vs  D:\Link\a.pdf
+        //   • overlapping roots       D:\Docs\a.pdf  vs  D:\Docs\Sub\a.pdf
+        //     (the same folder added twice: root AND a child folder)
+        // Canonicalization resolves all four. When it fails (drive just
+        // unplugged), fall back to a normalized raw path: separators
+        // folded to '/', case folded on Windows.
         QSet<QString> seenPaths;
         QList<SearchHit> uniqueHits;
         QStringList uniqueHashes;
         int staleRows = 0;
         for (int i = 0; i < hits.size(); ++i) {
-            // v1.7.3: case-fold the key — Windows paths are
-            // case-insensitive, and two rows for the SAME physical file
-            // that differ only in case (accumulated across scan eras)
-            // used to survive this dedupe and pair up as a "duplicate
-            // group of two" for a single file.
-            const QString pathKey = hits[i].path.toLower();
-            if (seenPaths.contains(pathKey)) { ++staleRows; continue; }
-            seenPaths.insert(pathKey);
+            QString key = QFileInfo(hits[i].path).canonicalFilePath();
+            if (!key.isEmpty()) {
+                // Long-path spellings: "\\?\D:\Docs\a.pdf" and
+                // "D:\Docs\a.pdf" point at the SAME physical file but
+                // canonicalize to different strings. Strip the verbatim
+                // prefix so both collapse onto one identity.
+#ifdef Q_OS_WIN
+                if (key.startsWith(QStringLiteral("\\\\?\\"))) {
+                    key.remove(0, 4);
+                }
+#endif
+            } else {
+                key = hits[i].path;
+                key.replace(QLatin1Char('\\'), QLatin1Char('/'));
+#ifdef Q_OS_WIN
+                key = key.toLower();
+#endif
+            }
+            if (seenPaths.contains(key)) { ++staleRows; continue; }
+            seenPaths.insert(key);
             uniqueHits.append(hits[i]);
             uniqueHashes.append(hashes[i]);
         }
@@ -4494,19 +4615,29 @@ void MainWindow::onDetectDuplicates() {
         }
 
         if (hits.isEmpty()) {
+            // v1.7.6: empty the results list too. Previously the listing
+            // from the PREVIOUS duplicate check stayed on screen after the
+            // message box — so a pair whose duplicate the user had just
+            // deleted kept showing its lone survivor ("duplicate file
+            // still returns a single file").
+            resultsPane_->setResults({});
             QMessageBox::information(this, "Duplicates",
-                (skippedMissing > 0 || droppedSingletons > 0 || staleRows > 0)
+                (skippedMissing > 0 || droppedSingletons > 0 ||
+                 staleRows > 0 || staleHashRows > 0)
                     ? QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "%1 file%2 whose duplicate partner was deleted, "
-                        "%3 stale index entr%4 and %5 duplicate row%6 "
-                        "for the same file were excluded.")
+                        "%3 stale index entr%4, %5 duplicate row%6 "
+                        "for the same file and %7 entr%8 whose content "
+                        "changed since scanning were excluded.")
                         .arg(droppedSingletons)
                         .arg(droppedSingletons == 1 ? "y" : "ies")
                         .arg(skippedMissing)
                         .arg(skippedMissing == 1 ? "y" : "ies")
                         .arg(staleRows)
                         .arg(staleRows == 1 ? "" : "s")
+                        .arg(staleHashRows)
+                        .arg(staleHashRows == 1 ? "y" : "ies")
                     : QStringLiteral(
                         "No duplicate documents found.\n\n"
                         "Duplicate search covers documents only: "
@@ -4518,7 +4649,7 @@ void MainWindow::onDetectDuplicates() {
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)%3%4")
+            QString("Found %1 duplicate groups (%2 files)%3%4%5")
                 .arg(groupCount).arg(hits.size())
                 .arg(droppedSingletons > 0
                     ? QString(
@@ -4530,6 +4661,11 @@ void MainWindow::onDetectDuplicates() {
                     ? QString("; %1 duplicate row%2 for the same file excluded")
                         .arg(staleRows)
                         .arg(staleRows == 1 ? "" : "s")
+                    : QString())
+                .arg(staleHashRows > 0
+                    ? QString("; %1 stale hash%2 (content changed) excluded")
+                        .arg(staleHashRows)
+                        .arg(staleHashRows == 1 ? "" : "es")
                     : QString()),
             8000);
     } catch (const std::exception& e) {

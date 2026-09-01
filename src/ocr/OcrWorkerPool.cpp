@@ -30,6 +30,25 @@
 namespace DocuSearch {
 
 namespace {
+
+// v1.7.6: word counter used to judge OCR quality during auto-orientation.
+// Counts runs of >= 2 letter/number characters — robust enough for Latin
+// and Devanagari text and cheap enough to run per page.
+int ocrWordCount(const QString& s) {
+    int words = 0;
+    int run = 0;
+    for (const QChar& c : s) {
+        if (c.isLetterOrNumber()) { ++run; }
+        else { if (run >= 2) ++words; run = 0; }
+    }
+    if (run >= 2) ++words;
+    return words;
+}
+
+// Below this many recognized words the upright OCR is treated as "the
+// page is probably stored sideways" and the rotated passes are tried.
+constexpr int kMinUprightOcrWords = 3;
+
 // Read system-wide CPU usage as a percentage (0-100). Returns -1 if unavailable.
 int readSystemCpuUsage() {
 #ifdef Q_OS_WIN
@@ -218,10 +237,47 @@ void OcrWorkerPool::workerLoop(int workerId) {
                                            Constants::kMaxPdfOcrPages);
                     for (int i = 0; i < pages; ++i) {
                         if (stopping_.load()) break;
-                        const QImage page = doc.renderPage(
-                            i, double(Constants::kPdfOcrDpi));
-                        if (page.isNull()) continue;
-                        const QString pageText = engine.ocrImage(page);
+                        const double dpi = double(Constants::kPdfOcrDpi);
+
+                        // v1.7.6 AUTO-ORIENTATION: scans are frequently
+                        // stored sideways inside the page (the scanner wrote
+                        // a rotated bitmap and no /Rotate entry, so PDFium —
+                        // correctly — renders them sideways). Windows OCR
+                        // then reads vertical text as garbage. OCR the
+                        // upright raster first; if it yields almost no
+                        // words, retry at 90°/270°/180° (PDFium's native
+                        // rotation — no pixel juggling) and keep the
+                        // orientation that reads the most words.
+                        const QImage upright = doc.renderPage(i, dpi);
+                        if (upright.isNull()) continue;
+                        QString pageText = engine.ocrImage(upright);
+                        const int uprightWords = ocrWordCount(pageText);
+                        int bestWords = uprightWords;
+                        int bestRot = 0;
+                        if (bestWords < kMinUprightOcrWords) {
+                            for (const int rot : {1, 3, 2}) {
+                                const QImage rotImg = doc.renderPage(i, dpi, rot);
+                                if (rotImg.isNull()) continue;
+                                const QString candidate = engine.ocrImage(rotImg);
+                                const int wc = ocrWordCount(candidate);
+                                if (wc > bestWords) {
+                                    bestWords = wc;
+                                    bestRot = rot;
+                                    pageText = candidate;
+                                }
+                            }
+                            if (bestRot != 0) {
+                                DS_INFO("OCR", QString("PDF OCR auto-orient: %1 page %2/%3 "
+                                                       "rotated %4° (upright read %5 words, "
+                                                       "rotated read %6)")
+                                                       .arg(task.path,
+                                                       QString::number(i + 1),
+                                                       QString::number(pages),
+                                                       QString::number(bestRot * 90),
+                                                       QString::number(uprightWords),
+                                                       QString::number(bestWords)));
+                            }
+                        }
                         if (!pageText.isEmpty()) {
                             text += pageText;
                             text += QLatin1Char('\n');

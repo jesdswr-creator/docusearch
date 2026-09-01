@@ -41,6 +41,9 @@ protected:
     // is shown — at that point the scroll area has its final viewport
     // size, so the zoom calculation is accurate.
     void showEvent(QShowEvent* event) override;
+    // Keep the centered load-error overlay glued to the viewport when
+    // the pane is resized (v1.7.5).
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void onNextPage();
@@ -63,11 +66,14 @@ private:
     bool    renderIntoLabel(int index);   // sync-render one page pixmap
     void    scrollToPage(int index);
     void    pumpRenderQueue();            // step the sequential render queue
+    void    showLoadError(const QString& reason, const QString& fileName);
+    void    positionErrorOverlay();       // keep the error card over the viewport
 
     std::shared_ptr<void> m_document;     // PdfiumDocument (type-erased)
 
     QWidget*       m_pagesHost      = nullptr;
     QLabel*        m_pageLabel      = nullptr;
+    QLabel*        m_errorLabel     = nullptr;  // v1.7.5: centered load-error overlay
     QScrollArea*   m_scrollArea     = nullptr;
     QVector<QLabel*> m_pageLabels;
     QVector<QSize>   m_baseSizes;         // pixels at zoom level 1
@@ -82,7 +88,8 @@ private:
     bool           m_pumping        = false;
 
     int    m_currentPage  = 0;
-    int    m_totalPages   = 0;
+    int    m_totalPages   = 0;       // pages actually shown (capped)
+    int    m_realPages    = 0;       // v1.7.5: real page count (for the cap note)
     double m_zoomLevel    = 1.0;
     bool   m_pendingFit   = false;   // true = need to call onFitWindow on first show
 

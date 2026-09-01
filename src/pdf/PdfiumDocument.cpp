@@ -16,9 +16,11 @@
 #include "PdfiumDocument.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QVector>
+#include <QThread>
 
 #include <fpdfview.h>
 #include <fpdf_text.h>
@@ -50,6 +52,7 @@ PdfiumDocument::~PdfiumDocument() {
         FPDF_CloseDocument(static_cast<FPDF_DOCUMENT>(m_doc));
         m_doc = nullptr;
     }
+    m_fileBytes.clear();   // buffer is only safe to free once the doc is closed
 }
 
 bool PdfiumDocument::loadFromFile(const QString& path) {
@@ -60,33 +63,51 @@ bool PdfiumDocument::loadFromFile(const QString& path) {
         FPDF_CloseDocument(static_cast<FPDF_DOCUMENT>(m_doc));
         m_doc = nullptr;
     }
+    m_fileBytes.clear();
     m_lastError.clear();
 
     // Load through memory: sidesteps PDFium's platform-specific path
     // encoding on Windows (UTF-8 vs UTF-16 filesystem paths) and lets
     // us distinguish "file missing" from "file corrupt" precisely.
+    // v1.7.6: the bytes live in m_fileBytes (a MEMBER), not a local —
+    // FPDF_LoadMemDocument reads the buffer lazily for the document's
+    // whole lifetime, so the buffer must outlive loadFromFile() itself.
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        m_lastError = "File not found or locked";
-        return false;
+        // A failed open is frequently transient — antivirus engines and
+        // cloud-sync providers briefly hold new files. Retry a few times
+        // before giving up so spurious "error opening pdf preview"
+        // reports stay rare; if it still fails, report the lock
+        // explicitly so the user knows it is not a corrupt file.
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            QThread::msleep(150);
+            if (f.open(QIODevice::ReadOnly)) break;
+        }
+        if (!f.isOpen()) {
+            m_lastError = QFileInfo(path).exists()
+                ? QStringLiteral("File is in use by another program (locked)")
+                : QStringLiteral("File not found or locked");
+            return false;
+        }
     }
-    const QByteArray bytes = f.readAll();
+    m_fileBytes = f.readAll();
     f.close();
-    if (bytes.isEmpty()) {
+    if (m_fileBytes.isEmpty()) {
         m_lastError = "File is empty";
+        m_fileBytes.clear();
         return false;
     }
 
-    m_doc = FPDF_LoadMemDocument(bytes.constData(),
-                                 static_cast<size_t>(bytes.size()),
+    m_doc = FPDF_LoadMemDocument(m_fileBytes.constData(),
+                                 static_cast<int>(m_fileBytes.size()),
                                  /*password=*/nullptr);
     if (!m_doc) {
         // Some PDFs carry an OWNER password but open freely — mirror the
         // old Poppler path by retrying once with an empty password.
         const unsigned long err = FPDF_GetLastError();
         if (err == FPDF_ERR_PASSWORD) {
-            m_doc = FPDF_LoadMemDocument(bytes.constData(),
-                                         static_cast<size_t>(bytes.size()),
+            m_doc = FPDF_LoadMemDocument(m_fileBytes.constData(),
+                                         static_cast<int>(m_fileBytes.size()),
                                          /*password=*/"");
         }
         if (!m_doc) {
@@ -97,6 +118,7 @@ bool PdfiumDocument::loadFromFile(const QString& path) {
                 case FPDF_ERR_FILE:     m_lastError = "File read error"; break;
                 default:                m_lastError = "Failed to open PDF"; break;
             }
+            m_fileBytes.clear();
             return false;
         }
     }
@@ -121,7 +143,7 @@ QSizeF PdfiumDocument::pageSizePoints(int index) const {
     return QSizeF(w, h);
 }
 
-QImage PdfiumDocument::renderPage(int index, double dpi) const {
+QImage PdfiumDocument::renderPage(int index, double dpi, int rotate) const {
     if (!m_doc || dpi <= 0.0) return QImage();
     QMutexLocker lock(&pdfiumMutex());
 
@@ -132,8 +154,17 @@ QImage PdfiumDocument::renderPage(int index, double dpi) const {
     const double hPt = FPDF_GetPageHeight(page);
     if (wPt <= 1.0 || hPt <= 1.0) { FPDF_ClosePage(page); return QImage(); }
 
-    int w = static_cast<int>(wPt / 72.0 * dpi + 0.5);
-    int h = static_cast<int>(hPt / 72.0 * dpi + 0.5);
+    // PDFium applies the page's own /Rotate automatically (both to the
+    // geometry above and to the rendered content), so the raster comes
+    // out upright. The caller's `rotate` turns it ADDITIONALLY — used by
+    // OCR auto-orientation for scans stored sideways without /Rotate.
+    // A quarter turn swaps the output dimensions.
+    const int rot = ((rotate % 4) + 4) % 4;
+    const double wOut = (rot % 2 == 0) ? wPt : hPt;
+    const double hOut = (rot % 2 == 0) ? hPt : wPt;
+
+    int w = static_cast<int>(wOut / 72.0 * dpi + 0.5);
+    int h = static_cast<int>(hOut / 72.0 * dpi + 0.5);
     // Safety valve: refuse absurd rasters (> ~34 MP) instead of trying
     // to allocate them — the old Poppler path simply OOMed.
     if (w < 1 || h < 1 || (qint64)w * (qint64)h > 34'000'000) {
@@ -151,7 +182,7 @@ QImage PdfiumDocument::renderPage(int index, double dpi) const {
     FPDF_RenderPageBitmap(bmp, page,
                           /*start_x=*/0, /*start_y=*/0,
                           /*size_x=*/w, /*size_y=*/h,
-                          /*rotate=*/0, /*flags=*/FPDF_ANNOT);
+                          /*rotate=*/rot, /*flags=*/FPDF_ANNOT);
 
     QImage qimg(static_cast<const uchar*>(FPDFBitmap_GetBuffer(bmp)),
                 w, h, FPDFBitmap_GetStride(bmp),

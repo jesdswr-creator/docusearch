@@ -102,6 +102,18 @@ PdfPreview::PdfPreview(QWidget* parent)
     hostLay->addStretch();
     m_scrollArea->setWidget(m_pagesHost);
 
+    // v1.7.5: centered load-error overlay (child of the scroll area, so
+    // it floats above the page stack). When a PDF cannot be opened the
+    // user now sees a real, readable error — the file name, the reason
+    // and what to do — instead of a tiny toolbar caption that was easy
+    // to miss ("pdf preview is gone, it shows error").
+    m_errorLabel = new QLabel(m_scrollArea);
+    m_errorLabel->setObjectName("pdfLoadError");
+    m_errorLabel->setAlignment(Qt::AlignCenter);
+    m_errorLabel->setWordWrap(true);
+    m_errorLabel->setVisible(false);
+    m_errorLabel->raise();
+
     mainLay->addWidget(m_scrollArea, 1);
 
     connect(m_prevButton,    &QPushButton::clicked, this, &PdfPreview::onPreviousPage);
@@ -133,10 +145,12 @@ void PdfPreview::refreshIcons() {
 
 bool PdfPreview::loadFile(const QString& filePath) {
     if (filePath.isEmpty()) return false;
+    const QString fileName = QFileInfo(filePath).fileName();
     if (!QFile::exists(filePath)) {
         // Clear any old pages before showing the error.
         clear();
         m_pageLabel->setText("File not found");
+        showLoadError(QStringLiteral("File not found"), fileName);
         return false;
     }
 
@@ -144,6 +158,7 @@ bool PdfPreview::loadFile(const QString& filePath) {
     if (fileSize > MAX_FILE_SIZE_BYTES) {
         clear();
         m_pageLabel->setText("PDF too large (>100 MB)");
+        showLoadError(QStringLiteral("PDF too large (>100 MB)"), fileName);
         return false;
     }
 
@@ -157,13 +172,15 @@ bool PdfPreview::loadFile(const QString& filePath) {
             const QString err = pdf->lastError();
             delete pdf;
             clear();
-            m_pageLabel->setText(err.isEmpty()
-                ? QStringLiteral("Cannot open PDF") : err);
+            const QString reason = err.isEmpty()
+                ? QStringLiteral("Cannot open PDF") : err;
+            m_pageLabel->setText(reason);
+            showLoadError(reason, fileName);
             return false;
         }
 
-        const int realPages = pdf->pageCount();
-        m_totalPages = std::min(realPages, MAX_PAGES);
+        m_realPages  = pdf->pageCount();
+        m_totalPages = std::min(m_realPages, MAX_PAGES);
 
         m_document = std::shared_ptr<void>(
             pdf,
@@ -171,6 +188,7 @@ bool PdfPreview::loadFile(const QString& filePath) {
 
         m_currentPage = 0;
         m_zoomLevel   = 1.0;
+        m_errorLabel->setVisible(false);
 
         measureBaseSizes();   // exact page sizes from PDFium geometry
         rebuildPages();
@@ -185,16 +203,58 @@ bool PdfPreview::loadFile(const QString& filePath) {
         DS_WARN("Preview", QString("PdfPreview load exception: %1").arg(e.what()));
         clear();
         m_pageLabel->setText("Error opening PDF");
+        showLoadError(QStringLiteral("Error opening PDF"), fileName);
         return false;
     } catch (...) {
         clear();
         m_pageLabel->setText("Unknown error opening PDF");
+        showLoadError(QStringLiteral("Unknown error opening PDF"), fileName);
         return false;
     }
 #else
     clear();
+    showLoadError(QStringLiteral("PDF preview is not available in this build"),
+                  fileName);
     return false;
 #endif
+}
+
+void PdfPreview::showLoadError(const QString& reason, const QString& fileName) {
+    if (!m_errorLabel) return;
+    m_errorLabel->setVisible(false);   // reset geometry first
+    m_errorLabel->setText(QString(
+        "<div style='text-align:center;'>"
+        "<p style='font-size:15px; font-weight:bold; margin:0 0 8px 0;'>"
+        "%1</p>"
+        "<p style='font-size:13px; margin:0 0 4px 0;'>%2</p>"
+        "<p style='font-size:12px; color:#94a3b8; margin:0;'>"
+        "The file may be password-protected, corrupt, or open in another "
+        "program.<br>You can still open it with your default PDF app — "
+        "double-click the result.</p>"
+        "</div>")
+        .arg(fileName.toHtmlEscaped(), reason.toHtmlEscaped()));
+    positionErrorOverlay();
+    m_errorLabel->show();
+    m_errorLabel->raise();
+}
+
+void PdfPreview::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (m_errorLabel && m_errorLabel->isVisible()) {
+        positionErrorOverlay();
+    }
+}
+
+void PdfPreview::positionErrorOverlay() {
+    if (!m_errorLabel || !m_scrollArea) return;
+    // Center the overlay on the current viewport.
+    const QSize vp = m_scrollArea->viewport()->size();
+    m_errorLabel->setGeometry(0, 0,
+                              qMax(240, vp.width() - 32),
+                              qMax(150, vp.height() - 32));
+    const QPoint topLeft = m_scrollArea->viewport()->mapTo(
+        m_scrollArea, QPoint(16, 16));
+    m_errorLabel->move(topLeft);
 }
 
 QSize PdfPreview::pageSizePixels(int index) const {
@@ -320,8 +380,12 @@ int PdfPreview::currentPageFromScrollPos() const {
 
 void PdfPreview::updatePageIndicator() {
     if (m_totalPages <= 0) { m_pageLabel->setText("No document loaded"); return; }
-    m_pageLabel->setText(QString("Page %1 of %2")
-                             .arg(m_currentPage + 1).arg(m_totalPages));
+    m_pageLabel->setText(QString("Page %1 of %2%3")
+                             .arg(m_currentPage + 1).arg(m_totalPages)
+                             .arg(m_realPages > m_totalPages
+                                 ? QStringLiteral(" (first %1 of %2 shown)")
+                                       .arg(MAX_PAGES).arg(m_realPages)
+                                 : QString()));
 }
 
 bool PdfPreview::renderIntoLabel(int index) {
@@ -435,10 +499,12 @@ void PdfPreview::onFitWindow() {
 void PdfPreview::clear() {
     m_document.reset();
     m_totalPages  = 0;
+    m_realPages   = 0;
     m_currentPage = 0;
     m_zoomLevel   = 1.0;
     m_pendingFit  = false;
     m_baseSizes.clear();
+    if (m_errorLabel) m_errorLabel->setVisible(false);
     rebuildPages();                 // removes all page cards
     m_pageLabel->setText("No document loaded");
     updateButtonStates();
