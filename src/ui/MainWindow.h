@@ -122,6 +122,9 @@ private slots:
     void onSidebarClicked(int row);
     void onOpenLocation();
     void autoScanIndexedFolders();
+    void onOcrTaskCompleted(qint64 fileId, const QString& text, bool ok);
+    void runStartupIntegrityPass();
+    bool ocrWorkOutstanding() const;
 
     // v1.7.4: AUTO-wake of the extraction pipeline (startup timer, scan
     // completion, new folder). Unlike the Extract button's toggle
@@ -293,6 +296,10 @@ public:
     int             pastelTheme_          = 0;
     bool            contentExtractionRunning_ = false;
     std::atomic<bool> extractCancelFlag_{false};
+    // v1.7.9: OCR pool session accounting — how many OCR tasks the
+    // current extraction session enqueued / how many results arrived.
+    int             ocrExpected_          = 0;
+    int             ocrReceived_          = 0;
 
     bool            autoScanRunning_      = false;
     qint64          autoScanStartedMs_    = 0;    // v1.7.3: watchdog clock
