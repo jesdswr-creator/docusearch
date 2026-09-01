@@ -191,8 +191,15 @@ MainWindow::MainWindow(QWidget* parent)
     // app.exec() has not started yet — nothing animates unless we pump the
     // event loop by hand. SplashOverlay's animation is time-based now, so
     // each pump below repaints the splash at the correct animation phase.
+    // v1.7.7: ONE processEvents call per milestone rendered at most one
+    // splash frame, so long constructor steps froze the bar and the phase
+    // visibly jumped (the reported "glitch"). Three short paced turns let
+    // the 16 ms animation timer fire 2-3 times per milestone — the sweep
+    // advances smoothly instead of in jump-cuts, for ~100 ms of extra
+    // startup time in total.
     auto pumpSplash = []() {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 30);
+        for (int i = 0; i < 3; ++i)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
     };
 
     setWindowTitle(QString("%1 %2 - Offline Document Search")
@@ -230,6 +237,20 @@ MainWindow::MainWindow(QWidget* parent)
     }
     Schema::initialize(*db_);
     Schema::migrate(*db_);
+
+    // v1.7.7: one-time cleanup — older versions indexed EVERY file type
+    // they walked (md notes, installers, archives, OS junk) because the
+    // hourly scan and the full indexer had no extension filter. Delete
+    // every row whose extension is not in kIndexableExtensions (plus its
+    // SearchIndex/embedding rows). The scan gate + watcher gate guarantee
+    // these rows can never be re-added, so an unconditional purge is safe
+    // even when a folder's drive happens to be offline right now.
+    const int purgedNonDocs = purgeNonIndexableRows();
+    if (purgedNonDocs > 0) {
+        DS_INFO("Index", QString("Startup purge: removed %1 non-document "
+                                 "index entries (md/txt/exe/archive/...)")
+                             .arg(purgedNonDocs));
+    }
     pumpSplash();  // keep the splash animating during the heavy startup path
 
     search_  = std::make_unique<SearchEngine>(*db_, *repo_, this);
@@ -278,6 +299,14 @@ MainWindow::MainWindow(QWidget* parent)
     // App-wide filter: gives every tooltip window translucency so its QSS
     // border-radius produces REAL rounded corners (see eventFilter).
     qApp->installEventFilter(this);
+    pumpSplash();  // v1.7.7: OCR probe + QSS install can take a beat
+
+    if (purgedNonDocs > 0) {
+        statusBar()->showMessage(
+            QString("Index cleanup: removed %1 non-document entries "
+                    "(md, txt, exe, archives...) — only documents and "
+                    "images are indexed now.").arg(purgedNonDocs), 10000);
+    }
 
     // DEFER semantic search init to after the window is shown.
     // initializeSemanticSearch() creates a BgeService + QtConcurrent::run
@@ -474,6 +503,8 @@ MainWindow::MainWindow(QWidget* parent)
             }
         });
     }
+
+    pumpSplash();  // v1.7.7: geometry restore + saved-searches ran unpumped
 
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 
@@ -1785,18 +1816,15 @@ void MainWindow::scanFolderFast(const QString& folder) {
     if (!raw) return;
 
     // ONLY index file types the user cares about — documents and common
-    // images. Everything else (txt/md/csv/rtf/html/json/logs, exotic image
-    // formats, archives…) stays out of the index entirely.
-    const QSet<QString> supportedExts = {
-        "pdf", "doc", "docx", "xls", "xlsx", "xlsm",
-        "ppt", "pptx", "jpg", "jpeg", "png",
-    };
-
+    // images. v1.7.7: this private list is GONE — scanFolderFast now
+    // consults the SAME central allowlist (Constants::isIndexableExtension)
+    // as the hourly scan, the watcher and the full re-index, so every
+    // ingest path agrees on what may enter the index.
     int count = 0, skipped = 0;
     QStringList emptyExcludes;
     FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
         const QString ext = FileUtils::extensionOf(fi.absoluteFilePath()).toLower();
-        if (!supportedExts.contains(ext)) { ++skipped; return true; }
+        if (!Constants::isIndexableExtension(ext)) { ++skipped; return true; }
 
         const QString path = FileUtils::toNative(fi.absoluteFilePath());
         const QString filename = fi.fileName();
@@ -2476,6 +2504,18 @@ void MainWindow::autoScanIndexedFolders() {
                 seen.reserve(1024);
                 FileUtils::walkDirectory(folder, QStringList(),
                     [&](const QFileInfo& fi) -> bool {
+                        // v1.7.7: THE extension allowlist gate. Checked
+                        // BEFORE the path enters `seen`, so the Pass-2
+                        // prune below treats every non-indexable file
+                        // (md notes, txt, logs, installers, archives...)
+                        // as unseen and deletes any row an older version
+                        // indexed — the index self-heals to documents +
+                        // images only.
+                        const QString ext =
+                            FileUtils::extensionOf(fi.absoluteFilePath());
+                        if (!Constants::isIndexableExtension(ext))
+                            return true;
+
                         const QString path =
                             FileUtils::toNative(fi.absoluteFilePath());
                         seen.insert(path.toLower());
@@ -2506,8 +2546,6 @@ void MainWindow::autoScanIndexedFolders() {
                             sqlite3_finalize(chk);
                         }
 
-                        const QString ext =
-                            FileUtils::extensionOf(fi.absoluteFilePath());
                         const qint64 size = fi.size();
                         const qint64 modified =
                             fi.lastModified().toSecsSinceEpoch();
@@ -2892,6 +2930,73 @@ int MainWindow::purgeStaleRows(const QStringList& paths, const QString& context)
                              .arg(context).arg(purged));
     }
     return purged;
+}
+
+// ============================================================
+// v1.7.7: one-time cleanup of every row whose extension is not in
+// kIndexableExtensions. Older versions indexed everything they
+// walked — Markdown notes, installers, archives, DLLs — so existing
+// databases carry thousands of rows the app can neither open, nor
+// preview, nor meaningfully search. This purge (plus the allowlist
+// gates on ALL ingest paths) makes "results only ever show
+// documents and images" true immediately, without waiting for a
+// full re-scan. Unconditional by design: a gated walk can never
+// re-add these rows, so even an offline drive loses nothing that
+// would come back.
+// ============================================================
+int MainWindow::purgeNonIndexableRows() {
+    if (!db_) return 0;
+    sqlite3* raw = db_->raw();
+    if (!raw) return 0;
+
+    QString list;
+    for (const QString& ext : Constants::kIndexableExtensions) {
+        if (!list.isEmpty()) list += QLatin1Char(',');
+        list += QString("'%1'").arg(ext.toLower());
+    }
+
+    QList<qint64> ids;
+    sqlite3_stmt* q = nullptr;
+    // NULL-extension rows (should not exist, but older scans could write
+    // them) must purge too — "NOT IN" alone would keep them via 3-valued
+    // logic, so the IS NULL case is spelled out.
+    const QString sql = QString(
+        "SELECT id FROM Files "
+        "WHERE extension IS NULL "
+        "   OR lower(trim(extension)) NOT IN (%1);").arg(list);
+    if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1,
+                           &q, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(q) == SQLITE_ROW)
+            ids.append(sqlite3_column_int64(q, 0));
+        sqlite3_finalize(q);
+    }
+    if (ids.isEmpty()) return 0;
+
+    // Mirror FileRepository::deleteFile: explicit deletes for the
+    // side tables that lack FK cascades; Tags/Notes/DocumentText
+    // cascade from the Files row.
+    sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
+    static const char* kDelSql[] = {
+        "DELETE FROM Files WHERE id = ?1;",
+        "DELETE FROM SearchIndex WHERE file_id = ?1;",
+        "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
+        "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
+    };
+    for (const qint64 id : ids) {
+        for (const char* sqlDel : kDelSql) {
+            sqlite3_stmt* d = nullptr;
+            if (sqlite3_prepare_v2(raw, sqlDel, -1, &d,
+                                   nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(d, 1, id);
+                sqlite3_step(d);
+                sqlite3_finalize(d);
+            }
+        }
+    }
+    sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
+
+    updateIndexStats();
+    return ids.size();
 }
 
 // ============================================================
@@ -3715,13 +3820,12 @@ bool MainWindow::extractAndIndexFile(const QString& path) {
     if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return false;
 
     // Check if extension is supported.
+    // v1.7.7: the old private list here still allowed md/txt/csv/rtf
+    // — a Markdown note saved into an indexed folder was indexed AND
+    // extracted immediately, which is exactly how .md kept showing up
+    // in results. One central allowlist now rules every ingest path.
     const QString ext = FileUtils::extensionOf(path).toLower();
-    static const QSet<QString> supportedExts = {
-        "pdf","doc","docx","xls","xlsx","xlsm","ppt","pptx",
-        "txt","csv","md","rtf",
-        "png","jpg","jpeg","bmp","gif","tiff","tif","webp"
-    };
-    if (!supportedExts.contains(ext)) return false;
+    if (!Constants::isIndexableExtension(ext)) return false;
 
     const QFileInfo fi(path);
     if (!fi.exists()) return false;
@@ -4438,30 +4542,40 @@ void MainWindow::onDetectDuplicates() {
         if (!raw) return;
 
         // Duplicate detection is only meaningful for user documents.
-        // Photos, screenshots and notes (png/jpg/md/txt…) naturally share
-        // bytes or tiny sizes and were pure noise here — the whitelist is
-        // deliberately limited to real document formats.
-        static const char* kDocTypes[] = {
-            "pdf", "doc", "docx", "xls", "xlsx",
-            "ppt", "pptx", "rtf", "csv"
-        };
+        // Photos, screenshots and notes naturally share bytes or tiny
+        // sizes and were pure noise here. v1.7.7: the list is derived
+        // from Constants::kDocumentExtensions — the same set that
+        // defines what may be indexed — so it can never drift again.
         QString typeList;
-        for (const char* t : kDocTypes) {
+        for (const QString& t : Constants::kDocumentExtensions) {
             if (!typeList.isEmpty()) typeList += QLatin1Char(',');
-            typeList += QString("'%1'").arg(QLatin1String(t));
+            typeList += QString("'%1'").arg(t.toLower());
+        }
+        QString docTypeHelp;
+        for (const QString& t : Constants::kDocumentExtensions) {
+            docTypeHelp += QStringLiteral(" .%1").arg(t.toLower());
         }
 
         sqlite3_stmt* s = nullptr;
         // Find document files that share a hash with at least one other
-        // file. Ordered by hash so duplicates appear grouped.
+        // DOCUMENT file. Ordered by hash so duplicates appear grouped.
+        // v1.7.7: the inner subquery previously counted hashes across
+        // ALL extensions, so a same-bytes image/archive could inflate a
+        // document's group count and keep it visible after its document
+        // partner was gone. Grouping is document-only now, matching the
+        // outer filter exactly. Two DISTINCT markers (%1 outer, %2
+        // inner subquery) keep the substitution unambiguous.
+        const QString innerSql = QString(
+            "SELECT hash FROM Files WHERE hash != '' "
+            "AND lower(extension) IN (%1) "
+            "GROUP BY hash HAVING COUNT(*) > 1;").arg(typeList);
         const QString sql = QString(
             "SELECT f.id, f.path, f.filename, f.extension, f.size, "
             "       f.modified_date, f.hash "
             "FROM Files f "
-            "WHERE f.hash != '' AND lower(f.extension) IN (%1) AND f.hash IN ("
-            "  SELECT hash FROM Files WHERE hash != '' "
-            "  GROUP BY hash HAVING COUNT(*) > 1"
-            ") ORDER BY f.hash, f.filename;").arg(typeList);
+            "WHERE f.hash != '' AND lower(f.extension) IN (%1) "
+            "AND f.hash IN (%2) "
+            "ORDER BY f.hash, f.filename;").arg(typeList, innerSql);
         sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr);
 
         QList<SearchHit> hits;
@@ -4607,6 +4721,38 @@ void MainWindow::onDetectDuplicates() {
         hits  = kept;
         hashes = keptHashes;
 
+        // v1.7.7: display-time re-verification. processEvents() above
+        // lets the user (or a sync client) move/delete files WHILE the
+        // walk runs — those files passed their exists-check seconds
+        // earlier. Re-verify and re-run the survivors-only grouping so
+        // a file whose partner vanished mid-walk can never render as a
+        // "pair" whose second file was moved or deleted.
+        {
+            QList<SearchHit> verified;
+            QStringList verifiedHashes;
+            verified.reserve(hits.size());
+            for (int i = 0; i < hits.size(); ++i) {
+                if (QFileInfo::exists(hits[i].path)) {
+                    verified.append(hits[i]);
+                    verifiedHashes.append(hashes[i]);
+                } else {
+                    ++droppedSingletons;   // keep the summary honest
+                }
+            }
+            QHash<QString, int> aliveSize;
+            for (const QString& hs : verifiedHashes) ++aliveSize[hs];
+            QList<SearchHit> paired;
+            QStringList pairedHashes;
+            for (int i = 0; i < verified.size(); ++i) {
+                if (aliveSize.value(verifiedHashes[i], 0) >= 2) {
+                    paired.append(verified[i]);
+                    pairedHashes.append(verifiedHashes[i]);
+                }
+            }
+            hits  = std::move(paired);
+            hashes = std::move(pairedHashes);
+        }
+
         // Regroup AFTER filtering so vanished files never count as groups.
         int groupCount = 0;
         QString lastHash;
@@ -4640,10 +4786,10 @@ void MainWindow::onDetectDuplicates() {
                         .arg(staleHashRows == 1 ? "y" : "ies")
                     : QStringLiteral(
                         "No duplicate documents found.\n\n"
-                        "Duplicate search covers documents only: "
-                        ".pdf .doc/.docx .xls/.xlsx .ppt/.pptx .rtf .csv\n\n"
+                        "Duplicate search covers documents only:%1\n\n"
                         "Make sure 'Compute file hashes' is enabled in "
-                        "Settings → Performance, then re-scan your folders."));
+                        "Settings → Performance, then re-scan your folders.")
+                        .arg(docTypeHelp));
             return;
         }
 

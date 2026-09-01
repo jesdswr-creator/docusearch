@@ -61,8 +61,13 @@ F5) to rescan immediately.
 
 | Category | Extensions |
 |----------|-----------|
-| Documents | PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, TXT, RTF, CSV, MD |
+| Documents | PDF, DOC/DOCX, XLS/XLSX/XLSM, PPT/PPTX |
 | Images (OCR) | JPG, PNG, TIFF, BMP, GIF, WebP |
+
+v1.7.5: notes and text formats (.md, .txt, .csv, .rtf, .log) and all
+other file types (installers, archives, media) are intentionally NOT
+indexed — search results contain only real documents and images, and
+the duplicate finder works on document formats only.
 
 ---
 

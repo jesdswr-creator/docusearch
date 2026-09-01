@@ -138,6 +138,13 @@ private slots:
     // those rows are only hidden from display instead). Returns the
     // number of rows actually removed.
     int purgeStaleRows(const QStringList& paths, const QString& context);
+    // v1.7.7: one-time startup cleanup — delete every Files row (plus
+    // SearchIndex/BgeEmbeddings/EmbeddingChunks) whose extension is not
+    // in Constants::kIndexableExtensions. Older versions indexed every
+    // file type they walked (md notes, installers, archives...); this
+    // makes "documents and images only" true immediately on first launch
+    // of 1.7.7. Returns the number of rows removed.
+    int purgeNonIndexableRows();
 
 private:
     // UI builders

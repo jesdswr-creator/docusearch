@@ -13,7 +13,7 @@ namespace Constants {
 
 // Application
 constexpr const char* kAppName        = "DocuSearch";
-constexpr const char* kAppVersion     = "1.7.6";  // v1.7.6: PDF preview use-after-free fixed (PDFium memory-buffer contract — the bytes now live with the document; flaky "error opening PDF" and garbled OCR/text gone); OCR auto-orients scans stored sideways (90/180/270 fallback via native PDFium rotation); duplicates: results list cleared when nothing found + stale-hash gate drops files whose content changed since scanning; theme wiring fixed (saved dark mode actually applies + toggle persists); splash matches the active theme (button-color accent). v1.7.5: AI fusion strictly additive; canonical duplicate identity; live edit indexing; PDF preview error overlay; splash animation under the event loop; real logo
+constexpr const char* kAppVersion     = "1.7.7";  // v1.7.7: ONE extension allowlist (kIndexableExtensions) now gates EVERY ingest path - hourly scan, FileWatcher, Add-Folder scan, full re-index - so .md/.txt/.csv/.rtf/.log and binary types never enter the index, and a one-time startup purge removes previously indexed non-documents; splash bar replaced by a smooth material sweep (no bounce stutter) with crossfaded captions and paced event pumps at every startup milestone; duplicates: document-only hash grouping + display-time existence re-verification (a file whose partner was moved/deleted can never render as a pair). v1.7.6: PDF preview use-after-free fixed (PDFium memory-buffer contract - the bytes now live with the document; flaky "error opening PDF" and garbled OCR/text gone); OCR auto-orients scans stored sideways (90/180/270 fallback via native PDFium rotation); duplicates: results list cleared when nothing found + stale-hash gate drops files whose content changed since scanning; theme wiring fixed (saved dark mode actually applies + toggle persists); splash matches the active theme (button-color accent). v1.7.5: AI fusion strictly additive; canonical duplicate identity; live edit indexing; PDF preview error overlay; splash animation under the event loop; real logo
 constexpr const char* kOrgName        = "DocuSearch";
 constexpr const char* kOrgDomain      = "docusearch.local";
 
@@ -53,13 +53,37 @@ constexpr int kThumbnailMaxSize        = 512;
 constexpr int kSearchResultSnippetLen  = 200;
 
 // Supported file extensions (lowercase, no dot)
+// v1.7.7: trimmed to formats the app can actually open, preview,
+// extract or OCR. .md/.txt/.csv/.log/.rtf and every unknown binary
+// type are deliberately NOT here - see kIndexableExtensions below,
+// which is the ONE allowlist every ingest path must consult.
 inline const QStringList kDocumentExtensions = {
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "md"
+    "pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx"
 };
 
 inline const QStringList kImageExtensions = {
     "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif", "webp"
 };
+
+// v1.7.7 - THE allowlist. Every ingest path (hourly reconciliation
+// scan, FileWatcher add/modify, Add-Folder quick scan, full re-index)
+// must gate on this, and the one-time startup purge deletes rows whose
+// extension is not in it. Result: search results and the "N indexed"
+// badge contain only real documents and images - no .md notes, no
+// installers, no archives, no OS junk.
+inline const QStringList kIndexableExtensions = {
+    "pdf", "doc", "docx", "xls", "xlsx", "xlsm", "ppt", "pptx",
+    "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif", "webp",
+};
+
+inline bool isIndexableExtension(const QString& ext) {
+    static const QSet<QString> set = [] {
+        QSet<QString> s;
+        for (const QString& e : kIndexableExtensions) s.insert(e.toLower());
+        return s;
+    }();
+    return set.contains(ext.toLower());
+}
 
 inline const QStringList kIgnoredExtensions = {
     "exe", "dll", "sys", "so", "dylib", "obj", "lib",

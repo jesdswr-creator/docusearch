@@ -56,6 +56,13 @@ void MetadataIndexer::scan(const QStringList& roots, const QStringList& excludes
             if (info.isHidden()) continue;
             if (info.isDir()) continue;
 
+            // v1.7.5: THE extension allowlist gate — this path used to
+            // upsert EVERY walked file (md notes, installers, archives),
+            // contradicting scanFolderFast's filter. One central
+            // allowlist now rules all ingest paths.
+            if (!Constants::isIndexableExtension(
+                    FileUtils::extensionOf(absPath))) continue;
+
             FileRecord r;
             r.path         = FileUtils::toNative(absPath);
             r.filename     = info.fileName();

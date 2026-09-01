@@ -13,8 +13,10 @@ QUICK START
 
 WHAT GETS INDEXED
 -----------------
-Documents and images: .pdf .doc .docx .xls .xlsx .xlsm .ppt .pptx
-.jpg .jpeg .png — plus .txt .csv .md .rtf filenames.
+Documents and images only: .pdf .doc .docx .xls .xlsx .xlsm .ppt
+.pptx .jpg .jpeg .png .tif .tiff .bmp .gif .webp. Notes and text
+formats (.md .txt .csv .rtf .log), installers, archives and media
+are intentionally not indexed.
 
 FOLDERS & THE INDEX
 -------------------

@@ -9,9 +9,29 @@
 // old asset's white border was visible on any background), and the
 // card renders crisp at every DPI.
 //
-// The animation: an indeterminate progress bar (sliding highlight)
-// plus a cycling status caption, so startup visibly "does something"
-// instead of freezing on a static image.
+// v1.7.7 — GLITCH FIX. The v1.7.4 bar bounced left-right with an
+// alpha dip at each end, and the event loop was only pumped at six
+// construction milestones, so the visible animation advanced in
+// irregular jump-cuts: freeze → jump → freeze. Users read that as a
+// glitch. Three changes:
+//
+//   1. The bar is now a MATERIAL-STYLE SWEEP: two chunks chase each
+//      other left→right with sine easing. No reversal, no bounce, no
+//      mid-bar alpha dip — the exact motion users expect from an
+//      indeterminate progress bar.
+//   2. Status captions CROSSFADE instead of hard-swapping.
+//   3. Both the sweep and the caption are derived from ELAPSED TIME
+//      (QElapsedTimer), so every repaint — even one forced by a pump
+//      halfway through a heavy constructor step — lands on the true,
+//      continuously-advancing frame. MainWindow pumps the event loop
+//      at EVERY startup milestone now, so the animation advances in
+//      paced steps instead of jump-cuts.
+//
+// v1.7.6: the splash is THEMED — the card, text and progress bar
+// derive from the same palette tokens as the main window, with the
+// progress chunk + magnifier rendered in the exact button color
+// (@primary@) of the active theme. Defaults below keep the classic
+// navy look when no theme is applied.
 //
 // Header-only, no Q_OBJECT needed (no signals/slots; the timer is
 // connected via lambdas inside the class).
@@ -28,16 +48,13 @@
 #include <QStringList>
 #include <QElapsedTimer>
 #include <cmath>
+#include <algorithm>
 
 namespace DocuSearch {
 
 class SplashOverlay : public QWidget {
 public:
-    // v1.7.6: the splash is now THEMED — the card, text and progress bar
-    // derive from the same palette tokens as the main window, with the
-    // progress chunk + magnifier rendered in the exact button color
-    // (@primary@) of the active theme. Defaults below keep the classic
-    // navy look when no theme is applied.
+    // v1.7.6: themed palette tokens (see main.cpp wiring).
     struct ThemeColors {
         QColor cardTop;
         QColor cardBottom;
@@ -56,20 +73,10 @@ public:
         setAttribute(Qt::WA_TranslucentBackground, true);
         setFixedSize(540, 340);
 
-        // v1.7.4 FIX — the splash previously looked FROZEN: MainWindow is
-        // constructed synchronously BEFORE app.exec() starts, so this 28 ms
-        // animation timer could not fire during the 1-3 s constructor run
-        // (timers only fire inside an event loop). The widget painted exactly
-        // one static frame, then main() closed the splash — the animation
-        // never ran at all.
-        //
-        // Two-part fix:
-        //  1. The animation is now TIME-BASED: paintEvent derives the bar
-        //     position and the caption index from a QElapsedTimer, so every
-        //     repaint — even one forced by an event pump halfway through the
-        //     constructor — shows the true, continuously-advancing state.
-        //  2. main()/MainWindow now pump the event loop at construction
-        //     milestones, which is what actually triggers the repaints.
+        // Repaint from the event loop at ~60 fps. The FRAME CONTENT is
+        // always derived from m_clock.elapsed() inside paintEvent, so a
+        // coalesced or delayed timer can never rewind or freeze the
+        // animation — it only means fewer intermediate frames.
         m_animTimer.setInterval(16);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
             update();   // repaint from the current elapsed time
@@ -124,7 +131,7 @@ protected:
                       c.x() + 24, c.y() + 24);
         p.drawLine(handle);
 
-        // ---- Title + subtitle ----
+        // ---- Title + subtitle (themed) ----
         p.setPen(m_colors.title);
         QFont title = font();
         title.setPixelSize(34);
@@ -143,53 +150,86 @@ protected:
                    Qt::AlignLeft | Qt::AlignVCenter,
                    "Offline Intelligent Document Search & OCR");
 
-        // ---- Indeterminate progress bar ----
+        // ---- Indeterminate progress bar: material-style sweep ----
         const QRectF slot(card.left() + 30, card.top() + 176,
                           card.width() - 60, 7);
         QPainterPath slotPath;
         slotPath.addRoundedRect(slot, 3.5, 3.5);
         p.fillPath(slotPath, m_colors.slot);
 
-        // Sliding highlight: a smooth chunk moving left-to-right,
-        // fading in/out at the edges (material-style determinate-less).
-        // v1.7.4: phase is derived from ELAPSED TIME, not from timer ticks —
-        // a tick-driven phase freezes whenever the event loop is busy
-        // (exactly what happens while MainWindow constructs).
-        const double phase = double(m_clock.elapsed()) * 0.0016;  // ~0.045/tick at 28 ms pace
-        const double travel = slot.width() - kChunk;
-        const double t = (std::sin(phase * 2.0) + 1.0) / 2.0;
-        double x = slot.left() + t * travel;
-        double alpha = 1.0;
-        // Soften near the ends so the bounce does not look mechanical.
-        const double edge = std::min(t, 1.0 - t) * 6.0;
-        alpha = std::min(1.0, std::max(0.25, edge));
-        const QRectF chunk(std::min(x, slot.right() - kChunk),
-                           slot.top(), kChunk, slot.height());
-        QPainterPath chunkPath;
-        chunkPath.addRoundedRect(chunk, 3.5, 3.5);
-        QColor chunkColor(m_colors.accent);   // the button color
-        chunkColor.setAlphaF(alpha);
-        p.fillPath(chunkPath, chunkColor);
+        // v1.7.7: two chunks chase each other across the slot. Each chunk
+        // owns 60% of the cycle, offset by 40%, so while one is easing
+        // out on the right the next is easing in from the left. Sine
+        // easing means smooth acceleration into and deceleration out of
+        // every sweep — nothing ever reverses direction or dips in
+        // opacity mid-bar, which is what made the old bounce look
+        // glitchy. Everything derives from elapsed time, so sparse
+        // repaints during startup still land on the correct frame.
+        constexpr double kPi    = 3.14159265358979323846;
+        const qint64  elapsedMs = m_clock.elapsed();
+        const double  cycleT    = 2400.0;                      // ms per cycle
+        const double  u         = std::fmod(
+            double(elapsedMs), cycleT) / cycleT;               // 0..1
+        constexpr double kChunkW = 96.0;
+        const double  travel    = slot.width() - kChunkW;
 
-        // ---- Cycling status caption ----
-        p.setPen(m_colors.caption);
-        QFont cap = font();
-        cap.setPixelSize(13);
-        p.setFont(cap);
-        // Caption cycles on elapsed time too (~1.5 s per line), so it keeps
-        // rotating even if repaints are sparse during startup.
-        const qint64 elapsedMs = m_clock.elapsed();
-        const int captionIndex = int((elapsedMs / 1500) % m_statuses.size());
-        p.drawText(QRectF(card.left() + 30, slot.bottom() + 12,
-                          card.width() - 60, 22),
-                   Qt::AlignLeft | Qt::AlignVCenter,
-                   m_statuses[captionIndex]);
+        auto sweepChunk = [&](double start, double span) {
+            // Chunk active for u in [start, start+span].
+            if (u < start || u >= start + span || travel <= 0.0) return;
+            const double a   = (u - start) / span;             // 0..1
+            const double pos = 0.5 - 0.5 * std::cos(kPi * a);  // easeInOutSine
+            // Fade in over the first 12% and out over the last 12% of
+            // the chunk's own window; fully opaque in between.
+            const double fadeIn  = std::clamp(a / 0.12, 0.0, 1.0);
+            const double fadeOut = std::clamp((1.0 - a) / 0.12, 0.0, 1.0);
+            const double alpha   = std::min(fadeIn, fadeOut);
+            if (alpha <= 0.0) return;
+
+            const QRectF chunk(slot.left() + pos * travel, slot.top(),
+                               kChunkW, slot.height());
+            QPainterPath chunkPath;
+            chunkPath.addRoundedRect(chunk, 3.5, 3.5);
+            QColor chunkColor(m_colors.accent);   // the button color
+            chunkColor.setAlphaF(alpha);
+            p.fillPath(chunkPath, chunkColor);
+        };
+        sweepChunk(0.00, 0.60);   // leading chunk
+        sweepChunk(0.40, 0.60);   // chasing chunk (classic material overlap)
+
+        // ---- Cycling status caption with crossfade (themed) ----
+        // v1.7.7: captions used to hard-swap, which read as a flash.
+        // Each line owns kCaptionMs; during the first kCaptionBlendMs of
+        // a line's window the PREVIOUS line is still drawn, fading out
+        // while the new one fades in — a true crossfade instead of a pop.
+        p.setFont([&] { QFont f = font(); f.setPixelSize(13); return f; }());
+        constexpr double kCaptionMs      = 2600.0;
+        constexpr double kCaptionBlendMs = 300.0;
+        const double  capU    = std::fmod(double(elapsedMs), kCaptionMs);
+        const int     n       = static_cast<int>(m_statuses.size());
+        const int     idx     = int(double(elapsedMs) / kCaptionMs) % n;
+        const int     prevIdx = (idx + n - 1) % n;
+
+        auto drawCaption = [&](int line, double alpha) {
+            if (alpha <= 0.0) return;
+            QColor c(m_colors.caption);
+            c.setAlphaF(alpha);
+            p.setPen(c);
+            p.drawText(QRectF(card.left() + 30, slot.bottom() + 12,
+                              card.width() - 60, 22),
+                       Qt::AlignLeft | Qt::AlignVCenter, m_statuses[line]);
+        };
+        if (capU < kCaptionBlendMs) {
+            const double t = capU / kCaptionBlendMs;   // 0..1 blend
+            drawCaption(prevIdx, 1.0 - t);
+            drawCaption(idx,     t);
+        } else {
+            drawCaption(idx, 1.0);
+        }
     }
 
 private:
     QTimer         m_animTimer;
-    QElapsedTimer  m_clock;        // v1.7.4: time-based animation source
-    static constexpr double kChunk = 72.0;
+    QElapsedTimer  m_clock;        // time-based animation source
     // v1.7.6 themed colors — defaults = the classic navy splash.
     ThemeColors m_colors = {
         QColor("#0f172a"),          // cardTop
