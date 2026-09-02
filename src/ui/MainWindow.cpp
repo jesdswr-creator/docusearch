@@ -366,6 +366,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onFileSelected);
     connect(resultsPane_, &ResultsPane::fileActivated,
             this, &MainWindow::onFileActivated);
+    // v1.7.13: "Delete duplicate copies" header action on duplicates
+    // results (armed by onDetectDuplicates, disarmed by setResults).
+    connect(resultsPane_, &ResultsPane::actionRequested,
+            this, &MainWindow::onDeleteDuplicateCopies);
 
     connect(previewPane_, &PreviewPane::openRequested,
             this, &MainWindow::onOpenOriginal);
@@ -5246,6 +5250,34 @@ void MainWindow::onExportCsv() {
 // happened to run. "No duplicates" now means the bytes really do
 // differ.
 // ============================================================
+// v1.7.13: ONE identity function for "which physical file is this?".
+// Used by the same-file collapse (pass 2) AND by the final guard before
+// display, so the two passes can never disagree. Covers the spellings
+// that used to slip through and make one physical file pair with
+// itself ("single file is showing as duplicates"):
+//   - canonical resolution (junctions, symlinks, mapped drives)
+//   - extended-length prefixes: \\\\?\D:\... and \\\\?\UNC\\server\\...
+//     (the UNC form used to become "UNC\\server\\..." after the prefix
+//     strip and never matched the plain \\\\server\\... spelling)
+//   - dot segments and mixed separators (cleanPath on the fallback)
+//   - Windows case-insensitivity
+static QString pathIdentityKey(const QString& p) {
+    QString key = QFileInfo(p).canonicalFilePath();
+    if (key.isEmpty()) key = QDir::cleanPath(p);
+#ifdef Q_OS_WIN
+    if (key.startsWith(QStringLiteral("\\\\?\\")) ||
+        key.startsWith(QStringLiteral("//?/"))) {
+        key.remove(0, 4);
+        if (key.startsWith(QStringLiteral("UNC")) && key.size() > 3 &&
+            (key.at(3) == QLatin1Char('\\') || key.at(3) == QLatin1Char('/')))
+            key = QStringLiteral("//") + key.mid(4);
+    }
+    key.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    key = key.toLower();
+#endif
+    return key;
+}
+
 void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
     // The hashing loop below pumps the event loop, so the user can
@@ -5355,27 +5387,14 @@ void MainWindow::onDetectDuplicates() {
         // never pass as a "group of two" with itself.
         int staleRows = 0;
         {
+            // v1.7.13: collapse now runs through pathIdentityKey(), so
+            // the extended-length prefixes, dot segments and separator
+            // spellings this pass used to miss cannot self-pair either.
             QSet<QString> seenPaths;
             QList<Cand> unique;
             unique.reserve(cands.size());
             for (const Cand& c : cands) {
-                QString key = QFileInfo(c.path).canonicalFilePath();
-                if (!key.isEmpty()) {
-                    // "\\?\D:\a.pdf" and "D:\a.pdf" are the same file
-                    // but canonicalize to different strings.
-#ifdef Q_OS_WIN
-                    if (key.startsWith(QStringLiteral("\\\\?\\")))
-                        key.remove(0, 4);
-#endif
-                } else {
-                    key = c.path;
-                    key.replace(QLatin1Char('\\'), QLatin1Char('/'));
-                }
-                // Windows paths are case-insensitive: two rows spelling
-                // one file with different case are the same file.
-#ifdef Q_OS_WIN
-                key = key.toLower();
-#endif
+                const QString key = pathIdentityKey(c.path);
                 if (seenPaths.contains(key)) { ++staleRows; continue; }
                 seenPaths.insert(key);
                 unique.append(c);
@@ -5436,11 +5455,15 @@ void MainWindow::onDetectDuplicates() {
             // mean "drop this file", which silently hid every freshly
             // copied duplicate.
             QString h;
+            // v1.7.13: a row with NO mtime is never trusted either —
+            // size alone cannot distinguish an edited file from an
+            // untouched one. The write-back below heals such rows on
+            // this very run, so the cost is one hashing pass, once.
             const bool storedIsFresh =
                 !c.storedHash.isEmpty() &&
+                c.rowMtime > 0 &&
                 liveSize[i] == c.size &&
-                (c.rowMtime <= 0 ||
-                 qAbs(liveMtime[i] - c.rowMtime) <= 2);
+                qAbs(liveMtime[i] - c.rowMtime) <= 2;
             if (storedIsFresh) {
                 h = c.storedHash;
             } else {
@@ -5450,15 +5473,22 @@ void MainWindow::onDetectDuplicates() {
                 h = FileUtils::sha256OfFile(c.path, 64 * 1024 * 1024);
                 if (h.isEmpty()) { ++unreadable; continue; }
                 ++hashedNow;
-                // Write it back: the next run is instant, and the
-                // rest of the app gets a valid fingerprint too.
+                // Write the whole fingerprint triple back — hash AND
+                // the live size/mtime it was computed from. Writing
+                // only the hash left drifted rows stale (the row still
+                // claimed the old size), so storedIsFresh stayed false
+                // and every run re-hashed the same files; the row also
+                // disagreed with itself for any future consumer.
                 sqlite3_stmt* u = nullptr;
                 if (sqlite3_prepare_v2(raw,
-                        "UPDATE Files SET hash = ?1 WHERE id = ?2;",
+                        "UPDATE Files SET hash = ?1, size = ?2, "
+                        "modified_date = ?3 WHERE id = ?4;",
                         -1, &u, nullptr) == SQLITE_OK) {
                     sqlite3_bind_text(u, 1, h.toUtf8().constData(), -1,
                                       SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(u, 2, c.id);
+                    sqlite3_bind_int64(u, 2, liveSize[i]);
+                    sqlite3_bind_int64(u, 3, liveMtime[i]);
+                    sqlite3_bind_int64(u, 4, c.id);
                     sqlite3_step(u);
                     sqlite3_finalize(u);
                 }
@@ -5517,17 +5547,30 @@ void MainWindow::onDetectDuplicates() {
         // runs. Re-verify and re-run the survivors-only grouping so a
         // file whose partner vanished mid-walk can never render as a
         // pair whose second file is gone.
+        // v1.7.13: the SAME identity check also runs here as a last
+        // line of defense — if two surviving rows still resolve to one
+        // physical file (a spelling canonicalization cannot unify),
+        // the shadow row is dropped and the recount below makes sure
+        // a group reduced to one file disappears instead of showing
+        // "a duplicate" that has no partner.
         {
             QList<SearchHit> verified;
             QStringList verifiedHashes;
             verified.reserve(hits.size());
+            QSet<QString> seenIdentity;
             for (int i = 0; i < hits.size(); ++i) {
-                if (QFileInfo::exists(hits[i].path)) {
-                    verified.append(hits[i]);
-                    verifiedHashes.append(hashes[i]);
-                } else {
+                if (!QFileInfo::exists(hits[i].path)) {
                     ++droppedSingletons;   // keep the summary honest
+                    continue;
                 }
+                const QString ident = pathIdentityKey(hits[i].path);
+                if (seenIdentity.contains(ident)) {
+                    ++staleRows;           // one file, two rows: shadow
+                    continue;
+                }
+                seenIdentity.insert(ident);
+                verified.append(hits[i]);
+                verifiedHashes.append(hashes[i]);
             }
             QHash<QString, int> aliveSize;
             for (const QString& hs : verifiedHashes) ++aliveSize[hs];
@@ -5575,6 +5618,12 @@ void MainWindow::onDetectDuplicates() {
             // PREVIOUS duplicate check can't stay on screen behind
             // the message box.
             resultsPane_->setResults({});
+            // v1.7.13: nothing to delete, and no stale caption/pill from
+            // an earlier run (or from search) may survive either.
+            dupResults_.clear();
+            dupKeys_.clear();
+            resultsPane_->setAction(QString());
+            resultsPane_->setAiSummary(QString());
 
             QString detail;
             if (cancelled) {
@@ -5634,6 +5683,18 @@ void MainWindow::onDetectDuplicates() {
         }
 
         resultsPane_->setResults(hits);
+        // v1.7.13: arm the cleanup action + remember what the pane is
+        // showing (the delete slot re-validates against disk anyway).
+        dupResults_ = hits;
+        dupKeys_    = hashes;
+        resultsPane_->setAction(
+            QStringLiteral("Delete duplicate copies..."));
+        // A cancelled check must not pass as complete: keep the note on
+        // screen as long as the results are (not an 8 s status toast).
+        resultsPane_->setAiSummary(cancelled
+            ? QStringLiteral("Check cancelled early - the list is "
+                             "partial; some files were never compared.")
+            : QString());
         statusBar()->showMessage(
             QString("Found %1 duplicate group%2 (%3 files)%4%5%6")
                 .arg(groupCount)
@@ -5657,6 +5718,109 @@ void MainWindow::onDetectDuplicates() {
     } catch (...) {
         statusBar()->showMessage("Duplicate detection failed.", 3000);
     }
+}
+
+// v1.7.13: "Delete duplicate copies" — cleanup for the duplicates
+// results. For every group with >= 2 files that still exist, the
+// NEWEST copy is kept and the rest go to the Recycle Bin (restorable,
+// unlike an unlink). Deleted rows are purged, stats refreshed, and
+// the duplicates check re-runs so the pane shows the truth after.
+// The list is re-validated against disk FIRST: files moved/deleted
+// since the check, and groups whose partner is gone, are skipped —
+// a group with one survivor is never touched at all.
+void MainWindow::onDeleteDuplicateCopies() {
+    if (dupResults_.isEmpty() || dupKeys_.size() != dupResults_.size())
+        return;
+
+    // Group only by members that still exist on disk.
+    QHash<QString, QList<int>> groups;
+    for (int i = 0; i < dupResults_.size(); ++i) {
+        if (!QFileInfo::exists(dupResults_[i].path)) continue;
+        groups[dupKeys_[i]].append(i);
+    }
+
+    QList<int> doomed;
+    qint64 reclaimBytes = 0;
+    int groupsActed = 0;
+    for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
+        const QList<int>& members = it.value();
+        if (members.size() < 2) continue;      // never the last copy
+        // Keep the NEWEST copy (highest live mtime; tie -> first).
+        int keep = members[0];
+        qint64 keepMtime = QFileInfo(dupResults_[keep].path)
+                               .lastModified().toSecsSinceEpoch();
+        for (int m = 1; m < members.size(); ++m) {
+            const qint64 mt = QFileInfo(dupResults_[members[m]].path)
+                                  .lastModified().toSecsSinceEpoch();
+            if (mt > keepMtime) { keep = members[m]; keepMtime = mt; }
+        }
+        for (int m : members) {
+            if (m == keep) continue;
+            reclaimBytes += QFileInfo(dupResults_[m].path).size();
+            doomed.append(m);
+        }
+        ++groupsActed;
+    }
+    if (doomed.isEmpty()) {
+        QMessageBox::information(this, "Delete duplicate copies",
+            "Nothing to delete: no group still has two or more files on "
+            "disk. Re-run Detect Duplicates to refresh the list.");
+        return;
+    }
+
+    const QString msg = QString(
+        "Move %1 duplicate cop%2 (%3) to the Recycle Bin?\n\n"
+        "The newest copy in each of the %4 group%5 is kept. "
+        "Recycled files can be restored from the Recycle Bin.")
+        .arg(doomed.size())
+        .arg(doomed.size() == 1 ? "y" : "ies")
+        .arg(Utils::formatFileSize(reclaimBytes))
+        .arg(groupsActed)
+        .arg(groupsActed == 1 ? "" : "s");
+    if (QMessageBox::question(this, "Delete duplicate copies", msg,
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes)
+        return;
+
+    int deleted = 0, failed = 0;
+    QStringList deletedPaths;
+    for (int idx : doomed) {
+        const QString p = dupResults_[idx].path;
+        // Re-check right before recycling: the confirm dialog pumped
+        // the event loop, the user may have acted in the meantime.
+        if (!QFileInfo::exists(p)) continue;
+        if (QFile::moveToTrash(p)) {
+            ++deleted;
+            deletedPaths.append(p);
+        } else {
+            ++failed;
+        }
+    }
+
+    if (!deletedPaths.isEmpty()) {
+        purgeStaleRows(deletedPaths, QStringLiteral("duplicates delete"));
+        updateIndexStats();
+    }
+
+    dupResults_.clear();
+    dupKeys_.clear();
+    resultsPane_->setAction(QString());
+
+    statusBar()->showMessage(
+        QString("%1 of %2 cop%3 moved to the Recycle Bin%4")
+            .arg(deleted)
+            .arg(doomed.size())
+            .arg(doomed.size() == 1 ? "y" : "ies")
+            .arg(failed > 0
+                ? QString("; %1 could not be recycled (missing, in use, "
+                          "or on a location without a Recycle Bin)")
+                      .arg(failed)
+                : QString()),
+        8000);
+
+    // Show the truth: re-run the check. Hashes were just written back,
+    // so the reuse path makes this fast.
+    onDetectDuplicates();
 }
 
 } // namespace DocuSearch

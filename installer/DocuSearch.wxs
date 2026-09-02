@@ -40,7 +40,7 @@
        installer is now versioned from the single source of truth, and
        the define below is only the fallback for local builds. -->
   <?ifndef ProductVersion ?>
-  <?define ProductVersion    = "1.7.12.0" ?>
+  <?define ProductVersion    = "1.7.13.0" ?>
   <?endif ?>
   <?define ProductUpgradeCode = "8F4E2D9A-1B6C-4E3F-9A2D-7C5B8E1F0A23" ?>
 

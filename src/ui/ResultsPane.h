@@ -30,6 +30,8 @@
 #include <QList>
 #include "../core/Types.h"
 
+class QPushButton;
+
 namespace DocuSearch {
 
 class ResultsPane : public QWidget {
@@ -48,6 +50,12 @@ public:
     // transient status-bar toast.
     void setAiSummary(const QString& text);
 
+    // v1.7.13: optional header action button (e.g. "Delete duplicate
+    // copies"). Hidden unless armed with a non-empty label; setResults()
+    // and clear() always disarm it, so a stale action can never attach
+    // to the wrong result set.
+    void setAction(const QString& label);
+
     qint64 selectedFileId() const;
     QString selectedPath() const;
 
@@ -56,6 +64,7 @@ public:
 signals:
     void fileSelected(qint64 fileId, const QString& path);
     void fileActivated(qint64 fileId, const QString& path);
+    void actionRequested();
 
 private slots:
     void onItemClicked(int row);
@@ -68,6 +77,7 @@ private:
     QLabel*      countLbl_   = nullptr;
     QLabel*      aiSummaryLbl_ = nullptr;
     QComboBox*   sortBox_    = nullptr;
+    QPushButton* actionBtn_  = nullptr;
     QList<SearchHit> current_;
 
     void populateItem(int row, const SearchHit& h);

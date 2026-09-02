@@ -111,6 +111,10 @@ private slots:
     void onAbout();
     void onExportCsv();
     void onDetectDuplicates();
+    // v1.7.13: "Delete duplicate copies" on the duplicates results —
+    // keeps the newest copy per group, moves the rest to the Recycle
+    // Bin, purges the deleted rows and re-runs the check.
+    void onDeleteDuplicateCopies();
     void onAddFolder();
     void onExtract();
     void onRefresh();
@@ -254,6 +258,13 @@ public:
     bool            aiBackfillRunning_   = false;  // batch embed in flight
     bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
     int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
+
+    // v1.7.13: the duplicates result set the pane is currently showing
+    // (dupKeys_ runs parallel to dupResults_), backing the "Delete
+    // duplicate copies" action. Cleared whenever the finder reports
+    // nothing or the pane is reused for search results.
+    QList<SearchHit> dupResults_;
+    QStringList      dupKeys_;
 
     // Scan SearchIndex for files with no BgeEmbeddings row and queue a
     // batch (capped) on the background BGE worker. Called when the BGE

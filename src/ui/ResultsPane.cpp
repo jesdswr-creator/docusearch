@@ -14,6 +14,7 @@
 #include <QListWidgetItem>
 #include <QApplication>
 #include <QPalette>
+#include <QPushButton>
 
 namespace DocuSearch {
 
@@ -102,6 +103,16 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
     hLay->addWidget(countLbl_);
     hLay->addStretch();
 
+    // v1.7.13: optional context action (armed by MainWindow after a
+    // duplicates check; hidden for every other result set).
+    actionBtn_ = new QPushButton(header);
+    actionBtn_->setObjectName("resultsActionBtn");
+    actionBtn_->setVisible(false);
+    actionBtn_->setCursor(Qt::PointingHandCursor);
+    hLay->addWidget(actionBtn_);
+    connect(actionBtn_, &QPushButton::clicked,
+            this, &ResultsPane::actionRequested);
+
     sortBox_ = new DropDownCombo(header);
     sortBox_->setObjectName("sortSelect");
     sortBox_->addItem("Sort: Relevance");
@@ -147,6 +158,7 @@ ResultsPane::ResultsPane(QWidget* parent) : QWidget(parent) {
 
 void ResultsPane::setResults(const QList<SearchHit>& hits) {
     list_->clear();
+    setAction(QString());   // a new result set never inherits an action
     current_ = hits;
     for (int i = 0; i < hits.size(); ++i) {
         populateItem(i, hits[i]);
@@ -184,6 +196,18 @@ void ResultsPane::clear() {
     current_.clear();
     countLbl_->setText("(0)");
     setAiSummary(QString());
+    setAction(QString());
+}
+
+void ResultsPane::setAction(const QString& label) {
+    if (!actionBtn_) return;
+    if (label.isEmpty()) {
+        actionBtn_->setText(QString());
+        actionBtn_->setVisible(false);
+    } else {
+        actionBtn_->setText(label);
+        actionBtn_->setVisible(true);
+    }
 }
 
 void ResultsPane::setAiSummary(const QString& text) {
