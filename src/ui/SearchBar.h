@@ -45,7 +45,6 @@ signals:
     void searchRequested(const QString& query);
     void savedSearchSelected(const QString& name);
     void addFolderRequested();
-    void refreshRequested();
     void extractRequested();
     void filtersRequested();
 

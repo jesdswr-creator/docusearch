@@ -121,7 +121,6 @@ struct AppSettings {
     QStringList indexedDrives;          // e.g., {"D:\\"}
     QStringList excludedFolders;        // e.g., {"D:\\Movies"}
     QStringList excludedExtensions;     // user-added
-    QStringList includedExtensions;     // optional override
     int         maxWorkerThreads        = 2;
     int         cpuTargetPct            = 30;
     int         cpuPauseThresholdPct    = 70;
@@ -132,8 +131,9 @@ struct AppSettings {
     bool        monitorFileChanges      = true;
     QString     tessdataPath;           // empty = use default
     QString     ocrLanguage             = "eng";
-    int         thumbnailSize           = 256;
-    QString     lastBackupPath;
+    // v1.7.11: dead fields removed (includedExtensions, thumbnailSize,
+    // lastBackupPath) - they were round-tripped by Config but read by
+    // nothing and shown in no UI.
     // v1.7.10: becomes true once the FIRST full extraction drain finished.
     // Until then extraction runs in "first-run" mode: bigger sessions and
     // fast re-arming, so a brand-new index fully extracts itself without

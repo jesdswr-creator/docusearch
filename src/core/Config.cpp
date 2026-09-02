@@ -43,7 +43,6 @@ AppSettings Config::load() const {
     s.indexedDrives          = settings_->value("indexedDrives").toStringList();
     s.excludedFolders        = settings_->value("excludedFolders").toStringList();
     s.excludedExtensions     = settings_->value("excludedExtensions").toStringList();
-    s.includedExtensions     = settings_->value("includedExtensions").toStringList();
     s.maxWorkerThreads       = settings_->value("maxWorkerThreads", s.maxWorkerThreads).toInt();
     s.cpuTargetPct           = settings_->value("cpuTargetPct", s.cpuTargetPct).toInt();
     s.cpuPauseThresholdPct   = settings_->value("cpuPauseThresholdPct", s.cpuPauseThresholdPct).toInt();
@@ -54,8 +53,6 @@ AppSettings Config::load() const {
     s.monitorFileChanges     = settings_->value("monitorFileChanges", s.monitorFileChanges).toBool();
     s.tessdataPath           = settings_->value("tessdataPath").toString();
     s.ocrLanguage            = settings_->value("ocrLanguage", s.ocrLanguage).toString();
-    s.thumbnailSize          = settings_->value("thumbnailSize", s.thumbnailSize).toInt();
-    s.lastBackupPath         = settings_->value("lastBackupPath").toString();
     s.firstRunDone           = settings_->value("firstRunDone", s.firstRunDone).toBool();
     return s;
 }
@@ -64,7 +61,6 @@ void Config::save(const AppSettings& s) {
     settings_->setValue("indexedDrives",        s.indexedDrives);
     settings_->setValue("excludedFolders",      s.excludedFolders);
     settings_->setValue("excludedExtensions",   s.excludedExtensions);
-    settings_->setValue("includedExtensions",   s.includedExtensions);
     settings_->setValue("maxWorkerThreads",     s.maxWorkerThreads);
     settings_->setValue("cpuTargetPct",         s.cpuTargetPct);
     settings_->setValue("cpuPauseThresholdPct", s.cpuPauseThresholdPct);
@@ -75,8 +71,6 @@ void Config::save(const AppSettings& s) {
     settings_->setValue("monitorFileChanges",   s.monitorFileChanges);
     settings_->setValue("tessdataPath",         s.tessdataPath);
     settings_->setValue("ocrLanguage",          s.ocrLanguage);
-    settings_->setValue("thumbnailSize",        s.thumbnailSize);
-    settings_->setValue("lastBackupPath",       s.lastBackupPath);
     settings_->setValue("firstRunDone",         s.firstRunDone);
     settings_->sync();
     emit settingsChanged(s);

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.10
+    VERSION 1.7.11
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -472,7 +472,9 @@ endif()
 
 # Install targets (for packaging)
 install(TARGETS DocuSearch RUNTIME DESTINATION bin)
-install(DIRECTORY resources/themes DESTINATION share/DocuSearch)
+# v1.7.11: resources/themes install rule removed - base.qss is compiled into
+# the qrc and read via :/themes/base.qss; dark.qss/light.qss were dead files
+# nothing loaded (deleted).
 
 # ============================================================
 # Tests (optional)

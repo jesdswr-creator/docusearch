@@ -354,8 +354,9 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onSavedSearchSelected);
     connect(searchBar_, &SearchBar::addFolderRequested,
             this, &MainWindow::onAddFolder);
-    connect(searchBar_, &SearchBar::refreshRequested,
-            this, &MainWindow::onRefresh);
+    // v1.7.11: SearchBar::refreshRequested removed - the refresh button no
+    // longer exists and F5 triggers onRefresh() directly; the connect was
+    // a dead wire on a signal nothing can ever emit.
     connect(searchBar_, &SearchBar::extractRequested,
             this, &MainWindow::onExtract);
     connect(searchBar_, &SearchBar::filtersRequested,
@@ -2732,6 +2733,11 @@ void MainWindow::autoScanIndexedFolders() {
                             nullptr) != SQLITE_OK) {
             return;
         }
+        // v1.7.11: the main connection sets busy_timeout (Database::open);
+        // this raw worker connection did not, so a concurrent UI-thread
+        // write could hand it SQLITE_BUSY and silently skip its work.
+        sqlite3_exec(workerDb, "PRAGMA busy_timeout = 5000;",
+                     nullptr, nullptr, nullptr);
 
         for (const auto& folder : folderList) {
             try {
@@ -4257,8 +4263,16 @@ void MainWindow::updateIndexStats() {
         // Sidebar status section
         qint64 dbSize = 0;
         {
-            QFile f(Config::instance().dbPath());
+            // v1.7.11: WAL mode keeps -wal/-shm siblings next to the db that
+            // can hold hundreds of MB mid-scan; a "Total size" that ignored
+            // them under-reported exactly when the index was busiest.
+            const QString dbPath = Config::instance().dbPath();
+            QFile f(dbPath);
             if (f.exists()) dbSize = f.size();
+            QFile wal(dbPath + QStringLiteral("-wal"));
+            if (wal.exists()) dbSize += wal.size();
+            QFile shm(dbPath + QStringLiteral("-shm"));
+            if (shm.exists()) dbSize += shm.size();
         }
         if (indexedInfoLbl_) {
             // "N indexed" counts documents actually indexed (content
