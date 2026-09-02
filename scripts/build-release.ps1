@@ -161,7 +161,14 @@ if ($RunTests) {
     Write-Host "[4/8] Skipping tests (pass -RunTests to enable)." -ForegroundColor DarkGray
 }
 
-# ---- 5. Portable ZIP (optional) -------------------------------------------
+# ---- 5. Bundle distribution docs + Portable ZIP (optional) ----------------
+# v1.7.11: every distribution (ZIP, MSI harvest, MSIX stage all read
+# $buildOutput) must carry the third-party notices (Qt LGPLv3 attribution
+# obligation) and the privacy policy — so copy them unconditionally.
+foreach ($doc in @("THIRD-PARTY-NOTICES.md", "PRIVACY.md", "HELP.md", "FAQ.md")) {
+    $srcDoc = Join-Path $projectRoot $doc
+    if (Test-Path $srcDoc) { Copy-Item $srcDoc $buildOutput -Force }
+}
 if ($Zip) {
     Write-Host ""
     Write-Host "[5/8] Creating portable ZIP..." -ForegroundColor Yellow
@@ -239,9 +246,9 @@ if ($MakeMsix) {
     # 7a. Build the MSIX assets (square logos + splash) from the master icon.
     $assetsDir = Join-Path $projectRoot "$BuildDir\msix\assets"
     if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
-    $iconScript = Join-Path $projectRoot "..\scripts\generate_icons.py"
-    # The script writes the master 256 PNG; here we generate the asset
-    # variants required by the AppxManifest.
+    # Generate the asset variants required by the AppxManifest from the
+    # master 256px PNG. (v1.7.11: removed a dead $iconScript variable
+    # that pointed at a nonexistent ..\scripts path.)
     $masterPng = Join-Path $projectRoot "resources\icons\DocuSearch-256.png"
     if (Test-Path $masterPng) {
         $assetSizes = @{
@@ -264,7 +271,14 @@ if ($MakeMsix) {
             $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
             $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
             $g.PixelOffsetMode   = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-            $g.DrawImage($src, 0, 0, $w, $h)
+            # v1.7.11: letterbox instead of stretch. The master icon is
+            # SQUARE; drawing it at 310x150 / 620x300 distorted it on the
+            # wide tile and the splash. Center a height-sized square on a
+            # transparent canvas instead.
+            $side = [Math]::Min($w, $h)
+            $x = [int](($w - $side) / 2)
+            $y = [int](($h - $side) / 2)
+            $g.DrawImage($src, $x, $y, $side, $side)
             $bmp.Save((Join-Path $assetsDir $entry.Key), [System.Drawing.Imaging.ImageFormat]::Png)
             $bmp.Dispose(); $src.Dispose(); $g.Dispose()
         }

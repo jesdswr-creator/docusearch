@@ -26,7 +26,6 @@
 #include "../backup/BackupManager.h"
 #include "../search/SearchEngine.h"
 #include "../search/QueryParser.h"
-#include "../indexer/Indexer.h"
 #include "../ocr/OcrWorkerPool.h"
 #include "../ocr/WindowsOcrEngine.h"
 #include "../monitoring/FileWatcher.h"
@@ -589,7 +588,9 @@ MainWindow::~MainWindow() {
     // Cancel any in-progress extraction so the timer callback doesn't
     // fire on a half-destroyed window.
     extractCancelFlag_.store(true);
-    if (indexer_) indexer_->stopIndexing();
+    // v1.7.11: join the BGE init worker — it captures `this` and uses
+    // bgeService_, which is about to be destroyed with the window.
+    if (bgeInitFuture_.isValid()) bgeInitFuture_.waitForFinished();
     if (ocrPool_) ocrPool_->shutdown();
     if (watcher_) watcher_->stop();
     if (db_)      db_->close();
@@ -605,13 +606,6 @@ void MainWindow::closeEvent(QCloseEvent* e) {
 
     saveSettings();
     if (autoScanTimer_) autoScanTimer_->stop();
-    if (indexer_ && indexer_->isRunning()) {
-        const auto rc = QMessageBox::question(
-            this, "Indexing in progress",
-            "Indexing is still running. Quit anyway?",
-            QMessageBox::Yes | QMessageBox::No);
-        if (rc != QMessageBox::Yes) { e->ignore(); return; }
-    }
     QMainWindow::closeEvent(e);
 }
 
@@ -2055,7 +2049,14 @@ void MainWindow::onSidebarClicked(int row) {
     } else if (page == "About") {
         onAbout();
     } else if (page == "Help") {
-        QMessageBox::information(this, "How to Search",
+        // v1.7.11: the quick-reference stays inline, but the full guide
+        // (HELP.md, bundled next to the exe by CI) is one click away —
+        // help content is maintained in ONE place instead of drifting
+        // between this dialog and the shipped docs.
+        QMessageBox box(this);
+        box.setWindowTitle("How to Search");
+        box.setTextFormat(Qt::RichText);
+        box.setText(
             "<h3>Search Syntax</h3>"
             "<table cellspacing='6'>"
             "<tr><td><b>gold bin</b></td><td>Files containing BOTH 'gold' AND 'bin'</td></tr>"
@@ -2070,6 +2071,18 @@ void MainWindow::onSidebarClicked(int row) {
             "<tr><td><b>date:2026</b></td><td>Files modified in 2026</td></tr>"
             "<tr><td><b>tag:Urgent</b></td><td>Files tagged 'Urgent'</td></tr>"
             "</table>");
+        box.addButton(QMessageBox::Ok);
+        const QString helpPath =
+            QCoreApplication::applicationDirPath() + "/HELP.md";
+        QPushButton* fullBtn = nullptr;
+        if (QFileInfo::exists(helpPath)) {
+            fullBtn = box.addButton("Open Full Guide",
+                                    QMessageBox::ActionRole);
+        }
+        box.exec();
+        if (fullBtn && box.clickedButton() == fullBtn) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(helpPath));
+        }
         // NOTE: no selection reset here — the QSignalBlocker above already
         // cleared the strip. The old setCurrentRow(0) re-fired the sidebar
         // slot through currentRowChanged and row 0 is "Duplicates", so
@@ -2658,8 +2671,7 @@ void MainWindow::autoScanIndexedFolders() {
     // extraction session or a full re-index was busy - with long runs that
     // made the scan "never happen". Retry shortly after instead of losing
     // the tick.
-    const bool busy = contentExtractionRunning_
-                      || (indexer_ && indexer_->isRunning());
+    const bool busy = contentExtractionRunning_;
     if (busy) {
         QTimer::singleShot(10 * 60 * 1000, this, [this]{
             autoScanIndexedFolders();
@@ -3080,7 +3092,7 @@ void MainWindow::requestAutoExtract() {
     // The startup/hourly scan walks the very files we would extract and
     // writes to its own DB connection. Rather than racing it, wait; its
     // finished handler wakes extraction when work exists anyway.
-    if (autoScanRunning_ || (indexer_ && indexer_->isRunning())) {
+    if (autoScanRunning_) {
         if (autoExtractRetryLeft_ > 0) {
             --autoExtractRetryLeft_;
             QTimer::singleShot(30 * 1000, this, [this]() {
@@ -3804,7 +3816,11 @@ void MainWindow::initializeSemanticSearch() {
         connect(bgeService_.get(), &BgeService::embeddingFinished,
                 this, &MainWindow::onBgeEmbeddingFinished);
 
-        QtConcurrent::run([this, dbPath, modelPath]() {
+        // v1.7.11 lifetime safety: keep the future — the lambda captures
+        // `this` and dereferences bgeService_, so ~MainWindow must join
+        // it before members are destroyed (exit during model load was a
+        // use-after-free window).
+        bgeInitFuture_ = QtConcurrent::run([this, dbPath, modelPath]() {
             const bool ok = bgeService_->initialize(dbPath, modelPath);
             if (!ok) {
                 // initialize() only emits ready() on success — surface the
@@ -4264,8 +4280,7 @@ void MainWindow::updateIndexStats() {
             // or extraction is actively running — a permanent partial bar
             // read as "my index is incomplete" (it was also the #1 support
             // question). At idle the badge is just "N indexed".
-            const bool busy = contentExtractionRunning_
-                || (indexer_ && indexer_->isRunning());
+            const bool busy = contentExtractionRunning_;
             int pct = total > 0 ? int((contentDone * 100) / total) : 0;
             indexedBar_->setValue(qMin(100, pct));
             indexedBar_->setVisible(busy);
@@ -4304,65 +4319,14 @@ void MainWindow::updateIndexStats() {
 }
 
 // ============================================================
-// Indexing (legacy slots - indexer disabled in this build)
+// Indexing progress display
 // ============================================================
-void MainWindow::onStartIndexing() {
-    if (!repo_ || !db_) return;
-    try {
-        if (!indexer_) {
-            QMessageBox::information(this, "Indexing Unavailable",
-                "The indexing subsystem is disabled in this build.\n\n"
-                "To add files to the search index, use the 'Add Folder' button.");
-            return;
-        }
-        if (settings_.indexedDrives.isEmpty()) {
-            QMessageBox::information(this, "No Drives Configured",
-                "Please add drives in Settings -> Indexing first.");
-            onOpenSettings();
-            return;
-        }
-        if (indexer_->isRunning()) {
-            statusBar()->showMessage("Indexing already running.");
-            return;
-        }
-        indexer_->startIndexing(settings_);
-    } catch (...) {
-        statusBar()->showMessage("Start indexing failed.", 3000);
-    }
-}
-
-void MainWindow::onStopIndexing() {
-    if (!repo_ || !db_) return;
-    try {
-        if (!indexer_) return;
-        indexer_->stopIndexing();
-        statusBar()->showMessage("Indexing stopped.");
-    } catch (...) {
-        statusBar()->showMessage("Stop indexing failed.", 3000);
-    }
-}
-
-void MainWindow::onPauseIndexing() {
-    if (!repo_ || !db_) return;
-    try {
-        if (!indexer_) return;
-        indexer_->pause();
-        statusBar()->showMessage("Indexing paused.");
-    } catch (...) {
-        statusBar()->showMessage("Pause indexing failed.", 3000);
-    }
-}
-
-void MainWindow::onResumeIndexing() {
-    if (!repo_ || !db_) return;
-    try {
-        if (!indexer_) return;
-        indexer_->resume();
-        statusBar()->showMessage("Indexing resumed.");
-    } catch (...) {
-        statusBar()->showMessage("Resume indexing failed.", 3000);
-    }
-}
+// v1.7.11: the legacy Indexer subsystem (never constructed since the
+// direct-scan pipeline replaced it) and its four dead slots
+// (onStart/Stop/Pause/ResumeIndexing) are DELETED. Scanning is done by
+// scanFolderFast/autoScanIndexedFolders; extraction by the timer loop
+// in onExtract; OCR by OcrWorkerPool. The progress widget below stays:
+// updateIndexStats() feeds it live counters.
 
 void MainWindow::onIndexingProgress(const DocuSearch::IndexingProgress& p) {
     try {

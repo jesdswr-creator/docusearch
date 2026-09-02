@@ -16,7 +16,9 @@
 #include <QString>
 #include <QVector>
 #include <QStringList>
+#include <QFuture>
 #include <memory>
+#include <atomic>
 
 namespace DocuSearch {
 
@@ -100,6 +102,15 @@ private:
     std::unique_ptr<BgeEmbeddingDb>     m_database;
     bool        m_initialized   = false;
     QString     m_statusMessage;
+
+    // v1.7.11 lifetime safety: the batch-embedding worker captures `this`,
+    // m_engine and m_database raw. If BgeService was destroyed mid-batch
+    // (app exit during "Embed All"), the worker used freed objects.
+    // The destructor now raises m_stopRequested (checked once per
+    // document, so the wait is bounded by ONE inference) and joins
+    // m_batchFuture before members are torn down.
+    QFuture<void>     m_batchFuture;
+    std::atomic<bool> m_stopRequested{false};
 };
 
 } // namespace DocuSearch

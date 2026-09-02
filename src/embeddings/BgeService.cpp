@@ -18,7 +18,11 @@ BgeService::BgeService(QObject* parent)
     : QObject(parent) {
 }
 
-BgeService::~BgeService() = default;
+BgeService::~BgeService() {
+    // v1.7.11: join the batch worker BEFORE m_engine/m_database die.
+    m_stopRequested.store(true);
+    if (m_batchFuture.isValid()) m_batchFuture.waitForFinished();
+}
 
 bool BgeService::initialize(const QString& dbPath, const QString& modelPath) {
     try {
@@ -275,6 +279,14 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
     auto* database = m_database.get();
     const int total = std::min(fileIds.size(), texts.size());
 
+    // v1.7.11: one batch at a time — a second overlapping batch would
+    // overwrite m_batchFuture (orphaning the running worker from the
+    // destructor's join) and race the first on the embeddings DB.
+    if (m_batchFuture.isValid() && m_batchFuture.isRunning()) {
+        emit embeddingFinished(0, 0);
+        return;
+    }
+
     // Run on Qt's global thread pool.
     auto* watcher = new QFutureWatcher<void>(this);
     auto future = QtConcurrent::run([this, watcher, engine, database,
@@ -287,6 +299,10 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
 
         int success = 0, fail = 0;
         for (int i = 0; i < total; ++i) {
+            // v1.7.11: bail out promptly when the service is being
+            // destroyed — this bounds the destructor's join to one
+            // in-flight inference.
+            if (m_stopRequested.load()) break;
             try {
                 const int fileId = fileIds[i];
                 // Phase 2: generate CHUNKED embeddings (one per ~1000-char
@@ -369,6 +385,7 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
             emit embeddingFinished(success, fail);
         }, Qt::QueuedConnection);
     });
+    m_batchFuture = future;
     watcher->setFuture(future);
     connect(watcher, &QFutureWatcher<void>::finished, watcher, &QObject::deleteLater);
 }

@@ -48,6 +48,10 @@
   <!-- ============================================================
        Package identity
        ============================================================ -->
+  <!-- STORE SUBMISSION: replace Name and Publisher below with the EXACT
+       values Partner Center assigns when you reserve the app name
+       (Product management -> Product identity). The placeholder values
+       here only work for local self-signed sideloading. -->
   <Identity
       Name="DocuSearch.DocuSearch"
       Publisher="CN=DocuSearch, O=DocuSearch, C=US"
@@ -86,10 +90,14 @@
        ============================================================ -->
   <!-- broadFileSystemAccess: REQUIRED for indexing D:\ / E:\ / F:\
        The user grants this in Settings → Privacy → File system. -->
+  <!-- broadFileSystemAccess and runFullTrust are RESTRICTED capabilities:
+       the Partner Center submission must justify them (indexing documents
+       across whole drives, Win32 desktop app). documentsLibrary was
+       removed in v1.7.11 - it is redundant next to broadFileSystemAccess
+       and only added reviewer scrutiny. -->
   <Capabilities>
     <rescap:Capability Name="broadFileSystemAccess" />
     <rescap:Capability Name="runFullTrust" />
-    <uap:Capability Name="documentsLibrary" />
   </Capabilities>
 
   <!-- ============================================================
@@ -177,18 +185,4 @@
     </Application>
   </Applications>
 
-  <!-- ============================================================
-       Package extensions
-       ============================================================ -->
-  <Extensions>
-    <!-- COM class registration if needed for shell integration -->
-    <com:Extension Category="windows.comServer">
-      <com:ComServer>
-        <com:SurrogateServer DisplayName="DocuSearch Shell Integration">
-          <com:Class Id="00000000-0000-0000-0000-000000000000"
-                      Path="DocuSearch.exe" />
-        </com:SurrogateServer>
-      </com:ComServer>
-    </com:Extension>
-  </Extensions>
 </Package>

@@ -228,11 +228,10 @@ set(APP_SOURCES
     # ocr
     src/ocr/WindowsOcrEngine.cpp
     src/ocr/OcrWorkerPool.cpp
-    # indexer
-    src/indexer/MetadataIndexer.cpp
-    src/indexer/ContentIndexer.cpp
+    # indexer (v1.7.11: legacy Indexer/ContentIndexer/MetadataIndexer
+    # deleted - the direct-scan pipeline in MainWindow replaced them.
+    # PriorityScheduler stays: standalone, unit-tested utility.)
     src/indexer/PriorityScheduler.cpp
-    src/indexer/Indexer.cpp
     # search
     src/search/QueryParser.cpp
     src/search/SearchEngine.cpp
@@ -295,10 +294,7 @@ set(APP_HEADERS
     src/documents/DocumentExtractorRegistry.h
     src/ocr/WindowsOcrEngine.h
     src/ocr/OcrWorkerPool.h
-    src/indexer/MetadataIndexer.h
-    src/indexer/ContentIndexer.h
     src/indexer/PriorityScheduler.h
-    src/indexer/Indexer.h
     src/search/QueryParser.h
     src/search/SearchEngine.h
     src/monitoring/FileWatcher.h

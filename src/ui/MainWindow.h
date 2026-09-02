@@ -24,6 +24,7 @@
 #include <QMainWindow>
 #include <QString>
 #include <QStringList>
+#include <QFuture>
 #include <memory>
 #include <atomic>
 
@@ -46,7 +47,6 @@ namespace DocuSearch {
 class Database;
 class FileRepository;
 class SearchEngine;
-class Indexer;
 class OcrWorkerPool;
 class FileWatcher;
 
@@ -88,10 +88,6 @@ private slots:
     void onBgeFailed();
     void onBgeEmbeddingProgress(int current, int total);
     void onBgeEmbeddingFinished(int success, int fail);
-    void onStartIndexing();
-    void onStopIndexing();
-    void onPauseIndexing();
-    void onResumeIndexing();
     void onIndexingProgress(const DocuSearch::IndexingProgress& p);
     void onPhaseChanged(const QString& phase);
     void onIndexingStarted();
@@ -209,7 +205,6 @@ public:
     std::unique_ptr<FileRepository> repo_;
     std::unique_ptr<SearchEngine>   search_;
     std::unique_ptr<OcrWorkerPool>  ocrPool_;
-    std::unique_ptr<Indexer>        indexer_;
     std::unique_ptr<FileWatcher>    watcher_;
     // Phase 9: Debounce file watcher events (merge add+modify within 500ms).
     QHash<QString, qint64> fileEventDebounce_;
@@ -251,6 +246,9 @@ public:
 
     // Semantic search subsystem (BGE + hybrid).
     std::unique_ptr<BgeService>        bgeService_;
+    // v1.7.11: future of the background BGE initialize() (captures
+    // `this`); joined in ~MainWindow before bgeService_ is destroyed.
+    QFuture<void>                      bgeInitFuture_;
     std::unique_ptr<HybridSearchEngine> hybridSearch_;
     bool            semanticEnabled_     = false;
     bool            aiBackfillRunning_   = false;  // batch embed in flight
