@@ -66,8 +66,18 @@ F5) to rescan immediately.
 
 v1.7.5: notes and text formats (.md, .txt, .csv, .rtf, .log) and all
 other file types (installers, archives, media) are intentionally NOT
-indexed — search results contain only real documents and images, and
-the duplicate finder works on document formats only.
+indexed — search results contain only real documents and images.
+The duplicate finder covers every type in the table above: identical
+scanned images (two copies of the same JPG/TIFF page) count as
+duplicates just like identical documents do.
+
+**Detect Duplicates** compares files by content, not by name, size or
+date. It first groups candidates by exact byte size (files of
+different sizes can never be identical), then fingerprints only those
+groups with SHA-256 — computing any fingerprint that is missing or
+out of date on the spot. That means a duplicate is found whether or
+not the file has been hashed by a previous scan, and "No duplicate
+files found" means the bytes really do differ.
 
 ---
 

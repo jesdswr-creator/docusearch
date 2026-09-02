@@ -227,8 +227,10 @@ PDFs. The file will be flagged as failed.
 2. Lower the CPU pause threshold (e.g., 50% instead of 70%).
 3. Index folders in smaller batches (don't add a 50,000-file folder
    all at once).
-4. Disable duplicate hash computation (Settings → Indexing → uncheck
-   "Compute SHA-256 hashes").
+4. Disable hashing during scanning (Settings → Performance → uncheck
+   "Compute file hashes during scanning"). This only makes **Detect
+   Duplicates** slower — it computes the fingerprints it needs itself,
+   so it still finds every duplicate.
 
 ### Q: DocuSearch is using too much memory.
 

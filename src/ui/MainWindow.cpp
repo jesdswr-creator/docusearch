@@ -5201,222 +5201,322 @@ void MainWindow::onExportCsv() {
     }
 }
 
+// ============================================================
+// Duplicate detection
+//
+// REWRITE. The finder used to be a pure database query:
+// it grouped on the `hash` column and simply believed whatever was
+// stored there. Three separate properties of that design made it
+// report "No duplicate files found." on indexes that were FULL of
+// duplicates:
+//
+//   (1) NO HASH = INVISIBLE. Rows whose hash column was empty could
+//       never group. Hashes are written by the scanners and by a
+//       bounded startup backfill (4000 rows/launch), so on any real
+//       index a large slice of rows is unhashed at any moment — and
+//       every one of them was silently dropped from the comparison.
+//       The user was told to "re-scan your folders", which only
+//       moves the backfill forward a little.
+//   (2) THE STALE-HASH GATE DELETED CANDIDATES. Any row whose size
+//       or mtime no longer matched the indexed values was *dropped*
+//       rather than re-hashed. Copying a file (which is exactly how
+//       duplicates come into existence) usually gives the copy a new
+//       mtime, so freshly created duplicates were the FIRST thing
+//       thrown away.
+//   (3) THE SETTINGS SWITCH COULD DISABLE IT ENTIRELY. With
+//       "Compute file hashes" off, nothing ever wrote a hash, so the
+//       finder had nothing to group and said "no duplicates" —
+//       while pointing at the very setting it needed.
+//
+// The finder now COMPUTES what it needs, on demand, at the moment
+// the user asks:
+//
+//   • Candidates are pre-grouped by FILE SIZE, which is free (it
+//     comes from the row) and is a perfect necessary condition:
+//     two files with different sizes can never be byte-identical.
+//     Sizes that occur only once are discarded without any I/O.
+//   • Only the survivors are fingerprinted, and a stored hash is
+//     reused ONLY when size + mtime still match the file on disk.
+//     Everything else — unhashed rows, stale rows, all rows when
+//     the Settings switch is off — is hashed live, right here.
+//   • Freshly computed hashes are written back to the index, so the
+//     next run is fast and the rest of the app benefits too.
+//
+// The result: the answer no longer depends on how much backfill has
+// happened to run. "No duplicates" now means the bytes really do
+// differ.
+// ============================================================
 void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
+    // The hashing loop below pumps the event loop, so the user can
+    // click Duplicates again (or the sidebar can re-enter this slot)
+    // while it is still running. Two concurrent runs would fight over
+    // the same results pane and hash the same files twice.
+    static bool running = false;
+    if (running) return;
+    running = true;
+    struct Guard {
+        bool& f;
+        ~Guard() { f = false; }
+    } guard{running};
     try {
-        // ── Batch query: get ALL duplicate file records in ONE SQL query ──
         sqlite3* raw = db_->raw();
         if (!raw) return;
 
-        // Duplicate detection is meaningful for everything the app
-        // indexes. v1.7.7 restricted it to documents to cut noise, but
-        // that also made it blind to the user's most common real
-        // duplicates — scanned images (jpg/png/tif) of the same page.
-        // Hash grouping is byte-exact, so identical images are genuine
-        // duplicates, not noise; the survivors-only + re-verification
-        // passes below already guard against phantom pairs.
-        // v1.7.10: group over kIndexableExtensions (documents + images).
+        // Duplicate detection covers everything the app indexes:
+        // documents AND images (identical scanned jpg/png/tif pairs
+        // are real duplicates, and are the most common kind users
+        // actually have).
         QString typeList;
+        QString docTypeHelp;
         for (const QString& t : Constants::kIndexableExtensions) {
             if (!typeList.isEmpty()) typeList += QLatin1Char(',');
             typeList += QString("'%1'").arg(t.toLower());
-        }
-        QString docTypeHelp;
-        for (const QString& t : Constants::kIndexableExtensions) {
             docTypeHelp += QStringLiteral(" .%1").arg(t.toLower());
         }
 
-        // v1.7.10: how many indexed files still have NO fingerprint?
-        // The duplicates finder can only group files it can fingerprint;
-        // saying "no duplicates" while hundreds of rows are unhashed is
-        // exactly the "saying no duplicate but it is not correct" report.
-        // Count them so the empty-result message can say WHY nothing
-        // was found and what will fix it.
-        int missingHashRows = 0;
-        {
-            sqlite3_stmt* mh = nullptr;
-            const QString mhSql = QString(
-                "SELECT COUNT(*) FROM Files WHERE (hash IS NULL OR hash = '') "
-                "AND lower(extension) IN (%1);").arg(typeList);
-            if (sqlite3_prepare_v2(raw, mhSql.toUtf8().constData(),
-                                   -1, &mh, nullptr) == SQLITE_OK) {
-                if (sqlite3_step(mh) == SQLITE_ROW)
-                    missingHashRows = sqlite3_column_int(mh, 0);
-                sqlite3_finalize(mh);
-            }
-        }
+        // ---- Pass 1: pull every indexable row (hashed or not) ----
+        // No `hash != ''` filter any more: an unhashed row is a
+        // perfectly good duplicate candidate, we just have to do the
+        // work ourselves below.
+        struct Cand {
+            qint64  id = 0;
+            QString path, filename, extension;
+            qint64  size = 0;
+            qint64  rowMtime = 0;
+            QString storedHash;
+        };
+        QList<Cand> cands;
 
         sqlite3_stmt* s = nullptr;
-        // Find document files that share a hash with at least one other
-        // DOCUMENT file. Ordered by hash so duplicates appear grouped.
-        // v1.7.7: the inner subquery previously counted hashes across
-        // ALL extensions, so a same-bytes image/archive could inflate a
-        // document's group count and keep it visible after its document
-        // partner was gone. Grouping is document-only now, matching the
-        // outer filter exactly. Two DISTINCT markers (%1 outer, %2
-        // inner subquery) keep the substitution unambiguous.
-        const QString innerSql = QString(
-            "SELECT hash FROM Files WHERE hash != '' "
-            "AND lower(extension) IN (%1) "
-            "GROUP BY hash HAVING COUNT(*) > 1;").arg(typeList);
         const QString sql = QString(
-            "SELECT f.id, f.path, f.filename, f.extension, f.size, "
-            "       f.modified_date, f.hash "
-            "FROM Files f "
-            "WHERE f.hash != '' AND lower(f.extension) IN (%1) "
-            "AND f.hash IN (%2) "
-            "ORDER BY f.hash, f.filename;").arg(typeList, innerSql);
-        sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1, &s, nullptr);
+            "SELECT id, path, filename, extension, size, "
+            "       modified_date, COALESCE(hash, '') "
+            "FROM Files WHERE lower(extension) IN (%1);").arg(typeList);
+        if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(),
+                               -1, &s, nullptr) != SQLITE_OK) {
+            statusBar()->showMessage("Duplicate detection failed.", 3000);
+            return;
+        }
 
-        QList<SearchHit> hits;
-        QStringList hashes;      // aligned with hits — used to regroup below
         int skippedMissing = 0;
-        int staleHashRows  = 0;  // v1.7.6: content changed since the scan
-        // v1.7.4: collected DURING the walk, purged AFTER finalize — never
-        // delete from the Files table while a SELECT on it is stepping.
+        // v1.7.4: collected DURING the walk, purged AFTER finalize —
+        // never delete from Files while a SELECT on it is stepping.
         QStringList stalePaths;
+        int scanned = 0;
 
         while (sqlite3_step(s) == SQLITE_ROW) {
-            SearchHit h;
-            h.fileId       = sqlite3_column_int64(s, 0);
-            const unsigned char* p  = sqlite3_column_text(s, 1);
-            const unsigned char* fn = sqlite3_column_text(s, 2);
-            const unsigned char* e  = sqlite3_column_text(s, 3);
-            h.path         = p  ? QString::fromUtf8(reinterpret_cast<const char*>(p))  : QString();
-            h.filename     = fn ? QString::fromUtf8(reinterpret_cast<const char*>(fn)) : QString();
-            h.extension    = e  ? QString::fromUtf8(reinterpret_cast<const char*>(e))  : QString();
-            h.size         = sqlite3_column_int64(s, 4);
-            h.modifiedDate = QDateTime::fromSecsSinceEpoch(sqlite3_column_int64(s, 5));
-            const unsigned char* hash = sqlite3_column_text(s, 6);
-            const QString currentHash =
-                hash ? QString::fromUtf8(reinterpret_cast<const char*>(hash)) : QString();
+            Cand c;
+            c.id = sqlite3_column_int64(s, 0);
+            auto col = [&](int i) {
+                const unsigned char* p = sqlite3_column_text(s, i);
+                return p ? QString::fromUtf8(
+                    reinterpret_cast<const char*>(p)) : QString();
+            };
+            c.path       = col(1);
+            c.filename   = col(2);
+            c.extension  = col(3);
+            c.size       = sqlite3_column_int64(s, 4);
+            c.rowMtime   = sqlite3_column_int64(s, 5);
+            c.storedHash = col(6);
 
-            // Index rows can outlive their files (deleted after scanning,
-            // or the file was MOVED and the old row was not yet pruned).
-            // A "duplicate" pointing at nothing helps nobody — skip it.
-            // v1.7.4: and when the drive is still reachable, the ghost row
-            // is deleted from the index afterwards, so the "other file of
-            // the same name (deleted or moved)" can never pair up again.
-            if (!QFile::exists(h.path)) {
+            // Index rows can outlive their files (deleted after
+            // scanning, or MOVED and the old row not yet pruned).
+            // A "duplicate" pointing at nothing helps nobody.
+            if (!QFileInfo::exists(c.path)) {
                 ++skippedMissing;
-                if (storageRootReachable(h.path)) stalePaths.append(h.path);
+                if (storageRootReachable(c.path)) stalePaths.append(c.path);
                 continue;
             }
+            cands.append(c);
 
-            // v1.7.6 STALE-HASH GATE: the stored hash describes the file
-            // as it was at scan time. If the content changed since (size
-            // or mtime moved), that hash no longer proves the file equals
-            // its "partner" — e.g. the user deleted the duplicate and a
-            // different file later appeared under the same name. Listing
-            // such rows produced false duplicate pairs and lone files
-            // whose twin was already deleted. Drop the row from the
-            // candidate set; the next scan refreshes its hash.
-            // (2 s mtime tolerance for FAT's coarse timestamps.)
-            {
-                const QFileInfo fi(h.path);
-                const qint64 nowSize  = fi.size();
-                const qint64 nowMtime = fi.lastModified().toSecsSinceEpoch();
-                const qint64 rowMtime = h.modifiedDate.toSecsSinceEpoch();
-                if (nowSize != h.size ||
-                    (rowMtime > 0 && qAbs(nowMtime - rowMtime) > 2)) {
-                    ++staleHashRows;
-                    continue;
-                }
-            }
-
-            hits.append(h);
-            hashes.append(currentHash);
-
-            // Process events periodically so the UI doesn't freeze when a
-            // large folder produces thousands of duplicate candidates.
-            if ((hits.size() + skippedMissing) % 400 == 0)
+            if ((++scanned % 500) == 0) {
+                statusBar()->showMessage(
+                    QString("Checking for duplicates... %1 files")
+                        .arg(scanned));
                 QApplication::processEvents();
+            }
         }
         sqlite3_finalize(s);
 
-        // v1.7.4: purge the ghost rows gathered above (drive reachable = a
-        // genuine deletion/move; offline roots are left untouched).
-        if (!stalePaths.isEmpty()) {
+        // v1.7.4: purge the ghost rows gathered above (drive reachable
+        // = a genuine deletion/move; offline roots are left untouched).
+        if (!stalePaths.isEmpty())
             purgeStaleRows(stalePaths, QStringLiteral("duplicates"));
-        }
 
-        // Stale index rows: the SAME physical file can sit in the Files
-        // table more than once — after aggressive re-scans, or under two
-        // spellings of the same path. One physical file must never pass
-        // as a "group of two" with itself — a unique document then
-        // appeared in the duplicate list as its own pair (reported as
-        // "single files are also listing"). Dedupe on the identity key
-        // BELOW BEFORE the survivors-only pass so every physical file is
-        // counted exactly once.
-        //
-        // v1.7.5: the key is the CANONICAL path (QFileInfo::canonicalFilePath),
-        // not a case-folded string. Case folding alone still pairs a file
-        // with itself when two rows spell the same path differently:
-        //   • mixed separators        D:\Docs\a.pdf  vs  D:/Docs/a.pdf
-        //   • dot segments            D:\Docs\a.pdf  vs  D:\Docs\.\a.pdf
-        //   • junctions / symlinks    D:\Real\a.pdf  vs  D:\Link\a.pdf
-        //   • overlapping roots       D:\Docs\a.pdf  vs  D:\Docs\Sub\a.pdf
-        //     (the same folder added twice: root AND a child folder)
-        // Canonicalization resolves all four. When it fails (drive just
-        // unplugged), fall back to a normalized raw path: separators
-        // folded to '/', case folded on Windows.
-        QSet<QString> seenPaths;
-        QList<SearchHit> uniqueHits;
-        QStringList uniqueHashes;
+        // ---- Pass 2: collapse rows that are the SAME physical file ----
+        // The same file can sit in Files more than once — after
+        // aggressive re-scans, or under two spellings of one path:
+        //   • mixed separators   D:\Docs\a.pdf  vs  D:/Docs/a.pdf
+        //   • dot segments       D:\Docs\a.pdf  vs  D:\Docs\.\a.pdf
+        //   • junctions/symlinks D:\Real\a.pdf  vs  D:\Link\a.pdf
+        //   • overlapping roots  (a folder added as root AND as child)
+        // Canonicalization resolves all four. One physical file must
+        // never pass as a "group of two" with itself.
         int staleRows = 0;
-        for (int i = 0; i < hits.size(); ++i) {
-            QString key = QFileInfo(hits[i].path).canonicalFilePath();
-            if (!key.isEmpty()) {
-                // Long-path spellings: "\\?\D:\Docs\a.pdf" and
-                // "D:\Docs\a.pdf" point at the SAME physical file but
-                // canonicalize to different strings. Strip the verbatim
-                // prefix so both collapse onto one identity.
+        {
+            QSet<QString> seenPaths;
+            QList<Cand> unique;
+            unique.reserve(cands.size());
+            for (const Cand& c : cands) {
+                QString key = QFileInfo(c.path).canonicalFilePath();
+                if (!key.isEmpty()) {
+                    // "\\?\D:\a.pdf" and "D:\a.pdf" are the same file
+                    // but canonicalize to different strings.
 #ifdef Q_OS_WIN
-                if (key.startsWith(QStringLiteral("\\\\?\\"))) {
-                    key.remove(0, 4);
-                }
+                    if (key.startsWith(QStringLiteral("\\\\?\\")))
+                        key.remove(0, 4);
 #endif
-            } else {
-                key = hits[i].path;
-                key.replace(QLatin1Char('\\'), QLatin1Char('/'));
+                } else {
+                    key = c.path;
+                    key.replace(QLatin1Char('\\'), QLatin1Char('/'));
+                }
+                // Windows paths are case-insensitive: two rows spelling
+                // one file with different case are the same file.
 #ifdef Q_OS_WIN
                 key = key.toLower();
 #endif
+                if (seenPaths.contains(key)) { ++staleRows; continue; }
+                seenPaths.insert(key);
+                unique.append(c);
             }
-            if (seenPaths.contains(key)) { ++staleRows; continue; }
-            seenPaths.insert(key);
-            uniqueHits.append(hits[i]);
-            uniqueHashes.append(hashes[i]);
+            cands = std::move(unique);
         }
-        hits  = std::move(uniqueHits);
-        hashes = std::move(uniqueHashes);
 
-        // Survivors-only grouping. When the OTHER copy of a pair was
-        // deleted on disk, its lone survivor used to be listed as a
-        // "duplicate" of a file that no longer exists ("single files are
-        // also listing"). A group only qualifies if >= 2 files SURVIVED.
-        QHash<QString, int> groupSize;
-        for (const QString& hs : hashes) ++groupSize[hs];
-        QList<SearchHit> kept;
-        QStringList keptHashes;
-        int droppedSingletons = 0;
-        for (int i = 0; i < hits.size(); ++i) {
-            if (groupSize.value(hashes[i], 0) >= 2) {
-                kept.append(hits[i]);
-                keptHashes.append(hashes[i]);
+        // ---- Pass 3: size pre-grouping (free, and exact) ----
+        // Two files of different sizes cannot be byte-identical, so a
+        // size that occurs exactly once needs no I/O at all. On a
+        // typical index this removes 90 %+ of the work, which is what
+        // makes live hashing affordable.
+        // Use the CURRENT on-disk size, not the indexed one: a row
+        // whose file changed since scanning must still be grouped
+        // (previously such rows were dropped outright).
+        QHash<qint64, int> sizeCount;
+        QList<qint64> liveSize;
+        QList<qint64> liveMtime;
+        liveSize.reserve(cands.size());
+        liveMtime.reserve(cands.size());
+        for (const Cand& c : cands) {
+            const QFileInfo fi(c.path);
+            const qint64 sz = fi.size();
+            liveSize.append(sz);
+            liveMtime.append(fi.lastModified().toSecsSinceEpoch());
+            ++sizeCount[sz];
+        }
+
+        // ---- Pass 4: fingerprint the survivors ----
+        QList<SearchHit> hits;
+        QStringList hashes;
+        int hashedNow = 0, unreadable = 0;
+
+        QList<int> toHash;
+        for (int i = 0; i < cands.size(); ++i)
+            if (sizeCount.value(liveSize[i], 0) >= 2) toHash.append(i);
+
+        // Range must never be 0..0 — that is QProgressDialog's "busy"
+        // mode, which shows a spinner forever for a job with nothing
+        // to do.
+        QProgressDialog prog(
+            QStringLiteral("Comparing file contents..."),
+            QStringLiteral("Cancel"), 0,
+            qMax(1, static_cast<int>(toHash.size())), this);
+        prog.setWindowTitle(QStringLiteral("Duplicates"));
+        prog.setWindowModality(Qt::WindowModal);
+        // Don't flash a dialog for a job that finishes instantly.
+        prog.setMinimumDuration(400);
+        bool cancelled = false;
+
+        for (int n = 0; n < toHash.size(); ++n) {
+            const int i = toHash[n];
+            const Cand& c = cands[i];
+
+            // Reuse the stored fingerprint ONLY if it still describes
+            // the file on disk (2 s mtime tolerance for FAT's coarse
+            // timestamps). Otherwise re-hash — a stale hash used to
+            // mean "drop this file", which silently hid every freshly
+            // copied duplicate.
+            QString h;
+            const bool storedIsFresh =
+                !c.storedHash.isEmpty() &&
+                liveSize[i] == c.size &&
+                (c.rowMtime <= 0 ||
+                 qAbs(liveMtime[i] - c.rowMtime) <= 2);
+            if (storedIsFresh) {
+                h = c.storedHash;
             } else {
-                ++droppedSingletons;
+                // Same 64 MB cap as every other hashing path, so a
+                // fingerprint computed here is comparable with one
+                // written by the scanners.
+                h = FileUtils::sha256OfFile(c.path, 64 * 1024 * 1024);
+                if (h.isEmpty()) { ++unreadable; continue; }
+                ++hashedNow;
+                // Write it back: the next run is instant, and the
+                // rest of the app gets a valid fingerprint too.
+                sqlite3_stmt* u = nullptr;
+                if (sqlite3_prepare_v2(raw,
+                        "UPDATE Files SET hash = ?1 WHERE id = ?2;",
+                        -1, &u, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(u, 1, h.toUtf8().constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(u, 2, c.id);
+                    sqlite3_step(u);
+                    sqlite3_finalize(u);
+                }
+            }
+
+            SearchHit sh;
+            sh.fileId       = c.id;
+            sh.path         = c.path;
+            sh.filename     = c.filename;
+            sh.extension    = c.extension;
+            sh.size         = liveSize[i];
+            sh.modifiedDate = QDateTime::fromSecsSinceEpoch(liveMtime[i]);
+            hits.append(sh);
+            // Group key = exact size + fingerprint. The fingerprint is
+            // capped at 64 MB (same cap every hashing path uses), so
+            // two DIFFERENT files larger than the cap that happen to
+            // share their first 64 MB — e.g. two long videos-of-scans
+            // exported from the same tool, or two PDFs with identical
+            // front matter — would otherwise collide into a false
+            // "duplicate". Qualifying the key with the byte-exact size
+            // makes that impossible without re-reading whole files.
+            hashes.append(QStringLiteral("%1:%2")
+                              .arg(liveSize[i]).arg(h));
+
+            if ((n % 16) == 0) {
+                prog.setValue(n);
+                QApplication::processEvents();
+                if (prog.wasCanceled()) { cancelled = true; break; }
             }
         }
-        hits  = kept;
-        hashes = keptHashes;
+        prog.setValue(prog.maximum());   // closes the dialog
 
-        // v1.7.7: display-time re-verification. processEvents() above
-        // lets the user (or a sync client) move/delete files WHILE the
-        // walk runs — those files passed their exists-check seconds
-        // earlier. Re-verify and re-run the survivors-only grouping so
-        // a file whose partner vanished mid-walk can never render as a
-        // "pair" whose second file was moved or deleted.
+        // ---- Pass 5: keep only hashes with >= 2 SURVIVING files ----
+        // A lone file whose partner was deleted must never render as
+        // a "duplicate" of something that no longer exists.
+        int droppedSingletons = 0;
+        {
+            QHash<QString, int> groupSize;
+            for (const QString& hs : hashes) ++groupSize[hs];
+            QList<SearchHit> kept;
+            QStringList keptHashes;
+            for (int i = 0; i < hits.size(); ++i) {
+                if (groupSize.value(hashes[i], 0) >= 2) {
+                    kept.append(hits[i]);
+                    keptHashes.append(hashes[i]);
+                } else {
+                    ++droppedSingletons;
+                }
+            }
+            hits   = std::move(kept);
+            hashes = std::move(keptHashes);
+        }
+
+        // Display-time re-verification: processEvents() above lets the
+        // user (or a sync client) move/delete files WHILE the walk
+        // runs. Re-verify and re-run the survivors-only grouping so a
+        // file whose partner vanished mid-walk can never render as a
+        // pair whose second file is gone.
         {
             QList<SearchHit> verified;
             QStringList verifiedHashes;
@@ -5439,11 +5539,31 @@ void MainWindow::onDetectDuplicates() {
                     pairedHashes.append(verifiedHashes[i]);
                 }
             }
-            hits  = std::move(paired);
+            hits   = std::move(paired);
             hashes = std::move(pairedHashes);
         }
 
-        // Regroup AFTER filtering so vanished files never count as groups.
+        // Order the output so members of a group sit together.
+        {
+            QList<int> idx;
+            idx.reserve(hits.size());
+            for (int i = 0; i < hits.size(); ++i) idx.append(i);
+            std::sort(idx.begin(), idx.end(), [&](int a, int b) {
+                if (hashes[a] != hashes[b]) return hashes[a] < hashes[b];
+                return hits[a].filename.localeAwareCompare(
+                           hits[b].filename) < 0;
+            });
+            QList<SearchHit> sortedHits;
+            QStringList sortedHashes;
+            sortedHits.reserve(hits.size());
+            for (const int i : idx) {
+                sortedHits.append(hits[i]);
+                sortedHashes.append(hashes[i]);
+            }
+            hits   = std::move(sortedHits);
+            hashes = std::move(sortedHashes);
+        }
+
         int groupCount = 0;
         QString lastHash;
         for (const QString& hs : hashes) {
@@ -5451,79 +5571,86 @@ void MainWindow::onDetectDuplicates() {
         }
 
         if (hits.isEmpty()) {
-            // v1.7.6: empty the results list too. Previously the listing
-            // from the PREVIOUS duplicate check stayed on screen after the
-            // message box — so a pair whose duplicate the user had just
-            // deleted kept showing its lone survivor ("duplicate file
-            // still returns a single file").
+            // Empty the results list too, so the listing from a
+            // PREVIOUS duplicate check can't stay on screen behind
+            // the message box.
             resultsPane_->setResults({});
-            // v1.7.10: the bare "No duplicate documents found" was being
-            // reported on indexes that DID hold duplicates — the rows
-            // just had no hash yet (Add-Folder scans never wrote one,
-            // backfill is incremental). Tell the user honestly what the
-            // finder had to work with.
-            QString hashNote;
-            if (missingHashRows > 0) {
-                hashNote = QStringLiteral(
-                    "\n\n%1 indexed file%2 not have a content "
-                    "fingerprint yet, so they cannot be checked for "
-                    "duplication. Fingerprints are computed automatically "
-                    "— re-scan your folders (or restart the app) and run "
-                    "Detect Duplicates again.")
-                    .arg(missingHashRows)
-                    .arg(missingHashRows == 1 ? QStringLiteral(" does")
-                                              : QStringLiteral("s do"));
+
+            QString detail;
+            if (cancelled) {
+                detail = QStringLiteral(
+                    "The check was cancelled before it finished, so "
+                    "some files were never compared.");
+            } else {
+                // Every comparable file WAS compared byte-for-byte
+                // this time — say so plainly instead of blaming a
+                // setting the finder no longer depends on.
+                detail = QString(
+                    "%1 indexed file%2 compared by content"
+                    "%3.\n\nDuplicate search covers documents and "
+                    "images:%4")
+                    .arg(cands.size())
+                    .arg(cands.size() == 1 ? " was" : "s were")
+                    .arg(hashedNow > 0
+                        ? QString(" (%1 fingerprint%2 computed now)")
+                            .arg(hashedNow)
+                            .arg(hashedNow == 1 ? "" : "s")
+                        : QString())
+                    .arg(docTypeHelp);
             }
+            QStringList notes;
+            if (skippedMissing > 0)
+                notes << QString("%1 index entr%2 pointed at files that "
+                                 "no longer exist")
+                             .arg(skippedMissing)
+                             .arg(skippedMissing == 1 ? "y" : "ies");
+            if (staleRows > 0)
+                notes << QString("%1 duplicate index row%2 for the same "
+                                 "physical file %3 collapsed")
+                             .arg(staleRows)
+                             .arg(staleRows == 1 ? "" : "s")
+                             .arg(staleRows == 1 ? "was" : "were");
+            if (droppedSingletons > 0)
+                notes << QString("%1 file%2 lost its duplicate partner "
+                                 "during the check")
+                             .arg(droppedSingletons)
+                             .arg(droppedSingletons == 1 ? "" : "s");
+            if (unreadable > 0)
+                notes << QString("%1 file%2 could not be read")
+                             .arg(unreadable)
+                             .arg(unreadable == 1 ? "" : "s");
+
             QMessageBox::information(this, "Duplicates",
-                (skippedMissing > 0 || droppedSingletons > 0 ||
-                 staleRows > 0 || staleHashRows > 0)
-                    ? QStringLiteral(
-                        "No duplicate files found.\n\n"
-                        "%1 file%2 whose duplicate partner was deleted, "
-                        "%3 stale index entr%4, %5 duplicate row%6 "
-                        "for the same file and %7 entr%8 whose content "
-                        "changed since scanning were excluded.%9")
-                        .arg(droppedSingletons)
-                        .arg(droppedSingletons == 1 ? "y" : "ies")
-                        .arg(skippedMissing)
-                        .arg(skippedMissing == 1 ? "y" : "ies")
-                        .arg(staleRows)
-                        .arg(staleRows == 1 ? "" : "s")
-                        .arg(staleHashRows)
-                        .arg(staleHashRows == 1 ? "y" : "ies")
-                        .arg(hashNote)
-                    : QStringLiteral(
-                        "No duplicate files found.\n\n"
-                        "Duplicate search covers documents and images:%1\n\n"
-                        "Make sure 'Compute file hashes' is enabled in "
-                        "Settings → Performance, then re-scan your "
-                        "folders.%2")
-                        .arg(docTypeHelp)
-                        .arg(hashNote));
+                QString("No duplicate files found.\n\n%1%2")
+                    .arg(detail)
+                    .arg(notes.isEmpty()
+                        ? QString()
+                        : QStringLiteral("\n\n") + notes.join(", ")
+                              + QStringLiteral(".")));
+            statusBar()->showMessage(
+                cancelled ? "Duplicate check cancelled."
+                          : "No duplicate files found.", 5000);
             return;
         }
 
         resultsPane_->setResults(hits);
         statusBar()->showMessage(
-            QString("Found %1 duplicate groups (%2 files)%3%4%5")
-                .arg(groupCount).arg(hits.size())
-                .arg(droppedSingletons > 0
-                    ? QString(
-                        "; %1 lone file%2 (deleted partners) excluded")
-                        .arg(droppedSingletons)
-                        .arg(droppedSingletons == 1 ? "" : "s")
+            QString("Found %1 duplicate group%2 (%3 files)%4%5%6")
+                .arg(groupCount)
+                .arg(groupCount == 1 ? "" : "s")
+                .arg(hits.size())
+                .arg(hashedNow > 0
+                    ? QString("; %1 fingerprint%2 computed now")
+                        .arg(hashedNow).arg(hashedNow == 1 ? "" : "s")
                     : QString())
                 .arg(staleRows > 0
-                    ? QString("; %1 duplicate row%2 for the same file excluded")
-                        .arg(staleRows)
-                        .arg(staleRows == 1 ? "" : "s")
+                    ? QString("; %1 duplicate index row%2 collapsed")
+                        .arg(staleRows).arg(staleRows == 1 ? "" : "s")
                     : QString())
-                .arg(staleHashRows > 0
-                    ? QString("; %1 stale hash%2 (content changed) excluded")
-                        .arg(staleHashRows)
-                        .arg(staleHashRows == 1 ? "" : "es")
-                    : QString()),
+                .arg(cancelled ? QStringLiteral("; check cancelled early")
+                               : QString()),
             8000);
+        if (hashedNow > 0) updateIndexStats();
     } catch (const std::exception& e) {
         DS_ERROR("Duplicates", QString("Failed: %1").arg(e.what()));
         statusBar()->showMessage("Duplicate detection failed.", 3000);

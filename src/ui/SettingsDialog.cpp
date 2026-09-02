@@ -193,7 +193,21 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     lazyOcrCheck_ = new QCheckBox("Run OCR during re-indexing (not at search time)", this);
     lazyOcrCheck_->setChecked(current_.lazyOcrEnabled);
     lazyOcrCheck_->setVisible(false);
-    hashFilesCheck_ = new QCheckBox("Compute file hashes (for duplicate detection)", this);
+    hashFilesCheck_ = new QCheckBox(
+        "Compute file hashes during scanning (speeds up duplicate detection)",
+        this);
+    // This is a PRE-COMPUTE switch, not a feature switch.
+    // Detect Duplicates now fingerprints its candidates itself when a
+    // stored hash is missing or out of date, so turning this off only
+    // makes that check slower - it can no longer make it come back
+    // empty. The old wording ("for duplicate detection") sent users
+    // hunting for a setting that was never the reason duplicates were
+    // being missed.
+    hashFilesCheck_->setToolTip(
+        "Fingerprints files while scanning so Detect Duplicates is "
+        "instant.\nTurning this off only makes duplicate detection "
+        "slower - it still\ncompares file contents itself and will "
+        "still find every duplicate.");
     hashFilesCheck_->setChecked(current_.hashLargeFiles);
     monitorCheck_ = new QCheckBox("Monitor indexed drives for live changes", this);
     monitorCheck_->setChecked(current_.monitorFileChanges);
