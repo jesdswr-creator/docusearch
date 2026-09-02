@@ -134,6 +134,11 @@ struct AppSettings {
     QString     ocrLanguage             = "eng";
     int         thumbnailSize           = 256;
     QString     lastBackupPath;
+    // v1.7.10: becomes true once the FIRST full extraction drain finished.
+    // Until then extraction runs in "first-run" mode: bigger sessions and
+    // fast re-arming, so a brand-new index fully extracts itself without
+    // the user babysitting the Extract button.
+    bool        firstRunDone            = false;
 };
 
 } // namespace DocuSearch

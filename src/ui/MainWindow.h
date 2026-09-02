@@ -149,6 +149,13 @@ private slots:
     // of 1.7.7. Returns the number of rows removed.
     int purgeNonIndexableRows();
 
+    // v1.7.10: Settings → "Remove Database (Reset)". Cancels running
+    // extraction/OCR, closes the database, deletes docusearch.db
+    // (+ -wal/-shm), reopens a fresh one, re-initializes the schema and
+    // kicks the auto-scan so the index rebuilds from the configured
+    // folders without a restart.
+    void removeAndRebuildDatabase();
+
 private:
     // UI builders
     void buildTitleBar();
@@ -300,6 +307,14 @@ public:
     // current extraction session enqueued / how many results arrived.
     int             ocrExpected_          = 0;
     int             ocrReceived_          = 0;
+    // v1.7.10: first-run extract-all. True until the first full drain
+    // finishes; raises the per-session cap (200 instead of 30) and the
+    // re-arm delay (3 s instead of 60 s) so a new index extracts itself.
+    bool            extractAllMode_       = false;
+    // v1.7.10: true while removeAndRebuildDatabase() has detached the
+    // old database — late OCR results / extraction-timer ticks must not
+    // write into the freshly created (empty) database.
+    bool            dbResetting_          = false;
 
     bool            autoScanRunning_      = false;
     qint64          autoScanStartedMs_    = 0;    // v1.7.3: watchdog clock

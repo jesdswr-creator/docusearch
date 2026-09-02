@@ -37,6 +37,12 @@ signals:
     // the database, let the restore overwrite the .db file, then reopen.
     void restoreRequested(const QString& backupZipPath);
 
+    // v1.7.10: emitted when the user confirms "Remove Database (Reset)"
+    // in the Backup & Restore tab. MainWindow must cancel running
+    // extraction/OCR, delete docusearch.db (+ -wal/-shm), reopen a fresh
+    // database, re-create the schema and re-scan the configured folders.
+    void removeDatabaseRequested();
+
     // Emitted when the user clicks "Embed All Documents Now" in the
     // Semantic Search tab. MainWindow connects this to a slot that
     // gathers all indexed files without embeddings and runs
@@ -68,6 +74,7 @@ private slots:
     void onBackupNow();
     void onRestoreNow();
     void onVacuumDb();
+    void onRemoveDbNow();
     void onApply();
 
 private:

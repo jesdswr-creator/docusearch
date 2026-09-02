@@ -317,6 +317,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ocrPool_.get(), &OcrWorkerPool::logMessage, this,
             [](const QString& m) { DS_INFO("OCR", m); });
 
+    // v1.7.10 FIRST-RUN EXTRACT-ALL: until the very first full extraction
+    // drain completes (firstRunDone), extraction sessions run 200 files
+    // and re-arm in 3 s, so a fresh index fully extracts itself right
+    // after the first Add-Folder scan — the user never has to keep
+    // clicking Extract to see content search working.
+    extractAllMode_ = !settings_.firstRunDone;
+    if (extractAllMode_)
+        DS_INFO("Extract", "First run — extraction will drain the whole "
+                           "queue automatically.");
+
     // DEFER semantic search init to after the window is shown.
     // initializeSemanticSearch() creates a BgeService + QtConcurrent::run
     // which, even though it runs on a worker thread, still allocates memory
@@ -1844,7 +1854,16 @@ void MainWindow::scanFolderFast(const QString& folder) {
     // consults the SAME central allowlist (Constants::isIndexableExtension)
     // as the hourly scan, the watcher and the full re-index, so every
     // ingest path agrees on what may enter the index.
-    int count = 0, skipped = 0;
+    //
+    // v1.7.10: this scan also computes the CONTENT HASH. The INSERT
+    // below never wrote the hash column, so every row added through
+    // "Add Folder" — the most common ingest path — had hash='' and the
+    // duplicate finder (which groups on hash) honestly reported "no
+    // duplicate documents found" for an index FULL of duplicates. Now
+    // the index is duplicates-ready the moment the scan finishes,
+    // matching what the hourly walk already does.
+    const bool hashEnabled = settings_.hashLargeFiles;
+    int count = 0, skipped = 0, hashed = 0;
     QStringList emptyExcludes;
     FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
         const QString ext = FileUtils::extensionOf(fi.absoluteFilePath()).toLower();
@@ -1859,14 +1878,25 @@ void MainWindow::scanFolderFast(const QString& folder) {
                                Constants::kImageExtensions.contains(ext))
                               ? "pending" : "not_needed";
 
+        // Same 64 MB cap as the hourly walk, so both paths store the
+        // SAME fingerprint for the SAME file and duplicates group
+        // correctly no matter which scanner saw the file first.
+        QString hash;
+        if (hashEnabled) {
+            hash = FileUtils::sha256OfFile(path, 64 * 1024 * 1024);
+            if (!hash.isEmpty()) ++hashed;
+        }
+
         sqlite3_stmt* s = nullptr;
         sqlite3_prepare_v2(raw,
             "INSERT INTO Files (path, filename, extension, size, "
-            "  created_date, modified_date, indexing_status, ocr_status) "
-            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'metadata_only', ?7) "
+            "  created_date, modified_date, hash, indexing_status, ocr_status) "
+            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'metadata_only', ?8) "
             "ON CONFLICT(path) DO UPDATE SET "
             "  filename=excluded.filename, extension=excluded.extension, "
-            "  size=excluded.size, modified_date=excluded.modified_date;",
+            "  size=excluded.size, modified_date=excluded.modified_date, "
+            "  hash=CASE WHEN excluded.hash != '' "
+            "            THEN excluded.hash ELSE Files.hash END;",
             -1, &s, nullptr);
         if (s) {
             sqlite3_bind_text(s, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
@@ -1875,7 +1905,8 @@ void MainWindow::scanFolderFast(const QString& folder) {
             sqlite3_bind_int64(s, 4, size);
             sqlite3_bind_int64(s, 5, created);
             sqlite3_bind_int64(s, 6, modified);
-            sqlite3_bind_text(s, 7, ocrStat, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(s, 7, hash.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(s, 8, ocrStat, -1, SQLITE_TRANSIENT);
             sqlite3_step(s);
             sqlite3_finalize(s);
         }
@@ -1889,7 +1920,11 @@ void MainWindow::scanFolderFast(const QString& folder) {
     });
     updateIndexStats();
     statusBar()->showMessage(
-        QString("Scan complete: %1 files indexed, %2 skipped").arg(count).arg(skipped), 5000);
+        QString("Scan complete: %1 files indexed, %2 skipped%3")
+            .arg(count).arg(skipped)
+            .arg(hashed > 0 ? QString(
+                ", %1 fingerprint%2 computed")
+                .arg(hashed).arg(hashed == 1 ? "" : "s") : QString()), 5000);
 }
 
 void MainWindow::onAddFolder() {
@@ -2145,7 +2180,15 @@ void MainWindow::onExtract() {
     // + UI event starvation → crashes). The 30-file batch + 200ms interval
     // was the original stable behavior. User clicks Extract again to
     // continue with the next 30.
-    const int maxFilesThisSession = qMin(total, 30);
+    //
+    // v1.7.10 FIRST-RUN MODE: until the very first full extraction drain
+    // finishes (settings_.firstRunDone == false), sessions are 200 files
+    // and re-arm after 3 s instead of 60 s — a brand-new index extracts
+    // itself end-to-end without the user babysitting the Extract button
+    // ("on first run how about extract all files?"). The 200 ms per-file
+    // pacing is untouched, so stability is preserved.
+    const int sessionCap = extractAllMode_ ? 200 : 30;
+    const int maxFilesThisSession = qMin(total, sessionCap);
     statusBar()->showMessage(
         QString("Extracting %1 of %2 files... (click Stop Extracting to cancel)")
             .arg(maxFilesThisSession).arg(total));
@@ -2192,6 +2235,14 @@ void MainWindow::onExtract() {
 
     connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
       try {
+        // v1.7.10: the database was removed (Settings → Remove Database)
+        // while this session ran — kill the session instead of writing
+        // into the freshly created database.
+        if (dbResetting_) {
+            timer->stop();
+            timer->deleteLater();
+            return;
+        }
         // Check cancel flag.
         if (extractCancelFlag_.load()) {
             timer->stop();
@@ -2245,6 +2296,17 @@ void MainWindow::onExtract() {
                     QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
                         .arg(state->done).arg(state->failed).arg(total), 8000);
 
+                // v1.7.10: the first FULL drain is done — first run is
+                // over. Persist the flag so later sessions return to the
+                // conservative 30-file/60 s cadence. (OCR tasks may still
+                // be in flight; they complete on the pool independently.)
+                if (extractAllMode_) {
+                    extractAllMode_ = false;
+                    settings_.firstRunDone = true;
+                    saveSettings();
+                    DS_INFO("Extract", "First-run extraction drain complete.");
+                }
+
                 // Auto-queue AI (BGE) embedding generation for all newly-extracted
                 // files. Previously this was commented out during extraction
                 // (ONNX inference on the main thread was crashing). Now we
@@ -2291,13 +2353,18 @@ void MainWindow::onExtract() {
             } else {
                 statusBar()->showMessage(
                     QString("Extracted %1 of %2 — next batch runs automatically "
-                            "in 1 minute (Extract = start now).")
-                        .arg(state->done + state->failed).arg(total), 8000);
+                            "%3 (Extract = start now).")
+                        .arg(state->done + state->failed).arg(total)
+                        .arg(extractAllMode_ ? QStringLiteral("in 3 seconds")
+                                             : QStringLiteral("in 1 minute")), 8000);
                 // Auto-continue: drain the queue without the user having to
                 // click Extract after every 30-file batch. The 200ms per-file
                 // pacing keeps UI responsive exactly as before; this only
                 // removes the mandatory click between batches.
-                QTimer::singleShot(60 * 1000, this, [this]() {
+                // v1.7.10: first-run mode re-arms after 3 s so a new index
+                // drains continuously instead of taking minutes per batch.
+                QTimer::singleShot(extractAllMode_ ? 3 * 1000 : 60 * 1000,
+                                   this, [this]() {
                     // v1.7.4: fresh patience budget for this wake so a scan
                     // that happens to be running can never starve the queue.
                     autoExtractRetryLeft_ = 20;
@@ -2965,6 +3032,10 @@ void MainWindow::requestAutoExtract() {
 // batches.
 // ============================================================
 void MainWindow::onOcrTaskCompleted(qint64 fileId, const QString& text, bool ok) {
+    // v1.7.10: the database is being removed/rebuilt — this is a late
+    // result for a row that no longer exists. Drop it instead of writing
+    // stale text into the fresh database.
+    if (dbResetting_) return;
     if (!db_ || fileId <= 0) return;
     sqlite3* raw = db_->raw();
     if (!raw) return;
@@ -3121,6 +3192,44 @@ void MainWindow::runStartupIntegrityPass() {
         nullptr, nullptr, nullptr);
     const int requeued = sqlite3_changes(raw);
 
+    // v1.7.10: give FAILED rows one honest retry per launch. Rotated
+    // scans that OCR'd under the broken auto-orientation (or while no
+    // OCR language pack was installed) are parked at 'failed' forever —
+    // nothing ever re-queued them, so "OCR returning nothing" stuck
+    // even after the engine improved. Documents drop back to
+    // metadata_only (the text pipeline re-runs); images get their OCR
+    // status reset to pending (the pool re-runs). Bounded at 500 per
+    // launch so a folder of permanently unreadable files can't stall
+    // startup; rows that fail again simply wait for the next launch.
+    int failedRequeued = 0;
+    {
+        QList<qint64> failIds;
+        sqlite3_stmt* fq = nullptr;
+        if (sqlite3_prepare_v2(raw,
+                "SELECT id, extension FROM Files "
+                "WHERE indexing_status='failed' "
+                "AND extension IN ('pdf','doc','docx','xls','xlsx','xlsm',"
+                "'ppt','pptx','jpg','jpeg','png','tif','tiff',"
+                "'bmp','gif','webp') "
+                "AND id NOT IN (SELECT file_id FROM DocumentText) "
+                "LIMIT 500;",
+                -1, &fq, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(fq) == SQLITE_ROW)
+                failIds.append(sqlite3_column_int64(fq, 0));
+            sqlite3_finalize(fq);
+        }
+        for (const qint64 id : failIds) {
+            sqlite3_exec(raw,
+                QString("UPDATE Files SET indexing_status='metadata_only', "
+                        "ocr_status='pending' WHERE id=%1;").arg(id)
+                    .toUtf8().constData(),
+                nullptr, nullptr, nullptr);
+            ++failedRequeued;
+            if ((failedRequeued % 100) == 0)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
+        }
+    }
+
     int hashed = 0;
     if (settings_.hashLargeFiles) {
         QList<qint64> ids;
@@ -3132,7 +3241,7 @@ void MainWindow::runStartupIntegrityPass() {
                 "AND extension IN ('pdf','doc','docx','xls','xlsx','xlsm',"
                 "'ppt','pptx','jpg','jpeg','png','tif','tiff',"
                 "'bmp','gif','webp') "
-                "LIMIT 1000;",
+                "LIMIT 4000;",
                 -1, &q, nullptr) == SQLITE_OK) {
             while (sqlite3_step(q) == SQLITE_ROW) {
                 ids.append(sqlite3_column_int64(q, 0));
@@ -3162,19 +3271,20 @@ void MainWindow::runStartupIntegrityPass() {
         }
     }
 
-    if (requeued > 0 || hashed > 0) {
+    if (requeued > 0 || hashed > 0 || failedRequeued > 0) {
         DS_INFO("Index", QString("Startup integrity pass: %1 fake-done rows "
-                                 "requeued for extraction, %2 hashes backfilled.")
-                             .arg(requeued).arg(hashed));
+                                 "requeued for extraction, %2 failed rows "
+                                 "retried, %3 hashes backfilled.")
+                             .arg(requeued).arg(failedRequeued).arg(hashed));
         statusBar()->showMessage(
             QString("Index repair: %1 file%2 requeued for extraction, "
                     "%3 hash%4 computed.")
-                .arg(requeued)
-                .arg(requeued == 1 ? "" : "s")
+                .arg(requeued + failedRequeued)
+                .arg(requeued + failedRequeued == 1 ? "" : "s")
                 .arg(hashed)
                 .arg(hashed == 1 ? "" : "es"), 10000);
         updateIndexStats();
-        if (requeued > 0) {
+        if (requeued > 0 || failedRequeued > 0) {
             // Fresh work exists — wake extraction (requestAutoExtract
             // yields on its own if the startup scan is still running).
             autoExtractRetryLeft_ = 20;
@@ -3361,6 +3471,87 @@ int MainWindow::purgeNonIndexableRows() {
                 "(md, txt, exe, archives...) — only documents and "
                 "images are indexed now.").arg(purged), 10000);
     return purged;
+}
+
+// ============================================================
+// v1.7.10: REMOVE DATABASE (Settings → Backup & Restore tab).
+// The user asked for a clean-slate option: wipe the index database and
+// start over. Flow — cancel in-flight extraction/OCR, close the DB,
+// delete docusearch.db (+ WAL/SHM sidecars), reopen a fresh file,
+// re-create the schema, and kick the auto-scan so the configured
+// folders re-index immediately. dbResetting_ makes any late OCR result
+// or extraction-timer tick a no-op instead of writing into the new
+// (empty) database.
+// ============================================================
+void MainWindow::removeAndRebuildDatabase() {
+    if (!db_) return;
+
+    // 1) Stop everything that could touch the database.
+    extractCancelFlag_.store(true);
+    if (ocrPool_) ocrPool_->clearQueue();
+    ocrExpected_ = 0;
+    ocrReceived_ = 0;
+    contentExtractionRunning_ = false;
+    if (searchBar_) searchBar_->setExtracting(false);
+    if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
+    dbResetting_ = true;   // late taskCompleted / timer ticks become no-ops
+
+    // 2) Close and delete.
+    const QString dbPath = Config::instance().dbPath();
+    db_->close();
+    bool removed = true;
+    QStringList failedRemovals;
+    for (const QString& f : { dbPath, dbPath + QStringLiteral("-wal"),
+                              dbPath + QStringLiteral("-shm") }) {
+        QFileInfo info(f);
+        if (!info.exists()) continue;
+        if (QFile::remove(f)) {
+            DS_INFO("Database", "Removed " + f);
+        } else {
+            removed = false;
+            failedRemovals << f;
+            DS_WARN("Database", "Could not remove " + f);
+        }
+    }
+
+    // 3) Reopen + schema.
+    QString err;
+    if (!db_->open(dbPath, &err)) {
+        dbResetting_ = false;
+        DS_ERROR("Database", "Reopen after remove failed: " + err);
+        QMessageBox::critical(this, "Remove Database",
+            QStringLiteral("The database was removed but reopening "
+                           "failed:\n\n%1\n\nRestart DocuSearch — a fresh "
+                           "database will be created.").arg(err));
+        return;
+    }
+    Schema::initialize(*db_);
+
+    dbResetting_ = false;
+
+    // 4) Refresh every cache that mirrors index content.
+    updateIndexStats();
+    refreshSavedSearches();
+    refreshPreviewForSelectedFile();
+
+    if (!removed) {
+        QMessageBox::warning(this, "Remove Database",
+            QStringLiteral("The database was reset, but these files could "
+                           "not be deleted (still in use by another "
+                           "program?):\n\n%1")
+                .arg(failedRemovals.join(QStringLiteral("\n"))));
+    }
+
+    statusBar()->showMessage(
+        "Database removed. Index is empty — the configured folders are "
+        "being re-scanned now.", 10000);
+    DS_INFO("Database", "Database removed and recreated (reset).");
+
+    // 5) Rebuild: rescan the configured folders, then wake extraction so
+    // the fresh index fills up again on its own.
+    autoScanIndexedFolders();
+    autoExtractRetryLeft_ = 20;
+    QTimer::singleShot(4000, this, [this]() { requestAutoExtract(); });
 }
 
 // ============================================================
@@ -4663,6 +4854,13 @@ void MainWindow::onOpenSettings() {
                 statusBar()->showMessage("Settings applied.", 3000);
             });
 
+        QObject::connect(&dlg, &SettingsDialog::removeDatabaseRequested,
+            this, [this](){
+                // v1.7.10: Settings → "Remove Database (Reset)". The
+                // dialog already double-confirmed; do the wipe+rebuild.
+                removeAndRebuildDatabase();
+            });
+
         QObject::connect(&dlg, &SettingsDialog::restoreRequested,
             this, [this](const QString& zipPath){
                 statusBar()->showMessage("Restoring database...", 0);
@@ -4906,19 +5104,42 @@ void MainWindow::onDetectDuplicates() {
         sqlite3* raw = db_->raw();
         if (!raw) return;
 
-        // Duplicate detection is only meaningful for user documents.
-        // Photos, screenshots and notes naturally share bytes or tiny
-        // sizes and were pure noise here. v1.7.7: the list is derived
-        // from Constants::kDocumentExtensions — the same set that
-        // defines what may be indexed — so it can never drift again.
+        // Duplicate detection is meaningful for everything the app
+        // indexes. v1.7.7 restricted it to documents to cut noise, but
+        // that also made it blind to the user's most common real
+        // duplicates — scanned images (jpg/png/tif) of the same page.
+        // Hash grouping is byte-exact, so identical images are genuine
+        // duplicates, not noise; the survivors-only + re-verification
+        // passes below already guard against phantom pairs.
+        // v1.7.10: group over kIndexableExtensions (documents + images).
         QString typeList;
-        for (const QString& t : Constants::kDocumentExtensions) {
+        for (const QString& t : Constants::kIndexableExtensions) {
             if (!typeList.isEmpty()) typeList += QLatin1Char(',');
             typeList += QString("'%1'").arg(t.toLower());
         }
         QString docTypeHelp;
-        for (const QString& t : Constants::kDocumentExtensions) {
+        for (const QString& t : Constants::kIndexableExtensions) {
             docTypeHelp += QStringLiteral(" .%1").arg(t.toLower());
+        }
+
+        // v1.7.10: how many indexed files still have NO fingerprint?
+        // The duplicates finder can only group files it can fingerprint;
+        // saying "no duplicates" while hundreds of rows are unhashed is
+        // exactly the "saying no duplicate but it is not correct" report.
+        // Count them so the empty-result message can say WHY nothing
+        // was found and what will fix it.
+        int missingHashRows = 0;
+        {
+            sqlite3_stmt* mh = nullptr;
+            const QString mhSql = QString(
+                "SELECT COUNT(*) FROM Files WHERE (hash IS NULL OR hash = '') "
+                "AND lower(extension) IN (%1);").arg(typeList);
+            if (sqlite3_prepare_v2(raw, mhSql.toUtf8().constData(),
+                                   -1, &mh, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(mh) == SQLITE_ROW)
+                    missingHashRows = sqlite3_column_int(mh, 0);
+                sqlite3_finalize(mh);
+            }
         }
 
         sqlite3_stmt* s = nullptr;
@@ -5132,15 +5353,32 @@ void MainWindow::onDetectDuplicates() {
             // deleted kept showing its lone survivor ("duplicate file
             // still returns a single file").
             resultsPane_->setResults({});
+            // v1.7.10: the bare "No duplicate documents found" was being
+            // reported on indexes that DID hold duplicates — the rows
+            // just had no hash yet (Add-Folder scans never wrote one,
+            // backfill is incremental). Tell the user honestly what the
+            // finder had to work with.
+            QString hashNote;
+            if (missingHashRows > 0) {
+                hashNote = QStringLiteral(
+                    "\n\n%1 indexed file%2 not have a content "
+                    "fingerprint yet, so they cannot be checked for "
+                    "duplication. Fingerprints are computed automatically "
+                    "— re-scan your folders (or restart the app) and run "
+                    "Detect Duplicates again.")
+                    .arg(missingHashRows)
+                    .arg(missingHashRows == 1 ? QStringLiteral(" does")
+                                              : QStringLiteral("s do"));
+            }
             QMessageBox::information(this, "Duplicates",
                 (skippedMissing > 0 || droppedSingletons > 0 ||
                  staleRows > 0 || staleHashRows > 0)
                     ? QStringLiteral(
-                        "No duplicate documents found.\n\n"
+                        "No duplicate files found.\n\n"
                         "%1 file%2 whose duplicate partner was deleted, "
                         "%3 stale index entr%4, %5 duplicate row%6 "
                         "for the same file and %7 entr%8 whose content "
-                        "changed since scanning were excluded.")
+                        "changed since scanning were excluded.%9")
                         .arg(droppedSingletons)
                         .arg(droppedSingletons == 1 ? "y" : "ies")
                         .arg(skippedMissing)
@@ -5149,12 +5387,15 @@ void MainWindow::onDetectDuplicates() {
                         .arg(staleRows == 1 ? "" : "s")
                         .arg(staleHashRows)
                         .arg(staleHashRows == 1 ? "y" : "ies")
+                        .arg(hashNote)
                     : QStringLiteral(
-                        "No duplicate documents found.\n\n"
-                        "Duplicate search covers documents only:%1\n\n"
+                        "No duplicate files found.\n\n"
+                        "Duplicate search covers documents and images:%1\n\n"
                         "Make sure 'Compute file hashes' is enabled in "
-                        "Settings → Performance, then re-scan your folders.")
-                        .arg(docTypeHelp));
+                        "Settings → Performance, then re-scan your "
+                        "folders.%2")
+                        .arg(docTypeHelp)
+                        .arg(hashNote));
             return;
         }
 

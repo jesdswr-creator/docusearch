@@ -27,6 +27,7 @@
 #include <QProcess>
 #include <QDateTime>
 #include <QStringList>
+#include <QAtomicInteger>
 
 namespace DocuSearch {
 
@@ -72,9 +73,17 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
     // accepted by StorageFile::GetFileFromPathAsync — WinRT rejects
     // forward slashes with the misleading "path contains invalid
     // characters" error.
+    //
+    // v1.7.10: the name used to be timestamp-only. Two OCR workers
+    // calling within the same millisecond generated the SAME temp file
+    // — one worker's helper read a half-written/clobbered PNG and
+    // returned empty text. A process-wide counter makes collisions
+    // impossible.
+    static QAtomicInteger<quint64> seq(0);
     const QString tempPath = QDir::toNativeSeparators(
         QDir::tempPath() + "/docusearch_ocr_" +
-        QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png");
+        QString::number(QDateTime::currentMSecsSinceEpoch()) + "_" +
+        QString::number(seq.fetch_add(1) + 1) + ".png");
     if (!img.save(tempPath, "PNG")) return {};
     const QString text = ocrFile(tempPath);
     QFile::remove(tempPath);

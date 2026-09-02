@@ -56,6 +56,7 @@ AppSettings Config::load() const {
     s.ocrLanguage            = settings_->value("ocrLanguage", s.ocrLanguage).toString();
     s.thumbnailSize          = settings_->value("thumbnailSize", s.thumbnailSize).toInt();
     s.lastBackupPath         = settings_->value("lastBackupPath").toString();
+    s.firstRunDone           = settings_->value("firstRunDone", s.firstRunDone).toBool();
     return s;
 }
 
@@ -76,6 +77,7 @@ void Config::save(const AppSettings& s) {
     settings_->setValue("ocrLanguage",          s.ocrLanguage);
     settings_->setValue("thumbnailSize",        s.thumbnailSize);
     settings_->setValue("lastBackupPath",       s.lastBackupPath);
+    settings_->setValue("firstRunDone",         s.firstRunDone);
     settings_->sync();
     emit settingsChanged(s);
 }

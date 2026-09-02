@@ -472,9 +472,18 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     auto* backupBtn = new QPushButton("Backup Now...", this);
     auto* restoreBtn = new QPushButton("Restore from File...", this);
     auto* vacuumBtn  = new QPushButton("Vacuum Database (compact)", this);
+    // v1.7.10: clean-slate reset requested by the user — delete the whole
+    // index database and rebuild it from the configured folders.
+    auto* removeDbBtn = new QPushButton("Remove Database (Reset)...", this);
+    removeDbBtn->setToolTip(
+        "Deletes the entire search index database and starts fresh.\n"
+        "Your files on disk are NOT touched - only the index.\n"
+        "The configured folders are re-scanned automatically.");
     bkLay->addWidget(backupBtn);
     bkLay->addWidget(restoreBtn);
     bkLay->addWidget(vacuumBtn);
+    bkLay->addSpacing(14);
+    bkLay->addWidget(removeDbBtn);
     bkLay->addStretch();
     tabs->addTab(wrapInScroll(bkTab), "Backup & Restore");
 
@@ -511,6 +520,7 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     connect(backupBtn, &QPushButton::clicked, this, &SettingsDialog::onBackupNow);
     connect(restoreBtn,&QPushButton::clicked, this, &SettingsDialog::onRestoreNow);
     connect(vacuumBtn, &QPushButton::clicked, this, &SettingsDialog::onVacuumDb);
+    connect(removeDbBtn, &QPushButton::clicked, this, &SettingsDialog::onRemoveDbNow);
 
     // Clicking a saved search loads it into the name/query editors so
     // the user can edit it (saving with the same name overwrites).
@@ -748,6 +758,26 @@ void SettingsDialog::onVacuumDb() {
             "Vacuum failed. The database may be in use by another "
             "operation - try again later.");
     }
+}
+
+// v1.7.10: clean-slate reset. Double-confirm, then hand the actual
+// removal to MainWindow (it owns the Database object, the OCR pool and
+// the extraction session — the dialog must not touch them).
+void SettingsDialog::onRemoveDbNow() {
+    const auto ret = QMessageBox::warning(
+        this, QStringLiteral("Remove Database"),
+        QStringLiteral(
+            "This deletes the ENTIRE search index database:\n\n"
+            "  • every indexed file entry, extracted text and AI embedding\n"
+            "  • tags, notes and saved searches\n\n"
+            "Your files on disk are NOT touched — only the index. The "
+            "configured folders are re-scanned automatically afterwards.\n\n"
+            "Remove the database and rebuild the index from scratch?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (ret != QMessageBox::Yes) return;
+
+    emit removeDatabaseRequested();
+    accept();   // the dialog's job is done
 }
 
 } // namespace DocuSearch
