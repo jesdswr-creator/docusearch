@@ -55,7 +55,7 @@
   <Identity
       Name="DocuSearch.DocuSearch"
       Publisher="CN=DocuSearch, O=DocuSearch, C=US"
-      Version="1.7.11.0"
+      Version="1.7.12.0"
       ProcessorArchitecture="x64" />
 
   <!-- ============================================================
