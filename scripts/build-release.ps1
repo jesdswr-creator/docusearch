@@ -37,7 +37,10 @@ param(
     [string]$VcpkgRoot     = $env:VCPKG_ROOT,
     [string]$BuildDir      = "build",
     [string]$Config        = "Release",
-    [string]$Version       = "1.0.0.0",
+    # v1.7.11: default derives from project(VERSION) in CMakeLists.txt —
+    # the single source of truth CI uses (the old hardcoded "1.0.0.0"
+    # default was frozen and drifted from every release since).
+    [string]$Version       = "",
     [string]$CertPfx        = "",          # path to .pfx for signing
     [string]$CertPassword   = "",          # .pfx password
     [string]$TimestampUrl   = "http://timestamp.digicert.com",
@@ -45,6 +48,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# ---- Resolve version from CMakeLists.txt when not passed -------------------
+if (-not $Version) {
+    $cmakeText = Get-Content (Join-Path $PSScriptRoot "..\CMakeLists.txt") -Raw
+    if ($cmakeText -match 'project\(DocuSearch\s+VERSION\s+(\d+)\.(\d+)\.(\d+)') {
+        $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+        Write-Host "Version from CMakeLists.txt: $Version" -ForegroundColor DarkGray
+    } else {
+        Write-Error "Could not parse project VERSION from CMakeLists.txt (pass -Version)."
+        exit 1
+    }
+}
+# MSI ProductVersion needs the 4-part form.
+$VersionMsi = if ($Version -match '^\d+\.\d+\.\d+$') { "$Version.0" } else { $Version }
 
 # ---- Validate prerequisites ------------------------------------------------
 if (-not $VcpkgRoot) { Write-Error "VCPKG_ROOT is not set."; exit 1 }
@@ -168,24 +185,19 @@ if ($MakeMsi) {
     $wixWork   = Join-Path $projectRoot "$BuildDir\wix"
     if (-not (Test-Path $wixWork)) { New-Item -ItemType Directory -Path $wixWork | Out-Null }
 
-    # 6a. Harvest the windeployqt output into a wxi fragment.
-    #     heat.exe walks BinFolder\*.* and emits <File> elements.
-    $heatExe = (Get-Command heat.exe -ErrorAction SilentlyContinue).Source
-    if (-not $heatExe) {
-        Write-Warning "heat.exe not on PATH - skipping auto-harvest."
-        Write-Warning "If DocuSearch.Harvest.wxi is missing, the MSI build will fail."
-    } else {
-        $harvestFile = Join-Path $wixWork "DocuSearch.Harvest.wxi"
-        & $heatExe dir $buildOutput `
-            -cg AppFilesHarvest -dr BinFolder -srd -sfrag -sreg -gg -g1 `
-            -var "var.BuildOutputDir" -out $harvestFile
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "heat.exe failed to harvest $buildOutput"
-            exit 1
-        }
-        # The wxs file expects a fragment named DocuSearch.Harvest.wxi
-        # in the installer directory; copy it there.
-        Copy-Item $harvestFile (Join-Path $wixSrcDir "DocuSearch.Harvest.wxi") -Force
+    # 6a. Harvest the windeployqt output into a WiX v4 fragment.
+    #     v1.7.11: use scripts/generate-harvest.ps1 - the SAME harvester CI
+    #     uses. The old heat.exe call here had drifted: it emitted component
+    #     group 'AppFilesHarvest' into a .wxi that was never passed to the
+    #     build, while DocuSearch.wxs references ComponentGroupRef
+    #     'HarvestedFiles' from DocuSearch.Harvest.wxs - so every local
+    #     -MakeMsi run died on an unresolved reference.
+    $harvestScript = Join-Path $projectRoot "scripts\generate-harvest.ps1"
+    $harvestWxs    = Join-Path $wixSrcDir "DocuSearch.Harvest.wxs"
+    & pwsh -File $harvestScript -BuildDir $buildOutput -OutputFile $harvestWxs
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $harvestWxs)) {
+        Write-Error "generate-harvest.ps1 failed - no $harvestWxs produced"
+        exit 1
     }
 
     # 6b. Compile + link the installer.
@@ -195,35 +207,24 @@ if ($MakeMsi) {
     if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
     if (Test-Path $msiOut) { Remove-Item $msiOut -Force }
 
-    # WiX v4 uses the `wix` dotnet tool. If not present, fall back to
-    # WiX v3 candle+light.
+    # DocuSearch.wxs is WiX v4 schema (<Package> root, wxs/v4 namespace):
+    # the v3 candle+light toolchain CANNOT compile it, so the old
+    # "fall back to WiX v3" path here could never have worked. Require v4.
     $wixTool = (Get-Command wix -ErrorAction SilentlyContinue).Source
-    if ($wixTool) {
-        Write-Host "      Using WiX v4 (wix dotnet tool)..." -ForegroundColor DarkGray
-        & $wixTool build $wxsFile `
-              -o $msiOut `
-              -d "BuildOutputDir=$buildOutput" `
-              -ext WixUIExtension `
-              -ext WixUtilExtension
-        if ($LASTEXITCODE -ne 0) { Write-Error "WiX build failed"; exit 1 }
-    } else {
-        $candle = (Get-Command candle -ErrorAction SilentlyContinue).Source
-        $light  = (Get-Command light -ErrorAction SilentlyContinue).Source
-        if (-not $candle -or -not $light) {
-            Write-Error "Neither 'wix' nor 'candle'+'light' found. Install WiX v4: 'dotnet tool install -g wix'"
-            exit 1
-        }
-        Write-Host "      Using WiX v3 (candle + light)..." -ForegroundColor DarkGray
-        $wixobj = Join-Path $wixWork "DocuSearch.wixobj"
-        & $candle $wxsFile -o $wixobj `
-               -d "BuildOutputDir=$buildOutput" `
-               -ext WixUIExtension -ext WixUtilExtension
-        if ($LASTEXITCODE -ne 0) { Write-Error "candle failed"; exit 1 }
-        & $light $wixobj -o $msiOut `
-                -ext WixUIExtension -ext WixUtilExtension `
-                -d "BuildOutputDir=$buildOutput"
-        if ($LASTEXITCODE -ne 0) { Write-Error "light failed"; exit 1 }
+    if (-not $wixTool) {
+        Write-Error "WiX v4 'wix' tool not found. Install with: dotnet tool install -g wix"
+        exit 1
     }
+    Write-Host "      Using WiX v4 (wix dotnet tool)..." -ForegroundColor DarkGray
+    # Pass BOTH the main wxs and the harvested fragment - same invocation
+    # shape as the CI workflow's 'Build MSI installer (WiX v4)' step.
+    & $wixTool build $wxsFile $harvestWxs `
+          -o $msiOut `
+          -d "BuildOutputDir=$buildOutput" `
+          -d "ProductVersion=$VersionMsi" `
+          -ext WixToolset.UI.wixext `
+          -platform x64
+    if ($LASTEXITCODE -ne 0) { Write-Error "WiX build failed"; exit 1 }
     Write-Host "      Wrote $msiOut" -ForegroundColor Green
 } else {
     Write-Host ""
@@ -277,6 +278,14 @@ if ($MakeMsix) {
     Copy-Item -Path "$buildOutput\*" -Destination $msixStage -Recurse -Force
     Copy-Item -Path (Join-Path $projectRoot "installer\AppxManifest.xml") `
               -Destination $msixStage -Force
+
+    # v1.7.11: stamp the STAGED manifest's Identity Version from the
+    # single version source, so the MSIX can never lag the app again
+    # (the repo copy sat frozen at 1.6.5.0 while the app hit 1.7.10).
+    $stagedManifest = Join-Path $msixStage "AppxManifest.xml"
+    (Get-Content $stagedManifest -Raw) `
+        -replace '(?<![A-Za-z])Version="\d+\.\d+\.\d+\.\d+"', "Version=`"$VersionMsi`"" |
+        Set-Content $stagedManifest -Encoding utf8
 
     # 7c. MakeAppx pack
     $makeAppx = (Get-Command makeappx -ErrorAction SilentlyContinue).Source

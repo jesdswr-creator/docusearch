@@ -35,6 +35,23 @@ void Logger::init(const QString& logDir, LogLevel minLevel, bool mirrorToStderr)
     mirrorToStderr_ = mirrorToStderr;
 
     QDir().mkpath(logDir);
+
+    // v1.7.11: prune old daily logs. One file per day at Debug level with
+    // NO cleanup meant the log directory grew without bound for the life
+    // of the install (months of multi-MB files). Keep two weeks.
+    {
+        const QDate cutoff = QDate::currentDate().addDays(-14);
+        const QFileInfoList old = QDir(logDir).entryInfoList(
+            {QStringLiteral("docusearch_*.log")}, QDir::Files);
+        for (const QFileInfo& fi : old) {
+            // completeBaseName() = "docusearch_YYYYMMDD"
+            const QString datePart = fi.completeBaseName().section('_', -1);
+            const QDate d = QDate::fromString(datePart, QStringLiteral("yyyyMMdd"));
+            if (d.isValid() && d < cutoff)
+                QFile::remove(fi.absoluteFilePath());
+        }
+    }
+
     const QString fileName =
         QString("%1/docusearch_%2.log")
             .arg(logDir)

@@ -2079,8 +2079,20 @@ void MainWindow::onSidebarClicked(int row) {
             QString("Total files: %1\nDatabase size: %2")
                 .arg(repo_ ? repo_->totalFiles() : 0)
                 .arg([&]{
-                    QFile f(Config::instance().dbPath());
-                    return Utils::formatFileSize(f.exists() ? f.size() : 0);
+                    // v1.7.11: include the -wal/-shm sidecars — mid-scan
+                    // the WAL can be hundreds of MB, and reporting only
+                    // the main .db badly under-stated real disk usage.
+                    const QString base = Config::instance().dbPath();
+                    qint64 total = 0;
+                    const QStringList parts{
+                        base,
+                        base + QStringLiteral("-wal"),
+                        base + QStringLiteral("-shm") };
+                    for (const QString& p : parts) {
+                        QFile f(p);
+                        if (f.exists()) total += f.size();
+                    }
+                    return Utils::formatFileSize(total);
                 }()));
     } else if (page == "Duplicates") {
         onDetectDuplicates();

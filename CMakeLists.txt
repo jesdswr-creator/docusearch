@@ -140,7 +140,13 @@ find_package(ZLIB REQUIRED)
 #
 # Nothing else needs to ship with this helper — no DLLs, no model
 # files, no install scripts. Windows.Media.Ocr is part of the OS.
+#
+# v1.7.11: target is Windows-only. It consumes C++/WinRT headers, so on
+# non-Windows hosts (CI sanity configures/builds) it can never compile —
+# declaring it unconditionally broke exactly the cross-platform checks
+# the comments in this file promise.
 
+if(WIN32)
 add_executable(docusearch_ocr_helper src/ocr/ocr_helper_main.cpp)
 if(MSVC)
     set_property(TARGET docusearch_ocr_helper PROPERTY
@@ -155,6 +161,7 @@ if(MSVC)
     target_compile_definitions(docusearch_ocr_helper PRIVATE
         NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS
     )
+endif()
 endif()
 
 # ============================================================
@@ -370,7 +377,8 @@ target_link_libraries(DocuSearch PRIVATE
     Qt6::PrintSupport
     SQLite::SQLite3
     ZLIB::ZLIB
-    dbghelp        # MiniDumpWriteDump for crash handler
+    # dbghelp (MiniDumpWriteDump) moved to the WIN32 block below —
+    # linking it unconditionally broke non-Windows sanity builds.
 )
 
 # OCR: No link needed — Windows.Media.Ocr is consumed via the separate
@@ -447,6 +455,7 @@ target_compile_definitions(DocuSearch PRIVATE
 # Windows-specific link libs
 if(WIN32)
     target_link_libraries(DocuSearch PRIVATE
+        dbghelp    # MiniDumpWriteDump for crash handler
         psapi      # process info for CPU throttling
         shlwapi    # path utilities
         shell32

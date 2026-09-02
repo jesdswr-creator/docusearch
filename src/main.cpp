@@ -77,9 +77,17 @@ int main(int argc, char* argv[]) {
     }
 
     // Initialize the logger AFTER QApplication.
+    // v1.7.11: Info level in release builds — Debug-level logging in
+    // production wrote every icon lookup and model-path probe to disk
+    // on all user machines. Debug stays on for developer (non-release)
+    // builds. (Old daily logs are also pruned now; see Logger::init.)
     DocuSearch::Logger::instance().init(
         DocuSearch::Config::instance().logDir(),
+#ifdef QT_NO_DEBUG
+        DocuSearch::LogLevel::Info,
+#else
         DocuSearch::LogLevel::Debug,
+#endif
         /*mirrorToStderr=*/false);
 
     app.setWindowIcon(QIcon(":/icons/DocuSearch-256.png"));
