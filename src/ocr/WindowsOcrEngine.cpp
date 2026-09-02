@@ -27,7 +27,7 @@
 #include <QProcess>
 #include <QDateTime>
 #include <QStringList>
-#include <QAtomicInteger>
+#include <atomic>
 
 namespace DocuSearch {
 
@@ -79,7 +79,7 @@ QString WindowsOcrEngine::ocrImage(const QImage& img) {
     // — one worker's helper read a half-written/clobbered PNG and
     // returned empty text. A process-wide counter makes collisions
     // impossible.
-    static QAtomicInteger<quint64> seq(0);
+    static std::atomic<quint64> seq{0};
     const QString tempPath = QDir::toNativeSeparators(
         QDir::tempPath() + "/docusearch_ocr_" +
         QString::number(QDateTime::currentMSecsSinceEpoch()) + "_" +
