@@ -171,6 +171,12 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     threadsSpin_ = new QSpinBox(this);
     threadsSpin_->setRange(1, 16);
     threadsSpin_->setValue(current_.maxWorkerThreads);
+    // v1.7.11: this spinbox now REALLY sets the OCR worker pool size
+    // (it was a placebo — the pool was hardcoded to 2 threads). The pool
+    // is built once at startup, so be honest about when it applies.
+    threadsSpin_->setToolTip(
+        "Number of OCR/extraction worker threads (1-4 used).\n"
+        "Takes effect the next time DocuSearch starts.");
     cpuTargetSpin_ = new QSpinBox(this);
     cpuTargetSpin_->setRange(5, 95);
     cpuTargetSpin_->setValue(current_.cpuTargetPct);
@@ -179,8 +185,14 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     cpuPauseSpin_->setValue(current_.cpuPauseThresholdPct);
     pauseOnHeavyCheck_ = new QCheckBox("Pause indexing when system CPU exceeds threshold", this);
     pauseOnHeavyCheck_->setChecked(current_.pauseOnHeavyLoad);
+    // v1.7.11: lazyOcrCheck_ is created HIDDEN (same convention as
+    // darkModeCheck_): its only consumer is the legacy Indexer subsystem,
+    // which is disabled in this build — showing a checkbox that does
+    // nothing erodes trust in the whole dialog. The field still
+    // round-trips through result() so settings files keep it.
     lazyOcrCheck_ = new QCheckBox("Run OCR during re-indexing (not at search time)", this);
     lazyOcrCheck_->setChecked(current_.lazyOcrEnabled);
+    lazyOcrCheck_->setVisible(false);
     hashFilesCheck_ = new QCheckBox("Compute file hashes (for duplicate detection)", this);
     hashFilesCheck_->setChecked(current_.hashLargeFiles);
     monitorCheck_ = new QCheckBox("Monitor indexed drives for live changes", this);
@@ -190,7 +202,6 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
     perfLay->addRow("Target CPU %", cpuTargetSpin_);
     perfLay->addRow("Pause threshold %", cpuPauseSpin_);
     perfLay->addRow("", pauseOnHeavyCheck_);
-    perfLay->addRow("", lazyOcrCheck_);
     perfLay->addRow("", hashFilesCheck_);
     perfLay->addRow("", monitorCheck_);
     tabs->addTab(wrapInScroll(perfTab), "Performance");

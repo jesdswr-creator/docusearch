@@ -162,6 +162,13 @@ private:
     void buildCentral();
     void buildStatusBar();
     void applyTheme();
+    // v1.7.11: ONE apply path for settings. Both the dialog's Apply button
+    // and its OK button route here, so every setting takes effect the same
+    // way regardless of which button the user pressed. Diffs indexedDrives
+    // against the CURRENT settings_ (watch/unwatch/purge/scan), pushes CPU
+    // throttle settings into the OCR pool, honors monitorFileChanges, and
+    // persists + re-themes.
+    void applyNewSettings(const AppSettings& s);
     void loadSettings();
     void saveSettings();
     void refreshSavedSearches();

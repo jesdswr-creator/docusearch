@@ -100,6 +100,7 @@
 #include <sqlite3.h>
 
 #include <memory>
+#include <algorithm>   // std::clamp (OCR pool size from settings)
 
 namespace DocuSearch {
 
@@ -310,7 +311,15 @@ MainWindow::MainWindow(QWidget* parent)
     // pool runs its own per-worker WindowsOcrEngine, renders PDF pages
     // via PDFium (v1.7.2 pool support + v1.7.6 auto-orientation) and
     // emits taskCompleted; onOcrTaskCompleted() writes the results.
-    ocrPool_ = std::make_unique<OcrWorkerPool>(2, this);
+    // v1.7.11: pool size comes from Settings → Performance → "Worker
+    // threads" (was hardcoded 2, making the spinbox a placebo). Clamped
+    // to 1..4: each worker spawns its own ocr helper process + PDFium
+    // rasterizer, and >4 gives no throughput win on consumer disks.
+    // Changing it takes effect on the next launch (the pool's thread
+    // count is fixed at construction; throttle settings stay live via
+    // setAppSettings).
+    ocrPool_ = std::make_unique<OcrWorkerPool>(
+        std::clamp(settings_.maxWorkerThreads, 1, 4), this);
     ocrPool_->setAppSettings(settings_);
     connect(ocrPool_.get(), &OcrWorkerPool::taskCompleted,
             this, &MainWindow::onOcrTaskCompleted);
@@ -517,8 +526,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(watcher_.get(), &FileWatcher::fileDeleted, this, &MainWindow::onFileDeleted);
     connect(watcher_.get(), &FileWatcher::fileRenamed, this, &MainWindow::onFileRenamed);
 
-    // Start watching indexed folders.
-    if (!settings_.indexedDrives.isEmpty()) {
+    // Start watching indexed folders — but ONLY if the user left
+    // "Monitor indexed drives for live changes" enabled (v1.7.11: the
+    // checkbox was never consulted anywhere; the watcher always ran).
+    if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
         watcher_->addWatches(settings_.indexedDrives);
     }
 
@@ -1416,6 +1427,23 @@ void MainWindow::refreshSavedSearches() {
 // Search & results
 // ============================================================
 namespace {
+// v1.7.11: Normalize the user's "Excluded Extensions" list into a fast
+// lookup set - trimmed, lowercased, leading dot stripped (".ISO", "iso"
+// and " Iso " all mean the same thing). Shared by every ingest gate
+// (Add-Folder scan, hourly scan, live watcher) so the setting finally
+// takes effect: before this, the list was saved and round-tripped but
+// consulted by NOTHING.
+QSet<QString> normalizedExtSet(const QStringList& exts) {
+    QSet<QString> out;
+    out.reserve(exts.size());
+    for (QString e : exts) {
+        e = e.trimmed().toLower();
+        while (e.startsWith('.')) e.remove(0, 1);
+        if (!e.isEmpty()) out.insert(e);
+    }
+    return out;
+}
+
 // v1.7.4: True when the STORAGE ROOT of an absolute path is reachable.
 // Used to tell "this file was deleted" apart from "the whole drive is
 // offline": an unplugged USB drive or disconnected network share must
@@ -1871,10 +1899,18 @@ void MainWindow::scanFolderFast(const QString& folder) {
     // matching what the hourly walk already does.
     const bool hashEnabled = settings_.hashLargeFiles;
     int count = 0, skipped = 0, hashed = 0;
-    QStringList emptyExcludes;
-    FileUtils::walkDirectory(folder, emptyExcludes, [&](const QFileInfo& fi) -> bool {
+    // v1.7.11: honor Settings → Indexing. The walk used to receive an
+    // EMPTY exclude list ("emptyExcludes"), so Excluded Folders was
+    // silently ignored by the most common ingest path (Add Folder /
+    // newly added drives), and Excluded Extensions was consulted by
+    // nothing at all — both settings looked broken to the user.
+    const QSet<QString> userExcludedExts =
+        normalizedExtSet(settings_.excludedExtensions);
+    FileUtils::walkDirectory(folder, settings_.excludedFolders,
+                             [&](const QFileInfo& fi) -> bool {
         const QString ext = FileUtils::extensionOf(fi.absoluteFilePath()).toLower();
         if (!Constants::isIndexableExtension(ext)) { ++skipped; return true; }
+        if (userExcludedExts.contains(ext))        { ++skipped; return true; }
 
         const QString path = FileUtils::toNative(fi.absoluteFilePath());
         const QString filename = fi.fileName();
@@ -2651,11 +2687,21 @@ void MainWindow::autoScanIndexedFolders() {
     auto stats = std::make_shared<ScanStats>();
 
     const QStringList folderList = settings_.indexedDrives;
+    // v1.7.11: the hourly walk used to pass an EMPTY exclude list to
+    // walkDirectory and never consulted excludedExtensions — so a folder
+    // the user explicitly excluded in Settings kept being re-indexed
+    // every hour. Both lists now gate the walk; excluded files also drop
+    // out of `seen`, so the Pass-2 prune below cleans up rows that were
+    // indexed BEFORE the user excluded their folder/extension.
+    const QStringList excludedFolders = settings_.excludedFolders;
+    const QSet<QString> userExcludedExts =
+        normalizedExtSet(settings_.excludedExtensions);
     QString dbPath = Config::instance().dbPath();
     bool hashEnabled = settings_.hashLargeFiles;
 
     QFuture<void> future = QtConcurrent::run(
-        [folderList, dbPath, hashEnabled, stats]() {
+        [folderList, excludedFolders, userExcludedExts,
+         dbPath, hashEnabled, stats]() {
         sqlite3* workerDb = nullptr;
         if (sqlite3_open_v2(dbPath.toUtf8().constData(), &workerDb,
                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
@@ -2677,7 +2723,7 @@ void MainWindow::autoScanIndexedFolders() {
                 // ---- Pass 1: walk + upsert, remembering what we saw ----
                 QSet<QString> seen;              // case-folded native paths
                 seen.reserve(1024);
-                FileUtils::walkDirectory(folder, QStringList(),
+                FileUtils::walkDirectory(folder, excludedFolders,
                     [&](const QFileInfo& fi) -> bool {
                         // v1.7.7: THE extension allowlist gate. Checked
                         // BEFORE the path enters `seen`, so the Pass-2
@@ -2686,9 +2732,13 @@ void MainWindow::autoScanIndexedFolders() {
                         // as unseen and deletes any row an older version
                         // indexed — the index self-heals to documents +
                         // images only.
+                        // v1.7.11: the user's Excluded Extensions list is
+                        // an additional gate on top of the allowlist.
                         const QString ext =
                             FileUtils::extensionOf(fi.absoluteFilePath());
                         if (!Constants::isIndexableExtension(ext))
+                            return true;
+                        if (userExcludedExts.contains(ext.toLower()))
                             return true;
 
                         const QString path =
@@ -4388,6 +4438,10 @@ bool MainWindow::extractAndIndexFile(const QString& path) {
     // in results. One central allowlist now rules every ingest path.
     const QString ext = FileUtils::extensionOf(path).toLower();
     if (!Constants::isIndexableExtension(ext)) return false;
+    // v1.7.11: honor the user's Excluded Extensions list here too, so a
+    // live file event can't sneak an excluded type past the scan gates.
+    if (normalizedExtSet(settings_.excludedExtensions).contains(ext))
+        return false;
 
     const QFileInfo fi(path);
     if (!fi.exists()) return false;
@@ -4851,13 +4905,15 @@ void MainWindow::onOpenSettings() {
 
         QObject::connect(&dlg, &SettingsDialog::settingsApplied,
             this, [this](const AppSettings& s){
-                settings_ = s;
-                darkMode_ = settings_.darkMode;
-                pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
-                saveSettings();
-                applyTheme();
-                updateIndexStats();
-                updateOcrStatusIndicator();  // refresh in case OCR setup changed
+                // v1.7.11: route through the SAME apply path as OK.
+                // The old inline handler only saved + re-themed: it never
+                // pushed CPU throttle settings into the OCR pool and never
+                // diffed indexedDrives — folders added/removed via Apply
+                // did nothing. Worse, it overwrote settings_, so a later
+                // OK diffed new-vs-new and silently skipped the
+                // scan/watch/purge for those folders ("Apply then OK"
+                // lost folder changes entirely).
+                applyNewSettings(s);
                 statusBar()->showMessage("Settings applied.", 3000);
             });
 
@@ -4956,80 +5012,131 @@ void MainWindow::onOpenSettings() {
         // external install script. Refresh the OCR status indicator.
         updateOcrStatusIndicator();
         if (rc == QDialog::Accepted) {
-            AppSettings oldSettings = settings_;
-            settings_ = dlg.result();
-            if (ocrPool_) ocrPool_->setAppSettings(settings_);  // v1.7.9: CPU throttle settings reach the pool
-            darkMode_ = settings_.darkMode;
-            pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
-            saveSettings();
-            applyTheme();
-            updateIndexStats();
-
-            // v1.7.4: case-fold the folder lists before diffing — Windows
-            // paths are case-insensitive and QStringList::contains is not,
-            // so "D:\Docs" vs "d:\docs" used to look like two folders.
-            auto toFolded = [](const QStringList& list) {
-                QSet<QString> folded;
-                folded.reserve(list.size());
-                for (const QString& f : list)
-                    folded.insert(FileUtils::toNative(f).toLower());
-                return folded;
-            };
-            const QSet<QString> oldFolded = toFolded(oldSettings.indexedDrives);
-            const QSet<QString> newFolded = toFolded(settings_.indexedDrives);
-
-            // ---- REMOVED folders: stop watching + purge their rows ----
-            // v1.7.4 fix for "removed the folders from settings menu,
-            // nothing happens": the rows used to stay in Files/SearchIndex
-            // forever (still searchable, still in duplicates) and the
-            // watcher kept watching the removed root. Now the whole index
-            // footprint of the folder is deleted on the spot.
-            int removedFolders = 0;
-            for (const QString& drive : oldSettings.indexedDrives) {
-                if (newFolded.contains(FileUtils::toNative(drive).toLower()))
-                    continue;  // still indexed
-                ++removedFolders;
-                statusBar()->showMessage(
-                    QStringLiteral("Removing '%1' from the index...")
-                        .arg(drive));
-                QApplication::processEvents();
-                if (watcher_) watcher_->removeWatch(drive);
-                purgeFolderFromIndex(drive);
-            }
-
-            // ---- ADDED folders: watch live, scan now, auto-extract ----
-            // v1.7.4 fix: a newly added folder was scanned but NEVER
-            // watched (addWatches ran once at startup only), so live
-            // changes in it went unnoticed until the next hourly scan.
-            for (const QString& drive : settings_.indexedDrives) {
-                if (oldFolded.contains(FileUtils::toNative(drive).toLower()))
-                    continue;  // unchanged
-                if (watcher_ && !watcher_->isWatched(drive))
-                    watcher_->addWatch(drive);
-                statusBar()->showMessage("Scanning " + drive + " ...");
-                QApplication::processEvents();
-                scanFolderFast(drive);
-                // Auto-extract after scanning new drives
-                QTimer::singleShot(500, this, [this]() {
-                    autoExtractRetryLeft_ = 20;  // fresh budget
-                    requestAutoExtract();
-                });
-            }
-
-            if (removedFolders > 0) {
-                statusBar()->showMessage(
-                    QStringLiteral("%1 folder%2 removed from the index — "
-                                   "their files no longer appear in search")
-                        .arg(removedFolders)
-                        .arg(removedFolders == 1 ? "" : "s"), 6000);
-                // Drop rows from the removed folder out of the current
-                // result list immediately.
-                const QString currentQuery = searchBar_->text();
-                if (!currentQuery.isEmpty()) onSearch(currentQuery);
-            }
+            // v1.7.11: same shared path as the Apply button. Because
+            // applyNewSettings() diffs against the live settings_, an
+            // earlier Apply click is naturally idempotent here — folders
+            // it already scanned/purged are seen as unchanged.
+            applyNewSettings(dlg.result());
         }
     } catch (...) {
         statusBar()->showMessage("Settings dialog failed.", 3000);
+    }
+}
+
+// v1.7.11: THE single settings-apply path (Apply button AND OK button).
+// Diffs against the current settings_ so it is safe to call repeatedly.
+void MainWindow::applyNewSettings(const AppSettings& s) {
+    const AppSettings oldSettings = settings_;
+    settings_ = s;
+
+    // CPU throttle / pause-on-load settings reach the OCR pool (v1.7.9,
+    // previously OK-only — the Apply button never delivered them).
+    if (ocrPool_) ocrPool_->setAppSettings(settings_);
+
+    darkMode_ = settings_.darkMode;
+    pastelTheme_ = darkMode_ ? 1 : 0;   // v1.7.6 sync
+    saveSettings();
+    applyTheme();
+    updateIndexStats();
+    updateOcrStatusIndicator();  // refresh in case OCR setup changed
+
+    // ---- Live-monitoring master switch (v1.7.11) ----
+    // The "Monitor indexed drives for live changes" checkbox existed in
+    // Settings since day one but was consumed by NOTHING — the watcher
+    // always ran. Honor it: OFF stops every watch thread; ON re-arms
+    // watches for all indexed folders.
+    if (watcher_) {
+        if (!settings_.monitorFileChanges && oldSettings.monitorFileChanges) {
+            watcher_->stop();
+            DS_INFO("Watcher", "Live monitoring disabled in Settings.");
+        } else if (settings_.monitorFileChanges &&
+                   !oldSettings.monitorFileChanges) {
+            if (!settings_.indexedDrives.isEmpty())
+                watcher_->addWatches(settings_.indexedDrives);
+            DS_INFO("Watcher", "Live monitoring re-enabled in Settings.");
+        }
+    }
+
+    // v1.7.4: case-fold the folder lists before diffing — Windows
+    // paths are case-insensitive and QStringList::contains is not,
+    // so "D:\Docs" vs "d:\docs" used to look like two folders.
+    auto toFolded = [](const QStringList& list) {
+        QSet<QString> folded;
+        folded.reserve(list.size());
+        for (const QString& f : list)
+            folded.insert(FileUtils::toNative(f).toLower());
+        return folded;
+    };
+    const QSet<QString> oldFolded = toFolded(oldSettings.indexedDrives);
+    const QSet<QString> newFolded = toFolded(settings_.indexedDrives);
+
+    // ---- NEWLY EXCLUDED folders: purge their rows right away ----
+    // v1.7.11: adding "D:\Movies" to Excluded Folders now takes effect
+    // immediately — its already-indexed rows are removed on the spot
+    // instead of lingering (searchable!) until the next hourly scan's
+    // prune pass finally dropped them.
+    {
+        const QSet<QString> oldExcluded = toFolded(oldSettings.excludedFolders);
+        for (const QString& ex : settings_.excludedFolders) {
+            if (oldExcluded.contains(FileUtils::toNative(ex).toLower()))
+                continue;  // was already excluded
+            statusBar()->showMessage(
+                QStringLiteral("Removing excluded folder '%1' from the index...")
+                    .arg(ex));
+            QApplication::processEvents();
+            purgeFolderFromIndex(ex);
+        }
+    }
+
+    // ---- REMOVED folders: stop watching + purge their rows ----
+    // v1.7.4 fix for "removed the folders from settings menu,
+    // nothing happens": the rows used to stay in Files/SearchIndex
+    // forever (still searchable, still in duplicates) and the
+    // watcher kept watching the removed root. Now the whole index
+    // footprint of the folder is deleted on the spot.
+    int removedFolders = 0;
+    for (const QString& drive : oldSettings.indexedDrives) {
+        if (newFolded.contains(FileUtils::toNative(drive).toLower()))
+            continue;  // still indexed
+        ++removedFolders;
+        statusBar()->showMessage(
+            QStringLiteral("Removing '%1' from the index...")
+                .arg(drive));
+        QApplication::processEvents();
+        if (watcher_) watcher_->removeWatch(drive);
+        purgeFolderFromIndex(drive);
+    }
+
+    // ---- ADDED folders: watch live, scan now, auto-extract ----
+    // v1.7.4 fix: a newly added folder was scanned but NEVER
+    // watched (addWatches ran once at startup only), so live
+    // changes in it went unnoticed until the next hourly scan.
+    for (const QString& drive : settings_.indexedDrives) {
+        if (oldFolded.contains(FileUtils::toNative(drive).toLower()))
+            continue;  // unchanged
+        if (settings_.monitorFileChanges &&
+            watcher_ && !watcher_->isWatched(drive))
+            watcher_->addWatch(drive);
+        statusBar()->showMessage("Scanning " + drive + " ...");
+        QApplication::processEvents();
+        scanFolderFast(drive);
+        // Auto-extract after scanning new drives
+        QTimer::singleShot(500, this, [this]() {
+            autoExtractRetryLeft_ = 20;  // fresh budget
+            requestAutoExtract();
+        });
+    }
+
+    if (removedFolders > 0) {
+        statusBar()->showMessage(
+            QStringLiteral("%1 folder%2 removed from the index — "
+                           "their files no longer appear in search")
+                .arg(removedFolders)
+                .arg(removedFolders == 1 ? "" : "s"), 6000);
+        // Drop rows from the removed folder out of the current
+        // result list immediately.
+        const QString currentQuery = searchBar_->text();
+        if (!currentQuery.isEmpty()) onSearch(currentQuery);
     }
 }
 
