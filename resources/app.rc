@@ -24,9 +24,12 @@
 1 ICON "icons/DocuSearch.ico"
 
 // ---- Version info --------------------------------------------------------
+// Keep in sync with project(VERSION) in CMakeLists.txt and
+// src/core/Constants.h (kAppVersion). This is what Explorer shows in
+// DocuSearch.exe → Properties → Details, and what upgrade tooling reads.
 #define VER_MAJOR 1
-#define VER_MINOR 0
-#define VER_PATCH 0
+#define VER_MINOR 7
+#define VER_PATCH 10
 #define VER_BUILD 0
 
 #define STRINGIFY2(x) #x

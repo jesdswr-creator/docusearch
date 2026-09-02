@@ -71,7 +71,7 @@ int main(int argc, char* argv[]) {
         QMessageBox::warning(nullptr, QStringLiteral("DocuSearch"),
             QStringLiteral("DocuSearch is already running.\n\n"
                            "Close the other DocuSearch window (it may be "
-                           "minimized to the system tray) and try again."));
+                           "minimized to the taskbar) and try again."));
         delete instanceGuard;
         return 0;
     }

@@ -376,8 +376,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(openLocationBtn_, &QPushButton::clicked,
             this, &MainWindow::onOpenLocation);
 
+    // Route the custom title-bar close button through QWidget::close()
+    // (NOT QApplication::quit()). quit() tears the event loop down without
+    // delivering QCloseEvent, so closeEvent() never ran from the PRIMARY
+    // close path of this frameless window — window geometry, splitter
+    // sizes and settings were silently lost, and the "indexing still
+    // running" confirmation was skipped.
     connect(titleCloseBtn_, &QPushButton::clicked,
-            qApp, &QApplication::quit);
+            this, &QWidget::close);
     // Use explicit lambdas — defensive against Qt 6 member-function-pointer
     // ambiguity on QWidget slots. (User reported minimize not working.)
     connect(titleMinBtn_, &QPushButton::clicked,
@@ -387,7 +393,8 @@ MainWindow::MainWindow(QWidget* parent)
         if (isMaximized()) showNormal();
         else showMaximized();
     });
-    // No theme toggle — light mode only
+    // Theme toggle lives in the status bar (themeToggleBtn_ →
+    // onToggleTheme, wired in setupStatusBar).
 
     // Search is triggered ONLY when the user presses Enter or clicks
     // the search input. No live/auto search while typing.
