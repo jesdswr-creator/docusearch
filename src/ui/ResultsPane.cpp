@@ -204,9 +204,17 @@ void ResultsPane::setAction(const QString& label) {
     if (label.isEmpty()) {
         actionBtn_->setText(QString());
         actionBtn_->setVisible(false);
+        if (sortBox_) sortBox_->setVisible(true);
     } else {
         actionBtn_->setText(label);
         actionBtn_->setVisible(true);
+        // v1.7.14: the duplicates header cannot fit BOTH the action button
+        // and the sort dropdown in a 280-420 px pane — they squeezed into
+        // each other (user report). Sorting is also meaningless on
+        // duplicates results: Date/Size/Name ordering scrambles the
+        // group-together layout the duplicates check produces. So while an
+        // action is armed the sort box yields its place entirely.
+        if (sortBox_) sortBox_->setVisible(false);
     }
 }
 
@@ -256,6 +264,14 @@ void ResultsPane::onItemDoubleClicked(int row) {
 
 void ResultsPane::onSortChanged(int index) {
     if (current_.isEmpty()) return;
+    // v1.7.14: ignore sort requests while an action is armed. The old
+    // path routed the sorted list through setResults(), whose
+    // disarm-on-new-result-set contract made the "Delete duplicate
+    // copies" button vanish the moment the user touched the sort
+    // dropdown — and the sort itself scrambled the duplicate grouping.
+    // The sort box is hidden while armed anyway; this guard is the
+    // belt to that braces.
+    if (actionBtn_ && actionBtn_->isVisible()) return;
     QList<SearchHit> sorted = current_;
     switch (index) {
         case 1: // Date

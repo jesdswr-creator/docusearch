@@ -141,7 +141,12 @@ std::vector<HybridResult> HybridSearchEngine::search(
             for (const auto& sh : semanticHits) {
                 if (added >= additionsAllowed) break;
                 if (keywordFileIds.count(sh.fileId)) continue;  // already listed
-                if (sh.similarity < m_threshold) continue;      // below the bar
+                // v1.7.14: additions clear the STRICTER additions bar, not
+                // the raw ranking threshold — the #1 complaint "AI results
+                // contain no keyword I typed" came from unrelated files
+                // scoring 0.45-0.55 (the model's noise floor) and being
+                // appended anyway. Below 0.60 the AI now adds nothing.
+                if (sh.similarity < m_additionsThreshold) continue;
 
                 // Respect the type filter (e.g. type:pdf must not show .txt).
                 if (!m_typeFilter.isEmpty()) {

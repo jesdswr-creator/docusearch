@@ -230,6 +230,10 @@ public:
     QListWidget*    sidebarList_          = nullptr;
     QLabel*         indexedHeaderLbl_     = nullptr;
     QLabel*         indexedInfoLbl_       = nullptr;
+    // v1.7.14: full index-stat breakdown chips (Indexed / Extracted /
+    // Embedded) shown in the top-right badge.
+    QLabel*         extractedInfoLbl_     = nullptr;
+    QLabel*         embeddedInfoLbl_      = nullptr;
     QProgressBar*   indexedBar_           = nullptr;
 
     // Center panel

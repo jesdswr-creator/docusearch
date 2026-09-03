@@ -536,6 +536,28 @@ QLabel#indexedInfo {
     border-radius: 999px;
     padding: 3px 12px;
 }
+/* v1.7.14: full index-stat breakdown chips (top-right badge).
+   Three pills in one row: Indexed (primary accent), Extracted
+   (success green), Embedded (violet AI tint). The number inside
+   carries the meaning; the word keeps the chips self-explanatory. */
+QLabel#extractedInfo {
+    color: @success@;
+    font-size: 11px;
+    font-weight: 700;
+    background: @surface3@;
+    border: 1px solid @border2@;
+    border-radius: 999px;
+    padding: 3px 12px;
+}
+QLabel#embeddedInfo {
+    color: @violet@;
+    font-size: 11px;
+    font-weight: 700;
+    background: @surface3@;
+    border: 1px solid @border2@;
+    border-radius: 999px;
+    padding: 3px 12px;
+}
 QLabel#statusReady {
     color: @primary@;
     font-weight: 700;

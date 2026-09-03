@@ -54,6 +54,11 @@ public:
     // Count files by indexing status.
     qint64 countByStatus(const QString& status) const;
 
+    // v1.7.14: dashboard stat chips — files with extracted text and files
+    // with at least one AI vector (whole-document or chunked), in one
+    // round-trip. Returns false if the database is unavailable.
+    bool countExtractedAndEmbedded(qint64& extracted, qint64& embedded) const;
+
     // Set/get favorite flag.
     bool setFavorite(qint64 fileId, bool favorite);
     bool incrementOpenCount(qint64 fileId);

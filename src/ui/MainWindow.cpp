@@ -71,6 +71,14 @@
 #include <QFuture>
 #include <QtConcurrent>
 #include <QInputDialog>
+#include <QLocale>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QRadioButton>
+#include <QPushButton>
+#include <QLineEdit>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QPalette>
 #include <QColor>
 #include <QDir>
@@ -886,19 +894,43 @@ void MainWindow::buildCentral() {
     menuBarLay->addWidget(sidebarList_, 1);
 
     // Compact indexed-status badge on the right side of the menu bar.
-    // Minimal: just "X files" + thin progress bar. No "Indexed" label, no dot.
+    // v1.7.14: the single "N indexed" number grew into the full
+    // breakdown the user asked for — three pill chips in one row:
+    //   [Indexed N]  files searchable right now (content done or staged)
+    //   [Extracted N] of those, files whose text was actually pulled out
+    //   [Embedded N]  of those, files the AI holds a vector for
+    // plus the thin progress bar, which still only appears while busy.
     auto* statusBadge = new QWidget(sidebar_);
     statusBadge->setObjectName("indexedStatus");
     auto* sbLay = new QHBoxLayout(statusBadge);
     sbLay->setContentsMargins(8, 4, 8, 4);
-    sbLay->setSpacing(8);
-    indexedInfoLbl_ = new QLabel("0 indexed", statusBadge);
+    sbLay->setSpacing(6);
+    indexedInfoLbl_ = new QLabel("Indexed 0", statusBadge);
     indexedInfoLbl_->setObjectName("indexedInfo");
     indexedInfoLbl_->setToolTip(
-        "Number of files currently searchable in your offline index.\n"
+        "Total indexed — files currently searchable in your offline index "
+        "(content extracted or metadata staged).\n"
         "The small bar appears only while files are being processed and "
         "disappears when the queue is done.");
     sbLay->addWidget(indexedInfoLbl_);
+
+    extractedInfoLbl_ = new QLabel("Extracted 0", statusBadge);
+    extractedInfoLbl_->setObjectName("extractedInfo");
+    extractedInfoLbl_->setToolTip(
+        "Total extracted — files whose text was actually pulled out "
+        "(native text or OCR) and is full-text searchable.\n"
+        "Empty-but-valid files (scanned images with no readable text) "
+        "are not counted here.");
+    sbLay->addWidget(extractedInfoLbl_);
+
+    embeddedInfoLbl_ = new QLabel("Embedded 0", statusBadge);
+    embeddedInfoLbl_->setObjectName("embeddedInfo");
+    embeddedInfoLbl_->setToolTip(
+        "Total embedded — files the AI (semantic search) holds a vector "
+        "for, counted once whether chunked or whole-document.\n"
+        "Semantic search only sees these files; the number grows while "
+        "the AI chip shows a progress count.");
+    sbLay->addWidget(embeddedInfoLbl_);
 
     indexedBar_ = new QProgressBar(statusBadge);
     indexedBar_->setObjectName("indexedBar");
@@ -1990,6 +2022,42 @@ void MainWindow::onAddFolder() {
         // hourly scan (another "deleted files still show up" contributor).
         if (watcher_ && !watcher_->isWatched(folder)) {
             watcher_->addWatch(folder);
+        }
+
+        // v1.7.14: persist the folder into the SAME list the Settings →
+        // Indexing panel displays (indexedDrives). Without this, folders
+        // added from the dash were invisible in Settings AND silently
+        // dropped from every settings-driven loop: startup watches
+        // (addWatches(indexedDrives)), the hourly auto-scan (which
+        // early-returns when the list is empty), and the per-folder
+        // integrity pass — the folder was indexed once and then on its own.
+        // Nesting is deduped: a folder already covered by an existing
+        // entry is not re-added, and existing entries INSIDE the new
+        // folder are folded into it (the parent covers them).
+        {
+            const QString canon = QDir::cleanPath(folder);
+            bool covered = false;
+            QStringList kept;
+            kept.reserve(settings_.indexedDrives.size());
+            for (const QString& root : settings_.indexedDrives) {
+                if (root.trimmed().isEmpty()) continue;
+                const QString rp = QDir::cleanPath(root);
+                if (rp.compare(canon, Qt::CaseInsensitive) == 0 ||
+                    canon.startsWith(rp + QDir::separator(),
+                                     Qt::CaseInsensitive)) {
+                    covered = true;            // already listed / parent covers it
+                    kept << root;
+                } else if (!rp.startsWith(canon + QDir::separator(),
+                                          Qt::CaseInsensitive)) {
+                    kept << root;              // unrelated — keep
+                }
+                // else: rp sits inside the new folder — the parent covers it
+            }
+            if (!covered) {
+                settings_.indexedDrives = kept;
+                settings_.indexedDrives << canon;
+                Config::save(settings_);
+            }
         }
 
         scanFolderFast(folder);
@@ -3969,6 +4037,67 @@ void MainWindow::ensureEmbeddingsBackfill() {
     sqlite3* raw = db_->raw();
     if (!raw) return;
 
+    // ── Phase 0 (v1.7.14): stale-embedding invalidation ─────────────
+    // Extraction can rewrite DocumentText for a file that ALREADY has AI
+    // vectors (file edited and re-extracted, OCR re-run, integrity
+    // requeue). The backfill below only ever selected files with NO
+    // embedding row, so vectors computed from the OLD text were searched
+    // forever — semantic results silently drifted away from the file's
+    // real content. Files whose text is newer than their whole-document
+    // embedding get every vector row dropped here; Phase A below then
+    // re-enqueues them in this very pass, so the index heals itself with
+    // no user action. Bounded per tick to keep the tick cheap.
+    {
+        sqlite3_stmt* sel = nullptr;
+        sqlite3_prepare_v2(raw,
+            "SELECT dt.file_id "
+            "FROM DocumentText dt "
+            "JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
+            "WHERE dt.updated_at > e.updated_at "
+            "LIMIT 200;",
+            -1, &sel, nullptr);
+        if (sel) {
+            QList<int> stale;
+            while (sqlite3_step(sel) == SQLITE_ROW) {
+                stale.append(static_cast<int>(sqlite3_column_int64(sel, 0)));
+            }
+            sqlite3_finalize(sel);
+            if (!stale.isEmpty()) {
+                bool ok = true;
+                sqlite3_stmt* delE = nullptr;
+                sqlite3_stmt* delC = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
+                    -1, &delE, nullptr);
+                sqlite3_prepare_v2(raw,
+                    "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
+                    -1, &delC, nullptr);
+                db_->begin();
+                for (const int fid : stale) {
+                    if (delE) {
+                        sqlite3_bind_int64(delE, 1, fid);
+                        if (sqlite3_step(delE) != SQLITE_DONE) ok = false;
+                        sqlite3_reset(delE);
+                    }
+                    if (delC) {
+                        sqlite3_bind_int64(delC, 1, fid);
+                        if (sqlite3_step(delC) != SQLITE_DONE) ok = false;
+                        sqlite3_reset(delC);
+                    }
+                }
+                if (ok) db_->commit(); else db_->rollback();
+                if (delE) sqlite3_finalize(delE);
+                if (delC) sqlite3_finalize(delC);
+                if (ok) {
+                    DS_INFO("BGE", QString(
+                        "Invalidated %1 stale embedding set(s) whose "
+                        "extracted text changed — re-embedding now.")
+                        .arg(stale.size()));
+                }
+            }
+        }
+    }
+
     QVector<int> fileIds;
     QStringList texts;
     bool chunkMode = false;
@@ -4279,19 +4408,48 @@ void MainWindow::updateIndexStats() {
             if (shm.exists()) dbSize += shm.size();
         }
         if (indexedInfoLbl_) {
-            // "N indexed" counts documents actually indexed (content
+            // "Indexed" counts documents actually searchable (content
             // extracted or metadata staged). The old figure was totalFiles()
             // — every row in Files, including skipped formats and rows
             // whose file is already gone — so the number barely moved and
             // read as hard coded. This one changes as work progresses.
             const qint64 indexedNow = contentDone + metaOnly;
-            indexedInfoLbl_->setText(QString("%1 indexed").arg(indexedNow));
-            indexedInfoLbl_->setToolTip(
-                QStringLiteral(
-                    "Documents indexed: %1\n"
-                    "Files tracked: %2 (skipped formats and deleted files "
-                    "are not counted).\nLive value — refreshes automatically.")
-                    .arg(indexedNow).arg(total));
+
+            // v1.7.14: full breakdown — Indexed / Extracted / Embedded.
+            // One extra single-round-trip query per stats tick (20 s);
+            // both counts are plain COUNT(*)-class aggregates.
+            qint64 extracted = 0, embedded = 0;
+            if (repo_->countExtractedAndEmbedded(extracted, embedded)) {
+                if (extractedInfoLbl_) {
+                    extractedInfoLbl_->setText(
+                        QString("Extracted %1")
+                            .arg(QLocale::c().toString(extracted)));
+                }
+                if (embeddedInfoLbl_) {
+                    embeddedInfoLbl_->setText(
+                        QString("Embedded %1")
+                            .arg(QLocale::c().toString(embedded)));
+                }
+                indexedInfoLbl_->setToolTip(
+                    QStringLiteral(
+                        "Total indexed: %1\n"
+                        "Total extracted: %2\n"
+                        "Total embedded: %3\n\n"
+                        "Indexed = files searchable (content extracted or "
+                        "metadata staged). Files tracked: %4 (skipped "
+                        "formats and deleted files are not counted).\n"
+                        "Live value — refreshes automatically.")
+                        .arg(indexedNow).arg(extracted).arg(embedded)
+                        .arg(total));
+            } else {
+                indexedInfoLbl_->setToolTip(
+                    QStringLiteral(
+                        "Total indexed: %1 (files tracked: %2)\n"
+                        "Live value — refreshes automatically.")
+                        .arg(indexedNow).arg(total));
+            }
+            indexedInfoLbl_->setText(QString("Indexed %1")
+                                         .arg(QLocale::c().toString(indexedNow)));
         }
         if (indexedBar_) {
             // Progress = content_done / total. Only VISIBLE while indexing
@@ -5688,7 +5846,7 @@ void MainWindow::onDetectDuplicates() {
         dupResults_ = hits;
         dupKeys_    = hashes;
         resultsPane_->setAction(
-            QStringLiteral("Delete duplicate copies..."));
+            QStringLiteral("Delete duplicates..."));
         // A cancelled check must not pass as complete: keep the note on
         // screen as long as the results are (not an 8 s status toast).
         resultsPane_->setAiSummary(cancelled
@@ -5720,14 +5878,43 @@ void MainWindow::onDetectDuplicates() {
     }
 }
 
+// v1.7.14: move a file into a user-chosen folder, keeping its name
+// ("name (2).ext" on collision). QFile::rename fails across volumes
+// (ERROR_NOT_SAME_DEVICE), so fall back to copy-then-remove — and the
+// copy is size-verified before the original is unlinked, so a partial
+// copy can never destroy the only other copy of the content.
+static bool moveFileKeepingName(const QString& src, const QString& destDir) {
+    const QFileInfo fi(src);
+    if (!fi.exists() || !QFileInfo(destDir).isDir()) return false;
+    const QString base   = fi.completeBaseName();
+    const QString suffix = fi.suffix();
+    QString candidate = destDir + "/" + fi.fileName();
+    if (QFileInfo::exists(candidate)) {
+        for (int n = 2; ; ++n) {
+            if (n > 999) return false;   // pathological — never spin forever
+            candidate = destDir + "/" + base + " (" + QString::number(n) + ")" +
+                        (suffix.isEmpty() ? QString() : "." + suffix);
+            if (!QFileInfo::exists(candidate)) break;
+        }
+    }
+    if (QFile::rename(src, candidate)) return true;
+    if (!QFile::copy(src, candidate))  return false;
+    if (QFileInfo(candidate).size() != fi.size()) {
+        QFile::remove(candidate);        // copy unverifiable — keep original
+        return false;
+    }
+    return QFile::remove(src);
+}
+
 // v1.7.13: "Delete duplicate copies" — cleanup for the duplicates
 // results. For every group with >= 2 files that still exist, the
-// NEWEST copy is kept and the rest go to the Recycle Bin (restorable,
-// unlike an unlink). Deleted rows are purged, stats refreshed, and
-// the duplicates check re-runs so the pane shows the truth after.
-// The list is re-validated against disk FIRST: files moved/deleted
-// since the check, and groups whose partner is gone, are skipped —
-// a group with one survivor is never touched at all.
+// NEWEST copy is kept and the rest are removed. v1.7.14: the user
+// chooses the destination — Recycle Bin (restorable) or a folder they
+// pick (a keep-on-disk quarantine move). Moved rows are purged, stats
+// refreshed, and the duplicates check re-runs so the pane shows the
+// truth after. The list is re-validated against disk FIRST: files
+// moved/deleted since the check, and groups whose partner is gone,
+// are skipped — a group with one survivor is never touched at all.
 void MainWindow::onDeleteDuplicateCopies() {
     if (dupResults_.isEmpty() || dupKeys_.size() != dupResults_.size())
         return;
@@ -5768,37 +5955,130 @@ void MainWindow::onDeleteDuplicateCopies() {
         return;
     }
 
-    const QString msg = QString(
-        "Move %1 duplicate cop%2 (%3) to the Recycle Bin?\n\n"
-        "The newest copy in each of the %4 group%5 is kept. "
-        "Recycled files can be restored from the Recycle Bin.")
-        .arg(doomed.size())
-        .arg(doomed.size() == 1 ? "y" : "ies")
-        .arg(Utils::formatFileSize(reclaimBytes))
-        .arg(groupsActed)
-        .arg(groupsActed == 1 ? "" : "s");
-    if (QMessageBox::question(this, "Delete duplicate copies", msg,
-                              QMessageBox::Yes | QMessageBox::No,
-                              QMessageBox::No) != QMessageBox::Yes)
-        return;
+    // v1.7.14: destination choice. A plain Yes/No box could only offer
+    // the Recycle Bin; the user asked for a keep-on-disk alternative —
+    // moving duplicates into one folder they pick (e.g. a USB drive or
+    // a "ToReview" folder) instead of deleting them at all.
+    QDialog dlg(this);
+    dlg.setWindowTitle("Delete duplicate copies");
+    dlg.setMinimumWidth(420);
+    auto* vLay = new QVBoxLayout(&dlg);
+    auto* introLbl = new QLabel(
+        QString("Move %1 duplicate cop%2 (%3)?\n\n"
+                "The newest copy in each of the %4 group%5 is kept.")
+            .arg(doomed.size())
+            .arg(doomed.size() == 1 ? "y" : "ies")
+            .arg(Utils::formatFileSize(reclaimBytes))
+            .arg(groupsActed)
+            .arg(groupsActed == 1 ? "" : "s"),
+        &dlg);
+    introLbl->setWordWrap(true);
+    vLay->addWidget(introLbl);
+
+    auto* recycleRb = new QRadioButton(
+        QStringLiteral("Recycle Bin (restorable)"), &dlg);
+    recycleRb->setChecked(true);
+    vLay->addWidget(recycleRb);
+
+    auto* folderRb = new QRadioButton(
+        QStringLiteral("Move to a folder I choose (kept on disk; "
+                       "renamed if a name is already taken)"), &dlg);
+    vLay->addWidget(folderRb);
+
+    auto* folderRow = new QHBoxLayout();
+    auto* folderEd  = new QLineEdit(&dlg);
+    folderEd->setPlaceholderText(QStringLiteral("No folder chosen yet"));
+    folderEd->setEnabled(false);
+    auto* browseBtn = new QPushButton(QStringLiteral("Browse..."), &dlg);
+    browseBtn->setEnabled(false);
+    folderRow->addWidget(folderEd, 1);
+    folderRow->addWidget(browseBtn);
+    vLay->addLayout(folderRow);
+
+    // Honest warning: a destination inside an indexed folder gets
+    // re-discovered by the hourly scan — the moved files return as new
+    // index rows (still duplicates by content).
+    auto* warnLbl = new QLabel(&dlg);
+    warnLbl->setWordWrap(true);
+    warnLbl->setStyleSheet(QStringLiteral("color:#b45309;"));
+    warnLbl->setVisible(false);
+    vLay->addWidget(warnLbl);
+
+    auto syncFolderRow = [folderRb, folderEd, browseBtn]() {
+        const bool on = folderRb->isChecked();
+        folderEd->setEnabled(on);
+        browseBtn->setEnabled(on);
+    };
+    connect(folderRb, &QRadioButton::toggled, &dlg, syncFolderRow);
+    connect(browseBtn, &QPushButton::clicked, &dlg, [&]() {
+        const QString dir = QFileDialog::getExistingDirectory(
+            &dlg, QStringLiteral("Choose destination folder"),
+            folderEd->text());
+        if (dir.isEmpty()) return;
+        folderEd->setText(QDir::toNativeSeparators(dir));
+        bool insideIndexed = false;
+        for (const QString& root : settings_.indexedDrives) {
+            if (root.trimmed().isEmpty()) continue;
+            const QString rp = QDir(root).absolutePath() + QDir::separator();
+            if (dir.startsWith(rp, Qt::CaseInsensitive)) {
+                insideIndexed = true;
+                break;
+            }
+        }
+        warnLbl->setText(insideIndexed
+            ? QStringLiteral(
+                "Heads-up: this folder is inside an indexed folder - the "
+                "moved files will be scanned into the index again and "
+                "would show up as duplicates once more.")
+            : QString());
+        warnLbl->setVisible(insideIndexed);
+    });
+
+    auto* btns = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    btns->button(QDialogButtonBox::Ok)->setText(
+        QString("Move %1 cop%2")
+            .arg(doomed.size())
+            .arg(doomed.size() == 1 ? "y" : "ies"));
+    connect(btns, &QDialogButtonBox::accepted, &dlg, [&]() {
+        if (folderRb->isChecked() && folderEd->text().trimmed().isEmpty()) {
+            QMessageBox::information(
+                &dlg, "Delete duplicate copies",
+                "Choose a destination folder first, or pick Recycle Bin.");
+            return;
+        }
+        dlg.accept();
+    });
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    vLay->addWidget(btns);
+
+    if (dlg.exec() != QDialog::Accepted) return;
+    const bool    toRecycleBin = recycleRb->isChecked();
+    const QString destDir      = toRecycleBin
+        ? QString()
+        : QDir::fromNativeSeparators(folderEd->text().trimmed());
 
     int deleted = 0, failed = 0;
-    QStringList deletedPaths;
+    QStringList movedPaths;
+    if (!toRecycleBin) QDir().mkpath(destDir);
     for (int idx : doomed) {
         const QString p = dupResults_[idx].path;
-        // Re-check right before recycling: the confirm dialog pumped
-        // the event loop, the user may have acted in the meantime.
+        // Re-check right before moving: the dialog pumped the event
+        // loop, the user may have acted in the meantime.
         if (!QFileInfo::exists(p)) continue;
-        if (QFile::moveToTrash(p)) {
+        const bool ok = toRecycleBin
+            ? QFile::moveToTrash(p)
+            : moveFileKeepingName(p, destDir);
+        if (ok) {
             ++deleted;
-            deletedPaths.append(p);
+            movedPaths.append(p);
         } else {
             ++failed;
         }
     }
 
-    if (!deletedPaths.isEmpty()) {
-        purgeStaleRows(deletedPaths, QStringLiteral("duplicates delete"));
+    if (!movedPaths.isEmpty()) {
+        purgeStaleRows(movedPaths, QStringLiteral("duplicates delete"));
         updateIndexStats();
     }
 
@@ -5807,13 +6087,16 @@ void MainWindow::onDeleteDuplicateCopies() {
     resultsPane_->setAction(QString());
 
     statusBar()->showMessage(
-        QString("%1 of %2 cop%3 moved to the Recycle Bin%4")
+        QString("%1 of %2 cop%3 %4%5")
             .arg(deleted)
             .arg(doomed.size())
             .arg(doomed.size() == 1 ? "y" : "ies")
+            .arg(toRecycleBin
+                ? QStringLiteral("moved to the Recycle Bin")
+                : QStringLiteral("moved to %1").arg(destDir))
             .arg(failed > 0
-                ? QString("; %1 could not be recycled (missing, in use, "
-                          "or on a location without a Recycle Bin)")
+                ? QString("; %1 could not be moved (missing, in use, "
+                          "or the destination rejected them)")
                       .arg(failed)
                 : QString()),
         8000);

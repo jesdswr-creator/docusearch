@@ -55,9 +55,10 @@ public:
     //   • Keyword hits that ALSO matched semantically keep their position
     //     and just get their semanticScore annotated (UI badge only).
     //   • Documents the keyword search missed entirely are APPENDED after
-    //     the keyword list (sorted by similarity), gated by the similarity
-    //     threshold, the type filter, and a count budget of
-    //     min(topK, max(1, round(semanticWeight * topK))).
+    //     the keyword list (sorted by similarity), gated by the
+    //     ADDITIONS threshold (stricter than the ranking threshold —
+    //     see m_additionsThreshold), the type filter, and a count budget
+    //     of min(topK, max(1, round(semanticWeight * topK))).
     // Never throws — on any error, returns keyword results as-is.
     std::vector<HybridResult> search(
         const QString& queryText,
@@ -74,7 +75,17 @@ private:
     // which typically returns 0.45-0.60 for genuinely related docs).
     // The old 0.65 default filtered out almost all semantic matches,
     // which is why the user said "AI has no role in search".
-    float       m_threshold       = 0.45f;  // cosine similarity threshold
+    float       m_threshold       = 0.45f;  // cosine similarity threshold (ranking/annotation + retrieval budget)
+    // v1.7.14: semantic-ONLY additions must clear a HIGHER bar than the
+    // ranking threshold. BGE-small-en-v1.5 cosine similarity for
+    // UNRELATED texts commonly lands 0.40-0.55, so admitting AI-only
+    // rows at the raw 0.45 threshold let borderline-noise files appear
+    // as "[AI match]" on nearly every query (user report: "it will give
+    // some result, but no keyword in it is related"). Truly relevant
+    // query-to-passage pairs on this model score >= 0.55; 0.60 keeps the
+    // AI-added rows honest — when nothing is really related, AI adds
+    // nothing instead of padding the list with noise.
+    float       m_additionsThreshold = 0.60f;
     int         m_topK            = 20;
     QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
 };

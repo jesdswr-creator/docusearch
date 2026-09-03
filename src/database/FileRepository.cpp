@@ -291,6 +291,37 @@ qint64 FileRepository::countByStatus(const QString& status) const {
     return n;
 }
 
+// v1.7.14: one round-trip for the dashboard stat chips.
+//   extracted = files whose extraction produced readable text (a
+//               DocumentText row with content — empty-but-valid rows are
+//               'done, nothing to say', not 'extracted').
+//   embedded  = files with at least one AI vector, counting a file once
+//               whether it has a whole-document embedding, chunk
+//               embeddings, or both.
+bool FileRepository::countExtractedAndEmbedded(qint64& extracted,
+                                               qint64& embedded) const {
+    extracted = 0;
+    embedded  = 0;
+    sqlite3* raw = db_.raw();
+    if (!raw) return false;
+    sqlite3_stmt* s = nullptr;
+    sqlite3_prepare_v2(raw,
+        "SELECT "
+        " (SELECT COUNT(*) FROM DocumentText WHERE length(extracted_text) > 0), "
+        " (SELECT COUNT(DISTINCT file_id) FROM ("
+        "    SELECT file_id FROM BgeEmbeddings "
+        "    UNION "
+        "    SELECT file_id FROM EmbeddingChunks));",
+        -1, &s, nullptr);
+    if (!s) return false;
+    if (sqlite3_step(s) == SQLITE_ROW) {
+        extracted = sqlite3_column_int64(s, 0);
+        embedded  = sqlite3_column_int64(s, 1);
+    }
+    sqlite3_finalize(s);
+    return true;
+}
+
 bool FileRepository::setFavorite(qint64 fileId, bool favorite) {
     sqlite3* raw = db_.raw();
     if (!raw) return false;
