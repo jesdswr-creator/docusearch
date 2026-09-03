@@ -51,10 +51,12 @@ bool BgeEmbeddingDb::storeEmbedding(int fileId, const std::vector<float>& embedd
     }
 
     sqlite3_stmt* stmt = nullptr;
+    // v1.7.15: stamp the algorithm version so stale vectors from older
+    // builds are detected (and re-embedded) instead of searched against.
     const char* sql =
         "INSERT OR REPLACE INTO BgeEmbeddings "
-        "(file_id, embedding, created_at, updated_at, status) "
-        "VALUES (?1, ?2, strftime('%s','now'), strftime('%s','now'), 'completed');";
+        "(file_id, embedding, created_at, updated_at, status, algo_version) "
+        "VALUES (?1, ?2, strftime('%s','now'), strftime('%s','now'), 'completed', ?3);";
 
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         DS_WARN("BGE", "Failed to prepare storeEmbedding stmt.");
@@ -63,6 +65,7 @@ bool BgeEmbeddingDb::storeEmbedding(int fileId, const std::vector<float>& embedd
 
     sqlite3_bind_int64(stmt, 1, fileId);
     sqlite3_bind_blob(stmt, 2, embedding.data(), EMBEDDING_BYTES, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 3, kAlgoVersion);
 
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -74,11 +77,15 @@ bool BgeEmbeddingDb::getEmbedding(int fileId, std::vector<float>& outEmbedding) 
     if (!m_db) return false;
 
     sqlite3_stmt* stmt = nullptr;
+    // v1.7.15: only CURRENT-algorithm embeddings are returned — a stale
+    // vector is no different from no vector.
     const char* sql =
-        "SELECT embedding FROM BgeEmbeddings WHERE file_id = ?1 AND status = 'completed';";
+        "SELECT embedding FROM BgeEmbeddings "
+        "WHERE file_id = ?1 AND status = 'completed' AND algo_version >= ?2;";
 
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
     sqlite3_bind_int64(stmt, 1, fileId);
+    sqlite3_bind_int(stmt, 2, kAlgoVersion);
 
     bool ok = false;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -104,17 +111,21 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
     if (static_cast<int>(queryEmbedding.size()) != EMBEDDING_DIM) return results;
 
     sqlite3_stmt* stmt = nullptr;
+    // v1.7.15: only CURRENT-algorithm embeddings are scanned — stale
+    // vectors (older tokenizer/model, or pre-versioning rows) would
+    // score meaningless similarities and pollute the results.
     const char* sql =
         "SELECT b.file_id, f.path, f.filename, b.embedding "
         "FROM BgeEmbeddings b "
         "LEFT JOIN Files f ON b.file_id = f.id "
-        "WHERE b.status = 'completed' "
+        "WHERE b.status = 'completed' AND b.algo_version >= ?1 "
         "LIMIT 50000;";
 
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         DS_WARN("BGE", "Failed to prepare searchSimilar stmt.");
         return results;
     }
+    sqlite3_bind_int(stmt, 1, kAlgoVersion);
 
     // Diagnostics: remember the best similarity even below threshold so the
     // UI can report how close the nearest document came.
@@ -178,11 +189,12 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
     const int SQLITE_MAX_PARAMS = 999;
     const int batchCount = std::min(static_cast<int>(fileIds.size()), SQLITE_MAX_PARAMS);
 
+    // v1.7.15: version filter first (?1), then the file-ID list (?2..).
     QString sql = QString(
         "SELECT b.file_id, f.path, f.filename, b.embedding "
         "FROM BgeEmbeddings b "
         "LEFT JOIN Files f ON b.file_id = f.id "
-        "WHERE b.status = 'completed' AND b.file_id IN (");
+        "WHERE b.status = 'completed' AND b.algo_version >= ?1 AND b.file_id IN (");
     for (int i = 0; i < batchCount; ++i) {
         if (i > 0) sql += ",";
         sql += "?";
@@ -195,9 +207,10 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
         return results;
     }
 
-    // Bind the file IDs.
+    // Bind the version, then the file IDs.
+    sqlite3_bind_int(stmt, 1, kAlgoVersion);
     for (int i = 0; i < batchCount; ++i) {
-        sqlite3_bind_int64(stmt, i + 1, fileIds[i]);
+        sqlite3_bind_int64(stmt, i + 2, fileIds[i]);
     }
 
     // Compute cosine similarity for each row.
@@ -238,11 +251,18 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
 
 bool BgeEmbeddingDb::hasEmbedding(int fileId) {
     if (!m_db) return false;
+    // v1.7.15: version-aware. A row built by an OLDER embedding
+    // algorithm (kAlgoVersion < current — including the garbage vectors
+    // from the pre-fix hash-fallback tokenizer) counts as MISSING, so
+    // every embedding path (single-file, batch, backfill) transparently
+    // re-embeds stale documents with the current algorithm.
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db,
-        "SELECT 1 FROM BgeEmbeddings WHERE file_id = ?1 LIMIT 1;",
+        "SELECT 1 FROM BgeEmbeddings "
+        "WHERE file_id = ?1 AND algo_version >= ?2 LIMIT 1;",
         -1, &stmt, nullptr) != SQLITE_OK) return false;
     sqlite3_bind_int64(stmt, 1, fileId);
+    sqlite3_bind_int(stmt, 2, kAlgoVersion);
     const bool found = (sqlite3_step(stmt) == SQLITE_ROW);
     sqlite3_finalize(stmt);
     return found;
@@ -308,15 +328,17 @@ bool BgeEmbeddingDb::storeChunks(int fileId, const std::vector<ChunkData>& chunk
         if (static_cast<int>(chunk.embedding.size()) != EMBEDDING_DIM) continue;
 
         sqlite3_stmt* stmt = nullptr;
+        // v1.7.15: stamp the algorithm version (see storeEmbedding).
         const char* sql =
-            "INSERT INTO EmbeddingChunks (file_id, chunk_index, start_offset, end_offset, embedding, created_at, status) "
-            "VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'), 'ready');";
+            "INSERT INTO EmbeddingChunks (file_id, chunk_index, start_offset, end_offset, embedding, created_at, status, algo_version) "
+            "VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'), 'ready', ?6);";
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, fileId);
             sqlite3_bind_int(stmt, 2, chunk.chunkIndex);
             sqlite3_bind_int(stmt, 3, chunk.startOffset);
             sqlite3_bind_int(stmt, 4, chunk.endOffset);
             sqlite3_bind_blob(stmt, 5, chunk.embedding.data(), EMBEDDING_BYTES, SQLITE_TRANSIENT);
+            sqlite3_bind_int(stmt, 6, kAlgoVersion);
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
@@ -327,11 +349,15 @@ bool BgeEmbeddingDb::storeChunks(int fileId, const std::vector<ChunkData>& chunk
 
 bool BgeEmbeddingDb::hasChunks(int fileId) {
     if (!m_db) return false;
+    // v1.7.15: version-aware (same contract as hasEmbedding) — stale
+    // chunk vectors count as missing and get regenerated.
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db,
-        "SELECT 1 FROM EmbeddingChunks WHERE file_id = ?1 LIMIT 1;",
+        "SELECT 1 FROM EmbeddingChunks "
+        "WHERE file_id = ?1 AND algo_version >= ?2 LIMIT 1;",
         -1, &stmt, nullptr) != SQLITE_OK) return false;
     sqlite3_bind_int64(stmt, 1, fileId);
+    sqlite3_bind_int(stmt, 2, kAlgoVersion);
     const bool found = (sqlite3_step(stmt) == SQLITE_ROW);
     sqlite3_finalize(stmt);
     return found;
@@ -366,10 +392,11 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
     // (deleted/moved file that was not yet purged) can no longer surface
     // as ghost AI hits, (b) hits carry path/filename so the fusion layer
     // and the results pane can show and open them properly.
+    // v1.7.15: version filter first (?1), then the file-ID list (?2..).
     QString sql = QString(
         "SELECT c.file_id, c.embedding, f.path, f.filename "
         "FROM EmbeddingChunks c INNER JOIN Files f ON f.id = c.file_id "
-        "WHERE c.status = 'ready' AND c.file_id IN (");
+        "WHERE c.status = 'ready' AND c.algo_version >= ?1 AND c.file_id IN (");
     for (int i = 0; i < batchCount; ++i) {
         if (i > 0) sql += ",";
         sql += "?";
@@ -380,8 +407,9 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunks(
     if (sqlite3_prepare_v2(m_db, sql.toUtf8().constData(), -1, &stmt, nullptr) != SQLITE_OK) {
         return results;
     }
+    sqlite3_bind_int(stmt, 1, kAlgoVersion);
     for (int i = 0; i < batchCount; ++i) {
-        sqlite3_bind_int64(stmt, i + 1, fileIds[i]);
+        sqlite3_bind_int64(stmt, i + 2, fileIds[i]);
     }
 
     // Compute cosine similarity for each chunk. Group by file_id,
@@ -461,15 +489,17 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
         sqlite3_stmt* stmt = nullptr;
         // v1.7.4: INNER JOIN Files — ghost chunks of deleted/moved files
         // are skipped at the source, and every hit carries its path.
+        // v1.7.15: only CURRENT-algorithm chunks are scanned.
         QString sql = QString(
             "SELECT c.file_id, c.embedding, f.path, f.filename "
             "FROM EmbeddingChunks c INNER JOIN Files f ON f.id = c.file_id "
-            "WHERE c.status = 'ready' "
+            "WHERE c.status = 'ready' AND c.algo_version >= ?1 "
             "LIMIT %1 OFFSET %2;").arg(BATCH).arg(offset);
 
         if (sqlite3_prepare_v2(m_db, sql.toUtf8().constData(), -1, &stmt, nullptr) != SQLITE_OK) {
             break;
         }
+        sqlite3_bind_int(stmt, 1, kAlgoVersion);
 
         int rowsRead = 0;
         while (sqlite3_step(stmt) == SQLITE_ROW) {

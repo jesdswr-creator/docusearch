@@ -21,6 +21,13 @@ ParsedQuery QueryParser::parse(const QString& raw) {
     // Tokenize while respecting quotes and field:value pairs
     QStringList ftsTokens;
     QList<QPair<QString, QString>> fields;
+    // v1.7.15: words collected for the NATURAL-LANGUAGE semantic query
+    // (see ParsedQuery::semanticText). Field filters, boolean operators
+    // and negations are deliberately left out — BGE-small-en-v1.5 has
+    // never seen FTS5 syntax, so embedding it steered the query vector
+    // away from the words the user actually typed.
+    QStringList semTokens;
+    bool semNegateNext = false;  // set by a bare NOT: its next word is excluded
 
     int i = 0;
     const int n = s.size();
@@ -62,7 +69,11 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             if (!phrase.isEmpty()) {
                 // FTS5 phrase syntax: "phrase"
                 ftsTokens.append(Utils::fts5Quote(phrase));
+                // A phrase is natural language — it belongs in the
+                // semantic query too (unless a preceding NOT negated it).
+                if (!semNegateNext) semTokens.append(phrase);
             }
+            semNegateNext = false;
             continue;
         }
 
@@ -74,16 +85,45 @@ ParsedQuery QueryParser::parse(const QString& raw) {
 
         // Boolean operators (case-sensitive)
         if (tok == "AND" || tok == "OR" || tok == "NOT") {
-            // Pass through to FTS5
+            // Pass through to FTS5. AND/OR are not words the user wants
+            // embedded; a bare NOT negates the NEXT term, which must not
+            // be embedded at all (embedding an excluded word would pull
+            // the query vector toward exactly the wrong documents).
             ftsTokens.append(tok);
-        } else if (tok.startsWith('-')) {
+            if (tok == "NOT") semNegateNext = true;
+            continue;
+        }
+
+        if (tok.startsWith('-')) {
             // Exclusion - convert to FTS5 NOT syntax
             ftsTokens.append("NOT");
             ftsTokens.append(Utils::fts5Quote(tok.mid(1)));
-        } else if (tok.contains('*')) {
+            // Excluded word: deliberately left out of the semantic query.
+            semNegateNext = false;
+            continue;
+        }
+
+        if (tok.contains('*')) {
             // Prefix wildcard - FTS5 supports "prefix*"
             ftsTokens.append(tok);  // bare token with * works in FTS5
-        } else {
+            // Semantic side: embed the bare prefix ("rail*" → "rail").
+            if (!semNegateNext) {
+                QString w = tok;
+                w.remove(QLatin1Char('*'));
+                w = w.trimmed();
+                if (!w.isEmpty()) semTokens.append(w);
+            }
+            semNegateNext = false;
+            continue;
+        }
+
+        {
+            // Plain word — part of the semantic query (stopwords stay:
+            // they are the user's words and the model handles them; only
+            // the FTS side below drops them).
+            if (!semNegateNext) semTokens.append(tok);
+            semNegateNext = false;
+
             // Skip common English stop words to reduce noise.
             // "of", "the", "a", "in" etc. match almost every document.
             static const QSet<QString> stopWords = {
@@ -157,8 +197,29 @@ ParsedQuery QueryParser::parse(const QString& raw) {
             // Unknown field - treat as a regular term
             if (!q.ftsQuery.isEmpty()) q.ftsQuery += " ";
             q.ftsQuery += Utils::fts5Quote(val);
+            // The value is a search term, so it belongs in the semantic
+            // query too ("foo:bar" → the user wants documents about "bar").
+            if (!val.trimmed().isEmpty()) semTokens.append(val.trimmed());
         }
     }
+
+    // v1.7.15: build the natural-language semantic query text.
+    // "+ " is DocuSearch's "and" separator (A+B ≡ "A B") — normalize it
+    // to whitespace so the embedding sees plain words, then collapse any
+    // doubled spaces and trim.
+    QString sem;
+    for (const QString& w : semTokens) {
+        QString norm = w;
+        norm.replace('+', ' ');
+        if (!sem.isEmpty()) sem += ' ';
+        sem += norm;
+    }
+    {
+        // Collapse runs of whitespace (e.g. "A++B" → "A  B" above).
+        static const QRegularExpression wsRe(QStringLiteral("[\\s]+"));
+        sem.replace(wsRe, QStringLiteral(" "));
+    }
+    q.semanticText = sem.trimmed();
 
     return q;
 }

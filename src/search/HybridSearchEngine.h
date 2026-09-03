@@ -46,6 +46,14 @@ public:
     void setTypeFilter(const QString& ext) { m_typeFilter = ext.toLower(); }
 
     // Combine keyword results with semantic results.
+    // queryText MUST be the natural-language text of the query
+    // (ParsedQuery::semanticText) — never the raw search-bar string.
+    // Raw text carries FTS5 syntax (type:pdf, AND, -draft, rail*) that
+    // the embedding model has never seen; embedding it steered the
+    // query vector away from the user's actual words. An empty
+    // queryText (pure-filter query) disables the semantic scan and
+    // returns the keyword results unchanged.
+    //
     // v1.7.5 CONTRACT — AI is strictly ADDITIVE:
     //   • Keyword results are copied verbatim in their exact BM25 order.
     //     Nothing below ever re-ranks or drops them, so turning AI ON can

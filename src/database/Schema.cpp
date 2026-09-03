@@ -11,45 +11,41 @@
 namespace DocuSearch {
 
 bool Schema::initialize(Database& db) {
+    // CRITICAL (v1.7.15): capture the on-disk version BEFORE creating
+    // anything. An earlier build stamped user_version = latest at the
+    // END of createSchemaV1(), clobbering a legacy database's version
+    // BEFORE migrate() ever read it — so migrate() was a permanent
+    // no-op on every EXISTING database (all migration steps silently
+    // skipped, and e.g. the EmbeddingChunks table was never created for
+    // anyone). Fresh databases (version 0) are stamped here; legacy
+    // ones keep their original version so the right migrations run.
+    const bool fresh = (currentVersion(db) == 0);
+
     // Always create the base schema (idempotent — CREATE TABLE IF NOT EXISTS).
     // This handles fresh installs and ensures all base tables exist.
     if (!createSchemaV1(db)) {
         return false;
     }
+    if (fresh) {
+        // Nothing to migrate — the complete current schema was just
+        // created. Stamp it.
+        db.exec(QString("PRAGMA user_version = %1;").arg(kLatestSchemaVersion));
+    }
     // Run any pending migrations. This handles upgrades from older versions
     // (e.g. v1.0 databases that don't have BgeEmbeddings/SemanticSettings).
     // See MISSED-6 in the review report — without this, upgrading from v1.0
     // would crash on first query to BgeEmbeddings.
+    //
+    // NOTE (v1.7.15): an earlier build had a "repair" block here that ran on
+    // EVERY startup and force-reset similarity_threshold to 0.45 whenever it
+    // was >= 0.55 — silently destroying any threshold the user had tuned in
+    // Settings (drag the slider up to cut noise → next launch reverts it).
+    // It is GONE and nothing here ever touches similarity_threshold —
+    // v1.7.14 moved the noise gate to a dedicated additions threshold in
+    // HybridSearchEngine (m_additionsThreshold), so the stored value and
+    // any user-tuned setting are left alone.
     if (!migrate(db)) {
         return false;
-    }
-
-    // ── One-time repair of a legacy AI setting ────────────────────
-    // Early builds seeded similarity_threshold at 0.65. INSERT OR IGNORE
-    // never updates an existing row, so databases created by those builds
-    // kept 0.65 forever — and BGE-small-en-v1.5 almost never scores that
-    // high on real content, so semantic search silently returned zero hits
-    // on every query (the "AI is on but found nothing" report). Databases
-    // created later use 0.45 (v1.7.5 aligned every seed with the engine
-    // default); anything still >= 0.55 is a stale legacy
-    // value (or a user-tuned value so strict it blocks every match) and is
-    // reset to the engine's current default of 0.45.
-    {
-        sqlite3* raw = db.raw();
-        if (raw && db.exec(
-                "UPDATE SemanticSettings "
-                "SET value='0.45', updated_at=strftime('%s','now') "
-                "WHERE key='similarity_threshold' "
-                "  AND CAST(value AS REAL) >= 0.55;")) {
-            const int changed = sqlite3_changes(raw);
-            if (changed > 0) {
-                DS_INFO("Database",
-                    QString("Repaired %1 legacy AI similarity threshold(s) "
-                            ">= 0.55 back to 0.45 (semantic search was "
-                            "previously unusable with the old default).")
-                        .arg(changed));
-            }
-        }
     }
     return true;
 }
@@ -167,15 +163,43 @@ bool Schema::createSchemaV1(Database& db) {
 
         // --- BGE embedding storage (semantic search) ----------------------
         // Each file gets at most one 384-float embedding blob (1536 bytes).
+        // algo_version stamps WHICH embedding algorithm produced the vector
+        // (see BgeEmbeddingDb::kAlgoVersion). Rows with an older version
+        // were built by a broken/older tokenizer and are re-embedded
+        // automatically instead of serving garbage "AI matches".
         R"SQL(CREATE TABLE IF NOT EXISTS BgeEmbeddings (
             file_id     INTEGER PRIMARY KEY,
             embedding   BLOB    NOT NULL,
             created_at  INTEGER NOT NULL DEFAULT 0,
             updated_at  INTEGER NOT NULL DEFAULT 0,
             status      TEXT    NOT NULL DEFAULT 'completed',
+            algo_version INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(file_id) REFERENCES Files(id) ON DELETE CASCADE
         );)SQL",
         "CREATE INDEX IF NOT EXISTS idx_bge_status ON BgeEmbeddings(status);",
+
+        // v1.7.15: chunked embeddings. Previously this table was ONLY
+        // created by the v2→v3 migration — but a FRESH install gets
+        // user_version = latest straight from createSchemaV1, so the
+        // migration never ran and brand-new installs silently had NO
+        // EmbeddingChunks table (every chunk query failed to prepare,
+        // semantic search ran document-level only, and the chunk
+        // backfill found nothing to do). Fresh installs must get the
+        // complete schema here.
+        R"SQL(CREATE TABLE IF NOT EXISTS EmbeddingChunks (
+            chunk_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id     INTEGER NOT NULL REFERENCES Files(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL,
+            start_offset INTEGER DEFAULT 0,
+            end_offset   INTEGER DEFAULT 0,
+            embedding   BLOB    NOT NULL,
+            created_at  INTEGER NOT NULL DEFAULT 0,
+            status      TEXT    NOT NULL DEFAULT 'ready',
+            algo_version INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(file_id, chunk_index)
+        );)SQL",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_file ON EmbeddingChunks(file_id);",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_status ON EmbeddingChunks(status);",
 
         // --- Semantic search settings (key/value) -------------------------
         R"SQL(CREATE TABLE IF NOT EXISTS SemanticSettings (
@@ -185,6 +209,12 @@ bool Schema::createSchemaV1(Database& db) {
         );)SQL",
 
         // Default semantic-search settings (inserted once, never overwritten).
+        // similarity_threshold stays 0.45 = HybridSearchEngine's m_threshold
+        // default (ranking/annotation + retrieval budget). The AI-NOISE gate
+        // is separate since v1.7.14: AI-only additions must clear
+        // m_additionsThreshold (0.60) in the engine, so the stored value
+        // here is what the Settings slider shows and must not be "fixed"
+        // by schema code.
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
         "('semantic_enabled',     'false');",
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
@@ -195,6 +225,12 @@ bool Schema::createSchemaV1(Database& db) {
         "('semantic_weight',      '0.40');",
         "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
         "('top_k',                '20');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('chunk_size', '256');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('chunk_overlap', '64');",
+        "INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
+        "('embedding_mode', 'chunk');",
     };
 
     bool ok = true;
@@ -206,8 +242,12 @@ bool Schema::createSchemaV1(Database& db) {
         }
     }
     if (ok) {
-        // Set schema version
-        db.exec(QString("PRAGMA user_version = %1;").arg(kLatestSchemaVersion));
+        // NOTE (v1.7.15): the schema version is NO LONGER stamped here.
+        // Stamping user_version = latest before migrate() ran clobbered
+        // legacy databases' versions, so every migration step was
+        // silently skipped on existing databases (see initialize()).
+        // Fresh databases are stamped by initialize(); migrated ones by
+        // migrate() at the end of their upgrade.
         db.commit();
         DS_INFO("Database", "Schema v1 initialized.");
     } else {
@@ -244,6 +284,14 @@ bool Schema::migrate(Database& db) {
         if (!migrateV2ToV3(db)) return false;
     }
 
+    // v3 → v4: stamp embeddings with the algorithm version that built
+    // them so vectors from the old broken hash-fallback tokenizer are
+    // detected and re-embedded (they scored meaningless against real
+    // queries). Does NOT touch similarity_threshold (see migrateV3ToV4).
+    if (cur < 4) {
+        if (!migrateV3ToV4(db)) return false;
+    }
+
     db.exec(QString("PRAGMA user_version = %1;").arg(kLatestSchemaVersion));
     DS_INFO("Database", QString("Schema migrated to v%1").arg(kLatestSchemaVersion));
     return true;
@@ -251,13 +299,16 @@ bool Schema::migrate(Database& db) {
 
 bool Schema::migrateV1ToV2(Database& db) {
     // Add BgeEmbeddings table (file_id PK, 384-float embedding as BLOB).
-    // CREATE TABLE IF NOT EXISTS is safe even if the table already exists.
+    // CREATE TABLE IF NOT EXISTS is safe even if the table already exists
+    // (v3 databases already have the table WITHOUT algo_version — the
+    // v3→v4 migration adds that column to pre-existing tables).
     if (!db.exec("CREATE TABLE IF NOT EXISTS BgeEmbeddings ("
                  "  file_id     INTEGER PRIMARY KEY,"
                  "  embedding   BLOB    NOT NULL,"
                  "  created_at  INTEGER NOT NULL DEFAULT 0,"
                  "  updated_at  INTEGER NOT NULL DEFAULT 0,"
                  "  status      TEXT    NOT NULL DEFAULT 'completed',"
+                 "  algo_version INTEGER NOT NULL DEFAULT 0,"
                  "  FOREIGN KEY(file_id) REFERENCES Files(id) ON DELETE CASCADE"
                  ");")) {
         DS_ERROR("Database", "Failed to create BgeEmbeddings table during v1→v2 migration.");
@@ -276,6 +327,8 @@ bool Schema::migrateV1ToV2(Database& db) {
     }
 
     // Insert default semantic settings (INSERT OR IGNORE = don't overwrite existing).
+    // (similarity_threshold stays 0.45 = the engine's m_threshold default;
+    // see the createSchemaV1 comment.)
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
             "('semantic_enabled',     'false');");
     db.exec("INSERT OR IGNORE INTO SemanticSettings (key, value) VALUES "
@@ -295,6 +348,8 @@ bool Schema::migrateV2ToV3(Database& db) {
     // Phase 2: EmbeddingChunks table — one document can have multiple
     // chunk embeddings (256 tokens each, 64 overlap). This dramatically
     // improves search quality for long documents.
+    // (v1.7.15: fresh installs create this table in createSchemaV1, so
+    // this is a no-op for them via IF NOT EXISTS.)
     if (!db.exec("CREATE TABLE IF NOT EXISTS EmbeddingChunks ("
                  "  chunk_id    INTEGER PRIMARY KEY AUTOINCREMENT,"
                  "  file_id     INTEGER NOT NULL REFERENCES Files(id) ON DELETE CASCADE,"
@@ -304,6 +359,7 @@ bool Schema::migrateV2ToV3(Database& db) {
                  "  embedding   BLOB    NOT NULL,"
                  "  created_at  INTEGER NOT NULL DEFAULT 0,"
                  "  status      TEXT    NOT NULL DEFAULT 'ready',"
+                 "  algo_version INTEGER NOT NULL DEFAULT 0,"
                  "  UNIQUE(file_id, chunk_index)"
                  ");")) {
         DS_ERROR("Database", "Failed to create EmbeddingChunks table during v2→v3 migration.");
@@ -321,6 +377,43 @@ bool Schema::migrateV2ToV3(Database& db) {
             "('embedding_mode', 'chunk');");
 
     DS_INFO("Database", "v2→v3 migration complete: added EmbeddingChunks table.");
+    return true;
+}
+
+bool Schema::migrateV3ToV4(Database& db) {
+    // ── (a) algo_version column on both embedding tables ─────────
+    // The column tells the backfill which rows hold vectors from an
+    // OLD (possibly broken) embedding algorithm. Pre-existing tables
+    // from v1/v2/v3 builds do not have it; freshly created ones do,
+    // so a "duplicate column" error here means the column already
+    // exists — success, not failure.
+    const struct { const char* table; } tables[] = {
+        { "BgeEmbeddings" }, { "EmbeddingChunks" },
+    };
+    for (const auto& t : tables) {
+        const QString sql = QString(
+            "ALTER TABLE %1 ADD COLUMN algo_version INTEGER NOT NULL DEFAULT 0;")
+            .arg(t.table);
+        QString err;
+        if (!db.exec(sql, &err)) {
+            if (!err.contains(QStringLiteral("duplicate column"))) {
+                DS_ERROR("Database",
+                    QString("v3→v4: failed to add algo_version to %1: %2")
+                        .arg(t.table, err));
+                return false;
+            }
+            // Already present (table was created by a build that had
+            // the column) — nothing to do.
+        }
+    }
+
+    // NOTE: this migration deliberately does NOT touch
+    // similarity_threshold. v1.7.14 moved the AI-noise gate out of the
+    // stored setting and into the engine (HybridSearchEngine::
+    // m_additionsThreshold = 0.60 for AI-only additions), so rewriting
+    // the stored value would only fight user tuning.
+
+    DS_INFO("Database", "v3→v4 migration complete: algo_version stamping on both embedding tables.");
     return true;
 }
 

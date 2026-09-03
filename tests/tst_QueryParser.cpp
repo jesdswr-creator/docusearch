@@ -171,6 +171,91 @@ private slots:
         QVERIFY(q.tagFilter.isEmpty());
     }
 
+    // ---- semanticText (clean natural-language query for the AI) -----------
+    // Regression: the AI used to embed the RAW search-bar string, which
+    // carried FTS5 syntax (type:pdf, AND, -draft, rail*) that
+    // BGE-small-en-v1.5 has never seen — the query vector drifted away
+    // from the user's words and unrelated documents came back as "AI
+    // matches". semanticText must contain ONLY the user's words.
+
+    void semanticText_bareWords() {
+        const auto q = QueryParser::parse("NOC examination");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+    }
+
+    void semanticText_fieldFiltersDropped() {
+        const auto q = QueryParser::parse("type:pdf folder:Railway date:2026 NOC examination");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+        QCOMPARE(q.typeFilter,   QString("pdf"));
+        QCOMPARE(q.folderFilter, QString("Railway"));
+    }
+
+    void semanticText_filtersAfterWords() {
+        const auto q = QueryParser::parse("NOC examination type:pdf");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+    }
+
+    void semanticText_booleanOperatorsDropped() {
+        const auto q = QueryParser::parse("NOC AND examination");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+        QVERIFY(q.ftsQuery.contains("AND"));   // FTS side unchanged
+    }
+
+    void semanticText_hyphenNegationDropped() {
+        const auto q = QueryParser::parse("NOC -draft");
+        QCOMPARE(q.semanticText, QString("NOC"));
+    }
+
+    void semanticText_bareNotExcludesNextWord() {
+        const auto q = QueryParser::parse("NOC NOT examination");
+        QCOMPARE(q.semanticText, QString("NOC"));
+    }
+
+    void semanticText_negatedPhraseDropped() {
+        const auto q = QueryParser::parse("NOC NOT \"draft report\"");
+        QCOMPARE(q.semanticText, QString("NOC"));
+    }
+
+    void semanticText_phraseIncluded() {
+        const auto q = QueryParser::parse("\"Station Development\" report");
+        QCOMPARE(q.semanticText, QString("Station Development report"));
+    }
+
+    void semanticText_wildcardStripped() {
+        const auto q = QueryParser::parse("rail* report");
+        QCOMPARE(q.semanticText, QString("rail report"));
+    }
+
+    void semanticText_plusNormalizedToSpace() {
+        const auto q = QueryParser::parse("NOC+examination");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+    }
+
+    void semanticText_stopwordsKeptForAiButDroppedForFts() {
+        // Stopwords are the user's words — the AI sees them; only the
+        // FTS5 side strips them.
+        const auto q = QueryParser::parse("the NOC procedure");
+        QCOMPARE(q.semanticText, QString("the NOC procedure"));
+        QVERIFY(!q.ftsQuery.contains("\"the\""));
+    }
+
+    void semanticText_pureFilterQueryIsEmpty() {
+        // A pure-filter query has no words to embed — the semantic scan
+        // must be skipped, NOT run on the raw "type:pdf" text.
+        const auto q = QueryParser::parse("type:pdf");
+        QVERIFY(q.semanticText.isEmpty());
+    }
+
+    void semanticText_emptyQueryIsEmpty() {
+        const auto q = QueryParser::parse("");
+        QVERIFY(q.semanticText.isEmpty());
+    }
+
+    void semanticText_whitespaceCollapsed() {
+        const auto q = QueryParser::parse("NOC    examination");
+        QCOMPARE(q.semanticText, QString("NOC examination"));
+    }
+
     // ---- combined ---------------------------------------------------------
 
     void combinedFiltersAndText() {

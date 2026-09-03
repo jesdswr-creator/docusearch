@@ -29,12 +29,18 @@ public:
     // Bumped to 2 when BgeEmbeddings + SemanticSettings tables were added.
     // v1 → v2 migration adds those tables (via CREATE TABLE IF NOT EXISTS,
     // so it's safe to run on a v2 database too).
-    static constexpr int kLatestSchemaVersion = 3;
+    // v3 → v4: EmbeddingChunks + BgeEmbeddings gain an algo_version column
+    // (stale/garbage embeddings from older broken tokenizer builds are
+    // detected and re-embedded automatically). similarity_threshold is
+    // NOT touched — v1.7.14 moved the AI-noise gate into the engine
+    // (HybridSearchEngine::m_additionsThreshold).
+    static constexpr int kLatestSchemaVersion = 4;
 
 private:
     static bool createSchemaV1(Database& db);
     static bool migrateV1ToV2(Database& db);
     static bool migrateV2ToV3(Database& db);
+    static bool migrateV3ToV4(Database& db);
 };
 
 } // namespace DocuSearch

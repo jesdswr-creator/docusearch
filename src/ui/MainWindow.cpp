@@ -1533,14 +1533,29 @@ void MainWindow::onSearch(const QString& query) {
         // Always run keyword (FTS5 BM25) search first.
         auto hits = search_->search(query, 50);  // limit to top 50 results
 
-        // If semantic search is enabled AND the BGE service is ready,
-        // run hybrid search to merge keyword results with semantic matches.
+        // v1.7.15: what the AI actually sees is the query's NATURAL-
+        // LANGUAGE text (words + quoted phrases only). The raw search-bar
+        // string carries FTS5 syntax — type:pdf, AND/OR/NOT, -draft,
+        // rail* — that BGE-small-en-v1.5 has never seen; the old code
+        // embedded it verbatim, which steered the query vector away from
+        // the words the user actually typed (even toward words they
+        // EXCLUDED) and surfaced unrelated documents as "AI matches".
+        // That is the "AI is not listening to my words" report.
+        const auto parsed = QueryParser::parse(query);
+        const QString semanticQuery = parsed.semanticText;
+
+        // If semantic search is enabled AND the BGE service is ready AND
+        // the query has natural-language words, run hybrid search to
+        // merge keyword results with semantic matches.
         // This is the "AI" feature — without this wiring, the Semantic
-        // toggle button does nothing functional.
-        if (semanticEnabled_ && bgeService_ && bgeService_->isReady() && hybridSearch_) {
+        // toggle button does nothing functional. (A pure-filter query
+        // like "type:pdf" has no words to embed, so it runs keyword-only
+        // — the old behavior of embedding "type:pdf" matched documents
+        // merely *about* PDFs: pure noise.)
+        if (semanticEnabled_ && bgeService_ && bgeService_->isReady() && hybridSearch_
+            && !semanticQuery.isEmpty()) {
             // Pass the type filter to the hybrid engine so semantic-only
             // results respect it (e.g., type:pdf won't show .txt files).
-            const auto parsed = QueryParser::parse(query);
             hybridSearch_->setTypeFilter(parsed.typeFilter);
 
             // Convert SearchHit → ExistingSearchResult for the hybrid engine.
@@ -1557,7 +1572,9 @@ void MainWindow::onSearch(const QString& query) {
             }
 
             // Run hybrid search (keyword + cosine, weighted average).
-            auto hybridResults = hybridSearch_->search(query, keywordResults);
+            // The AI embeds the CLEAN semantic query text — never the
+            // raw search-bar string (see the note above).
+            auto hybridResults = hybridSearch_->search(semanticQuery, keywordResults);
 
             // Convert HybridResult → SearchHit for display.
             QList<SearchHit> merged;
@@ -4102,20 +4119,28 @@ void MainWindow::ensureEmbeddingsBackfill() {
     QStringList texts;
     bool chunkMode = false;
 
-    // Phase A — documents with extracted text but no embedding at all.
+    // Phase A — documents with extracted text but no CURRENT embedding.
     // Sourced from DocumentText (the authoritative extraction store);
     // the old SearchIndex-based query missed most documents because the
     // FTS table only carries a subset of extracted content.
+    // v1.7.15: rows stamped with an OLDER algo_version (or pre-versioning
+    // rows, which default to 0) count as missing too — that is how the
+    // garbage vectors written by the broken hash-fallback tokenizer
+    // builds get replaced automatically, without the user ever finding
+    // the "Rebuild AI Embeddings" button.
     {
         sqlite3_stmt* sel = nullptr;
-        sqlite3_prepare_v2(raw,
+        if (sqlite3_prepare_v2(raw,
             "SELECT dt.file_id, dt.extracted_text "
             "FROM DocumentText dt "
             "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
-            "WHERE e.file_id IS NULL "
+            "WHERE (e.file_id IS NULL "
+            "       OR COALESCE(e.algo_version, 0) < ?1) "
             "  AND length(dt.extracted_text) > 0 "
             "ORDER BY dt.file_id LIMIT 500;",
-            -1, &sel, nullptr);
+            -1, &sel, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
+        }
         if (sel) {
             while (sqlite3_step(sel) == SQLITE_ROW) {
                 const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
@@ -4130,20 +4155,29 @@ void MainWindow::ensureEmbeddingsBackfill() {
         }
     }
 
-    // Phase B — embedded documents that predate chunked indexing. They
-    // have a full-document embedding but no EmbeddingChunks rows, which
-    // used to make semantic search permanently blind to them.
+    // Phase B — documents with a CURRENT full-document embedding but no
+    // CURRENT chunk embeddings. They either predate chunked indexing or
+    // their chunks were built by an older algorithm (v1.7.15) — either
+    // way, semantic search is blind to the relevant part of them until
+    // the chunks are regenerated.
     if (fileIds.isEmpty()) {
         chunkMode = true;
         sqlite3_stmt* sel = nullptr;
-        sqlite3_prepare_v2(raw,
+        if (sqlite3_prepare_v2(raw,
             "SELECT dt.file_id, dt.extracted_text "
             "FROM DocumentText dt "
-            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id) "
-            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c WHERE c.file_id = dt.file_id) "
+            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b "
+            "              WHERE b.file_id = dt.file_id "
+            "                AND COALESCE(b.algo_version, 0) >= ?1) "
+            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c "
+            "                   WHERE c.file_id = dt.file_id "
+            "                     AND COALESCE(c.algo_version, 0) >= ?2) "
             "  AND length(dt.extracted_text) > 1000 "
             "ORDER BY dt.file_id LIMIT 300;",
-            -1, &sel, nullptr);
+            -1, &sel, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
+            sqlite3_bind_int(sel, 2, BgeEmbeddingDb::kAlgoVersion);
+        }
         if (sel) {
             while (sqlite3_step(sel) == SQLITE_ROW) {
                 const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
@@ -4301,11 +4335,17 @@ qint64 MainWindow::countMissingEmbeddings() {
     if (!raw) return 0;
     sqlite3_stmt* s = nullptr;
     qint64 n = 0;
+    // v1.7.15: stale-algorithm embeddings count as missing (see
+    // ensureEmbeddingsBackfill) — this is the number the "AI indexing:
+    // N remaining" status line and the backfill chain work from.
     if (sqlite3_prepare_v2(raw,
             "SELECT COUNT(*) FROM DocumentText dt "
             "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
-            "WHERE e.file_id IS NULL AND length(dt.extracted_text) > 0;",
+            "WHERE (e.file_id IS NULL "
+            "       OR COALESCE(e.algo_version, 0) < ?1) "
+            "  AND length(dt.extracted_text) > 0;",
             -1, &s, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(s, 1, BgeEmbeddingDb::kAlgoVersion);
         if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
         sqlite3_finalize(s);
     }
@@ -4320,10 +4360,16 @@ qint64 MainWindow::countMissingChunkDocs() {
     qint64 n = 0;
     if (sqlite3_prepare_v2(raw,
             "SELECT COUNT(*) FROM DocumentText dt "
-            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b WHERE b.file_id = dt.file_id) "
-            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c WHERE c.file_id = dt.file_id) "
+            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b "
+            "              WHERE b.file_id = dt.file_id "
+            "                AND COALESCE(b.algo_version, 0) >= ?1) "
+            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c "
+            "                   WHERE c.file_id = dt.file_id "
+            "                     AND COALESCE(c.algo_version, 0) >= ?2) "
             "  AND length(dt.extracted_text) > 1000;",
             -1, &s, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(s, 1, BgeEmbeddingDb::kAlgoVersion);
+        sqlite3_bind_int(s, 2, BgeEmbeddingDb::kAlgoVersion);
         if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
         sqlite3_finalize(s);
     }
