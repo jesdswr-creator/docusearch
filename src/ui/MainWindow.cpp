@@ -4464,20 +4464,25 @@ void MainWindow::updateIndexStats() {
             const qint64 indexedNow = contentDone + metaOnly;
 
             // v1.7.14: full breakdown — Indexed / Extracted / Embedded.
-            // One extra single-round-trip query per stats tick (20 s);
-            // both counts are plain COUNT(*)-class aggregates.
-            qint64 extracted = 0, embedded = 0;
-            if (repo_->countExtractedAndEmbedded(extracted, embedded)) {
-                if (extractedInfoLbl_) {
-                    extractedInfoLbl_->setText(
-                        QString("Extracted %1")
-                            .arg(QLocale::c().toString(extracted)));
-                }
-                if (embeddedInfoLbl_) {
-                    embeddedInfoLbl_->setText(
-                        QString("Embedded %1")
-                            .arg(QLocale::c().toString(embedded)));
-                }
+            // One extra query pair per stats tick (20 s); plain
+            // COUNT(*)-class aggregates.
+            // v1.7.15: -1 = that sub-count is unknown (its query failed).
+            // One broken sub-count no longer blanks the other chip (the
+            // old single-statement version died entirely while the
+            // EmbeddingChunks table was missing — both chips froze at 0).
+            qint64 extracted = -1, embedded = -1;
+            repo_->countExtractedAndEmbedded(extracted, embedded);
+            if (extracted >= 0 && extractedInfoLbl_) {
+                extractedInfoLbl_->setText(
+                    QString("Extracted %1")
+                        .arg(QLocale::c().toString(extracted)));
+            }
+            if (embedded >= 0 && embeddedInfoLbl_) {
+                embeddedInfoLbl_->setText(
+                    QString("Embedded %1")
+                        .arg(QLocale::c().toString(embedded)));
+            }
+            if (extracted >= 0 && embedded >= 0) {
                 indexedInfoLbl_->setToolTip(
                     QStringLiteral(
                         "Total indexed: %1\n"
@@ -6109,8 +6114,29 @@ void MainWindow::onDeleteDuplicateCopies() {
     int deleted = 0, failed = 0;
     QStringList movedPaths;
     if (!toRecycleBin) QDir().mkpath(destDir);
-    for (int idx : doomed) {
-        const QString p = dupResults_[idx].path;
+
+    // v1.7.15: visible progress while the copies are moved. Recycle-Bin
+    // moves and cross-volume folder copies can take seconds PER FILE,
+    // and a silent stretch reads as a hang. Cancelling stops BEFORE the
+    // next file: already-moved copies stay moved, the rest keep their
+    // originals — nothing is ever half-deleted.
+    const int totalMoves = static_cast<int>(doomed.size());
+    QProgressDialog prog(QStringLiteral("Preparing..."),
+                         QStringLiteral("Cancel"), 0, totalMoves, this);
+    prog.setWindowTitle(QStringLiteral("Delete duplicate copies"));
+    prog.setWindowModality(Qt::WindowModal);
+    prog.setMinimumDuration(400);  // show only if this actually takes time
+
+    for (int pos = 0; pos < totalMoves; ++pos) {
+        if (prog.wasCanceled()) break;
+        const QString p = dupResults_[doomed[pos]].path;
+        prog.setLabelText(
+            QStringLiteral("Moving %1 of %2:\n%3")
+                .arg(pos + 1).arg(totalMoves)
+                .arg(QDir::toNativeSeparators(p)));
+        prog.setValue(pos);
+        QApplication::processEvents();  // paint the label before the blocking move
+
         // Re-check right before moving: the dialog pumped the event
         // loop, the user may have acted in the meantime.
         if (!QFileInfo::exists(p)) continue;
@@ -6124,6 +6150,9 @@ void MainWindow::onDeleteDuplicateCopies() {
             ++failed;
         }
     }
+    const bool stoppedEarly = prog.wasCanceled();
+    prog.setValue(totalMoves);  // ensure the dialog closes
+    QApplication::processEvents();
 
     if (!movedPaths.isEmpty()) {
         purgeStaleRows(movedPaths, QStringLiteral("duplicates delete"));
@@ -6135,7 +6164,7 @@ void MainWindow::onDeleteDuplicateCopies() {
     resultsPane_->setAction(QString());
 
     statusBar()->showMessage(
-        QString("%1 of %2 cop%3 %4%5")
+        QString("%1 of %2 cop%3 %4%5%6")
             .arg(deleted)
             .arg(doomed.size())
             .arg(doomed.size() == 1 ? "y" : "ies")
@@ -6146,6 +6175,10 @@ void MainWindow::onDeleteDuplicateCopies() {
                 ? QString("; %1 could not be moved (missing, in use, "
                           "or the destination rejected them)")
                       .arg(failed)
+                : QString())
+            .arg(stoppedEarly
+                ? QStringLiteral("; stopped early - remaining copies were "
+                                 "left in place")
                 : QString()),
         8000);
 

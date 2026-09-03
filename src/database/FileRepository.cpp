@@ -7,6 +7,7 @@
 #include "../core/Logger.h"
 #include "../core/StringUtils.h"
 #include "../core/Constants.h"
+#include "../embeddings/BgeEmbeddingDb.h"
 
 #include <sqlite3.h>
 #include <QDateTime>
@@ -300,26 +301,50 @@ qint64 FileRepository::countByStatus(const QString& status) const {
 //               embeddings, or both.
 bool FileRepository::countExtractedAndEmbedded(qint64& extracted,
                                                qint64& embedded) const {
-    extracted = 0;
-    embedded  = 0;
+    // v1.7.15: two INDEPENDENT queries with a -1 "unknown" sentinel.
+    // The previous single statement UNIONed BgeEmbeddings with
+    // EmbeddingChunks in one prepare — and on every database upgraded
+    // before v1.7.15 that table did not exist (migrations never ran; the
+    // schema stamped user_version = latest before migrate() could read
+    // it), so prepare() failed and BOTH chips froze at 0 forever. A
+    // broken sub-count must not blank the other one.
+    extracted = -1;
+    embedded  = -1;
     sqlite3* raw = db_.raw();
     if (!raw) return false;
+    bool any = false;
     sqlite3_stmt* s = nullptr;
-    sqlite3_prepare_v2(raw,
-        "SELECT "
-        " (SELECT COUNT(*) FROM DocumentText WHERE length(extracted_text) > 0), "
-        " (SELECT COUNT(DISTINCT file_id) FROM ("
-        "    SELECT file_id FROM BgeEmbeddings "
-        "    UNION "
-        "    SELECT file_id FROM EmbeddingChunks));",
-        -1, &s, nullptr);
-    if (!s) return false;
-    if (sqlite3_step(s) == SQLITE_ROW) {
-        extracted = sqlite3_column_int64(s, 0);
-        embedded  = sqlite3_column_int64(s, 1);
+    if (sqlite3_prepare_v2(raw,
+            "SELECT COUNT(*) FROM DocumentText "
+            "WHERE length(extracted_text) > 0;",
+            -1, &s, nullptr) == SQLITE_OK && s) {
+        if (sqlite3_step(s) == SQLITE_ROW) {
+            extracted = sqlite3_column_int64(s, 0);
+            any = true;
+        }
+        sqlite3_finalize(s);
     }
-    sqlite3_finalize(s);
-    return true;
+    s = nullptr;
+    // "Embedded" counts USABLE vectors only: rows produced by an older
+    // embedding algorithm are invisible to search (BgeEmbeddingDb
+    // treats them as missing), so counting them would overstate
+    // coverage. The number climbs as the backfill re-embeds stale rows.
+    if (sqlite3_prepare_v2(raw,
+            "SELECT COUNT(DISTINCT file_id) FROM ("
+            "  SELECT file_id FROM BgeEmbeddings "
+            "   WHERE COALESCE(algo_version, 0) >= ?1 "
+            "  UNION "
+            "  SELECT file_id FROM EmbeddingChunks "
+            "   WHERE COALESCE(algo_version, 0) >= ?1);",
+            -1, &s, nullptr) == SQLITE_OK && s) {
+        sqlite3_bind_int(s, 1, BgeEmbeddingDb::kAlgoVersion);
+        if (sqlite3_step(s) == SQLITE_ROW) {
+            embedded = sqlite3_column_int64(s, 0);
+            any = true;
+        }
+        sqlite3_finalize(s);
+    }
+    return any;
 }
 
 bool FileRepository::setFavorite(qint64 fileId, bool favorite) {
