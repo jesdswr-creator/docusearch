@@ -129,6 +129,32 @@ is:ocr                    → files that have been OCR'd
 Finds PDFs from 2024 onward containing the phrase "executive lounge"
 but not the word "draft".
 
+### AI semantic search (the "AI" toggle)
+
+Turn on the **AI** button in the search bar to add semantic matching
+on top of the keyword results. DocuSearch embeds your documents with
+the BAAI bge-small-en-v1.5 model (runs entirely on your machine) and
+shows, in addition to exact keyword hits, documents whose *meaning*
+is close to your query — even when they use different words.
+
+How it works:
+
+- The AI only sees your **words** — phrases and plain terms. Field
+  filters (`type:pdf`, `date:...`), boolean operators and negations
+  are applied to the keyword side and are never sent to the model.
+- AI results are strictly **additive**: keyword matches are never
+  re-ranked or removed, and each AI-surfaced file is labeled
+  "AI match" (or "AI + keyword").
+- A document is only *added* as an AI match when its similarity
+  score clears the additions bar (default **0.60**). The BAAI model
+  scores genuinely similar text well above 0.5, so the bar is set
+  just above that noise floor. If AI matches feel too few or too
+  loose, adjust the similarity threshold in **Settings → Search**
+  (higher = stricter, lower = more results).
+- If no document clears the bar, the AI panel tells you how close
+  the nearest document came, so you can decide whether to lower
+  the threshold.
+
 ---
 
 ## Extracting Text

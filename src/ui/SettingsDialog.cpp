@@ -298,7 +298,8 @@ SettingsDialog::SettingsDialog(const AppSettings& current,
 
     // Read current AI settings from SemanticSettings table so sliders
     // show the actual current values, not hardcoded defaults.
-    int weightVal = 30, threshVal = 50, topkVal = 20;
+    // (threshVal fallback 45 = the engine default, m_threshold.)
+    int weightVal = 30, threshVal = 45, topkVal = 20;
     if (db_) {
         sqlite3* raw = db_->raw();
         if (raw) {

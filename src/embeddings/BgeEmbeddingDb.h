@@ -21,6 +21,20 @@ struct SemanticHit {
 
 class BgeEmbeddingDb {
 public:
+    // v1.7.15: which embedding algorithm produced the stored vectors.
+    // Bump this whenever the model, tokenizer, pooling or query prefix
+    // changes in a way that makes older stored vectors INCOMPARABLE with
+    // fresh ones. Consequences of the version stamp:
+    //   • storeEmbedding()/storeChunks() stamp new rows with kAlgoVersion
+    //   • hasEmbedding()/hasChunks() treat rows with an OLDER version as
+    //     MISSING — so the background backfill re-embeds them
+    //   • every search scan ignores older-version rows, so garbage
+    //     vectors from the pre-fix hash-fallback tokenizer builds can
+    //     never surface as "AI matches" again
+    // Rows written by builds without the column default to 0 (= "unknown
+    // / pre-versioning") and are therefore treated as stale too.
+    static constexpr int kAlgoVersion = 1;
+
     explicit BgeEmbeddingDb(const QString& dbPath);
     ~BgeEmbeddingDb();
 

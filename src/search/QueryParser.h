@@ -32,6 +32,25 @@ struct ParsedQuery {
     bool    needsOcrOnly  = false;  // is:needs-ocr — files awaiting OCR
     bool    valid         = true;
     QString errorMessage;
+    // v1.7.15: the natural-language TEXT of the query — the words and
+    // quoted phrases the user actually typed, with every piece of
+    // DocuSearch/FTS5 query SYNTAX removed:
+    //   • field filters (type:pdf, folder:…, date:…, tag:…)  → dropped
+    //   • AND / OR / NOT operators                            → dropped
+    //   • -negation words and "NOT <word>"                    → dropped
+    //     (embedding a word the user EXCLUDED would pull the query
+    //     vector toward exactly the wrong documents)
+    //   • wildcard '*' suffixes ("rail*")                     → "rail"
+    //   • '+' separators ("A+B")                              → "A B"
+    // Stopwords are intentionally KEPT — they are the user's words and
+    // the embedding model handles them; the FTS side strips them on its
+    // own. May be EMPTY for a pure-filter query ("type:pdf") — callers
+    // MUST skip the semantic scan when it is empty, because there are
+    // no words to embed. (Embedding the raw query text is what made the
+    // AI "ignore the user's words": BGE has never seen "type:" or "-",
+    // so "type:pdf NOC -draft" embedded "pdf" and even the excluded
+    // word "draft" into the query vector.)
+    QString semanticText;
 };
 
 class QueryParser {

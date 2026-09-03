@@ -97,6 +97,14 @@ std::vector<HybridResult> HybridSearchEngine::search(
             keywordFileIds.insert(r.fileId);
         }
 
+        // 1b. Nothing to embed → keyword list unchanged. A pure-filter
+        //     query ("type:pdf") has no natural-language words; the old
+        //     code embedded the raw "type:pdf" text, which scored high
+        //     against documents merely *about* PDFs — pure noise.
+        if (queryText.trimmed().isEmpty()) {
+            return out;
+        }
+
         // 2. AI off / model not ready → pure keyword (unchanged list).
         if (!m_semanticEnabled || !m_bgeService || !m_bgeService->isReady()) {
             return out;
