@@ -2056,7 +2056,9 @@ void MainWindow::onAddFolder() {
             if (!covered) {
                 settings_.indexedDrives = kept;
                 settings_.indexedDrives << canon;
-                Config::save(settings_);
+                // Config::save is a member of the singleton (CI #317:
+                // C2352 when called as if static).
+                Config::instance().save(settings_);
             }
         }
 
