@@ -25,6 +25,23 @@
 //   • hideTip() fires on leave / press / wheel / moving onto another
 //     widget / app deactivation — the same moments Qt hides its own.
 //
+// v1.7.18 — TEXT + FITTING FIX (user: "tooltip ok but text and fitting
+// not correct"). Three defects:
+//
+//   1. NO INNER PADDING. The layout margins were kPad+1 while the card
+//      is painted at a kPad inset — the text sat 1 px from the card
+//      border, visually glued to it. Real padding now: kPad (shadow
+//      gutter) + kPadX/kPadY (inner text padding).
+//   2. UNRELIABLE MEASUREMENT. QLabel::sizeHint()/heightForWidth()
+//      with word wrap is quirky (single-line ideal width, rich-text
+//      ideal-width games) and produced clipped or oddly-wrapped text.
+//      Every tooltip in the app is PLAIN TEXT, so the size is now
+//      measured directly with QFontMetrics::boundingRect(word-wrap):
+//      deterministic box, +2 px safety, no label heuristics.
+//   3. Text format is pinned to Qt::PlainText so AutoText can never
+//      misinterpret a '<' in a filename as rich text and re-render
+//      the tip as a fragment of HTML.
+//
 // Header-only, no Q_OBJECT (wiring is lambda-based, like
 // SplashOverlay.h). The singleton tip window is intentionally
 // process-lifetime; parentless top-levels are cleaned up by Qt at
@@ -37,6 +54,7 @@
 #include <QPainterPath>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QFontMetrics>
 #include <QVariantAnimation>
 #include <QScreen>
 #include <QGuiApplication>
@@ -44,6 +62,7 @@
 #include <QPointer>
 #include <QPalette>
 #include <QFont>
+#include <QtGlobal>
 #include <memory>
 
 namespace DocuSearch {
@@ -93,9 +112,14 @@ public:
     }
 
 private:
-    static constexpr int kPad    = 12;  // shadow gutter around the card
-    static constexpr int kRadius = 10;  // card corner radius
-    static constexpr int kMaxTextW = 380;
+    // v1.7.18: three distinct insets — the shadow GUTTER around the card
+    // (kPad), and the TEXT padding INSIDE the card (kPadX/kPadY). The
+    // old single-margin design left the text 1 px from the border.
+    static constexpr int kPad       = 10;   // shadow gutter around the card
+    static constexpr int kPadX      = 10;   // inner text padding, horizontal
+    static constexpr int kPadY      = 7;    // inner text padding, vertical
+    static constexpr int kRadius    = 10;   // card corner radius
+    static constexpr int kMaxTextW  = 420;  // max text box width before wrap
 
     ModernTooltip()
         : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint) {
@@ -108,8 +132,11 @@ private:
 
         m_label = new QLabel(this);
         m_label->setWordWrap(true);
+        // v1.7.18: pin to PLAIN TEXT. Every setToolTip() in the app is
+        // plain; AutoText could misread a '<' (e.g. "file<2.pdf") as a
+        // rich-text tag and silently swallow the rest of the tip.
+        m_label->setTextFormat(Qt::PlainText);
         m_label->setTextInteractionFlags(Qt::NoTextInteraction);
-        m_label->setTextFormat(Qt::AutoText);  // plain + rich text both fine
         QFont f = m_label->font();
         f.setPixelSize(12);
         f.setWeight(QFont::Medium);
@@ -121,7 +148,8 @@ private:
         m_label->setAttribute(Qt::WA_TranslucentBackground, true);
 
         auto* lay = new QVBoxLayout(this);
-        lay->setContentsMargins(kPad + 1, kPad + 1, kPad + 1, kPad + 1);
+        lay->setContentsMargins(kPad + kPadX, kPad + kPadY,
+                                kPad + kPadX, kPad + kPadY);
         lay->addWidget(m_label);
     }
 
@@ -133,13 +161,26 @@ private:
         m_host = host;
 
         m_label->setText(text);
-        // Word-wrapped QLabel sizing: cap the natural width, then ask the
-        // label how tall it wraps at that width (QLabel's default
-        // sizePolicy carries heightForWidth).
-        int w = qMin(m_label->sizeHint().width(), kMaxTextW);
-        w = qMax(w, 40);
-        const int h = m_label->heightForWidth(w);
-        m_label->setFixedSize(w, h > 0 ? h : m_label->sizeHint().height());
+        // v1.7.18: DETERMINISTIC TEXT MEASUREMENT. Measure the plain-text
+        // box with the label's own font: single line when it fits, else
+        // word-wrapped at kMaxTextW. QFontMetrics::boundingRect returns
+        // the tight box for both cases — no QLabel sizeHint heuristics,
+        // nothing clipped, +2 px safety for antialiasing/rounding.
+        const QFontMetrics fm(m_label->font());
+        // Multi-line tips ('\n' in the text): measure the widest LINE,
+        // not the whole string (horizontalAdvance would count the '\n'
+        // glyphs into one pseudo-line).
+        qint64 maxLineW = 0;
+        const QStringList textLines = text.split(QLatin1Char('\n'));
+        for (const QString& ln : textLines)
+            maxLineW = qMax(maxLineW, qint64(fm.horizontalAdvance(ln)));
+        const int naturalW = int(maxLineW) + 2;
+        const int boxW = qBound(24, naturalW, kMaxTextW);
+        const QRect br = fm.boundingRect(QRect(0, 0, boxW, 10000),
+                                         Qt::TextWordWrap, text);
+        const int w = qMax(br.width() + 2, 24);
+        const int h = qMax(br.height() + 2, fm.height());
+        m_label->setFixedSize(w, h);
 
         layout()->activate();
         adjustSize();

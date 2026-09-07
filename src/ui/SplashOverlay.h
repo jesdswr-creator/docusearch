@@ -40,10 +40,7 @@
 //   1. HARD EDGES. The splash popped into existence at opacity 1 and
 //      hard-closed when the main window appeared. Those two snaps read
 //      as visual glitches even when every frame was smooth. The splash
-//      now FADES IN over 160 ms on show and FADES OUT over 200 ms via
-//      fadeOutAndClose() (windowOpacity runs on the compositor, so the
-//      fade stays smooth even while the CPU is busy building the
-//      main window underneath).
+//      now FADES OUT over 200 ms via fadeOutAndClose().
 //   2. FULL-WINDOW REPAINTS. Every animation tick called update() on
 //      the whole 540x340 translucent top-level. Translucent windows
 //      repaint through the DWM, so repainting 183k pixels 60x per
@@ -53,6 +50,27 @@
 //      title and magnifier are static and repaint on demand only.
 //   3. WASTED TICKS. The 16 ms timer kept repainting after close().
 //      Ticks are skipped while the splash is not visible.
+//
+// v1.7.18 — SMOOTHNESS, ROUND THREE ("still splash screen is bug").
+// Two fixes:
+//
+//   1. THE FADE-IN WAS ITSELF A GLITCH. It was driven by a
+//      QVariantAnimation on the main thread — the same thread that is
+//      busy building MainWindow — so its frames advanced only when a
+//      construction pump happened to run: opacity 0.2 → freeze → 0.9.
+//      A stuttering fade reads far worse than a clean appearance, so
+//      the splash now simply SHOWS at full opacity (one crisp
+//      transition, like every native app splash) and keeps the
+//      time-derived sweep/captions.
+//   2. THE REVEAL ORDER WAS WRONG. v1.7.17 showed the main window
+//      FIRST and faded the splash over it — so the (probably
+//      maximized) window popped into existence behind and around the
+//      small translucent card, plus its own first-paint flash, all
+//      visible through the splash's transparent margins. Now the
+//      splash fades out over the DESKTOP first (the event loop is
+//      idle by then, so the 200 ms fade is genuinely smooth), and the
+//      main window is shown by the fade's completion callback — there
+//      is never a hard pop behind a half-transparent overlay.
 //
 // Header-only, no Q_OBJECT needed (no signals/slots; the timer is
 // connected via lambdas inside the class).
@@ -101,8 +119,9 @@ public:
         // always derived from m_clock.elapsed() inside paintEvent, so a
         // coalesced or delayed timer can never rewind or freeze the
         // animation — it only means fewer intermediate frames.
-        // v1.7.17: start fully transparent; showEvent() fades us in.
-        setWindowOpacity(0.0);
+        // v1.7.18: no fade-in — show at full opacity immediately (the
+        // main-thread-driven fade stuttered under the busy constructor
+        // and read as a glitch; see the header note).
 
         m_animTimer.setInterval(16);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
@@ -176,23 +195,16 @@ protected:
     void showEvent(QShowEvent* e) override {
         QWidget::showEvent(e);
         // Center on the screen the cursor is on (multi-monitor safe).
+        // v1.7.18: no fade-in here anymore — the splash appears at full
+        // opacity in one clean step (see the header note). The only
+        // animated exit is fadeOutAndClose(), which runs while the event
+        // loop is idle and is therefore genuinely smooth.
         const QScreen* scr = screen()
             ? screen() : QGuiApplication::primaryScreen();
         if (scr) {
             const QRect avail = scr->availableGeometry();
             move(avail.center() - QRect(0, 0, width(), height()).center());
         }
-        // v1.7.17: fade in — the splash grows out of the desktop instead
-        // of snapping into existence (the first half of the "glitch").
-        if (m_fade) m_fade->stop();
-        m_fade = std::make_unique<QVariantAnimation>();
-        m_fade->setStartValue(0.0);
-        m_fade->setEndValue(1.0);
-        m_fade->setDuration(160);
-        m_fade->setEasingCurve(QEasingCurve::OutCubic);
-        connect(m_fade.get(), &QVariantAnimation::valueChanged, this,
-                [this](const QVariant& v) { setWindowOpacity(v.toDouble()); });
-        m_fade->start();   // owned by m_fade (see fadeOutAndClose note)
     }
 
     void paintEvent(QPaintEvent*) override {

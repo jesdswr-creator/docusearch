@@ -619,6 +619,11 @@ MainWindow::~MainWindow() {
     // Cancel any in-progress extraction so the timer callback doesn't
     // fire on a half-destroyed window.
     extractCancelFlag_.store(true);
+    // v1.7.18: stop + join the background SEMANTIC SEARCH worker before
+    // hybridSearch_/bgeService_ die — the worker captures `this` and uses
+    // both. Mirrors the bgeInitFuture_ contract below.
+    searchWorkersStop_.store(true);
+    if (semanticSearchFuture_.isValid()) semanticSearchFuture_.waitForFinished();
     // v1.7.11: join the BGE init worker — it captures `this` and uses
     // bgeService_, which is about to be destroyed with the window.
     if (bgeInitFuture_.isValid()) bgeInitFuture_.waitForFinished();
@@ -1626,37 +1631,93 @@ void MainWindow::onSearch(const QString& query) {
         return;
     }
     try {
+        // v1.7.18: TWO-STAGE SEARCH. Everything used to run here — FTS,
+        // BGE query embedding, the chunk + document cosine scans, stale
+        // disk checks, rendering — synchronously on the UI thread. On a
+        // real library that froze input for seconds (user-measured
+        // 3.6 s: "it defeat the purpose of this app"). Now stage 1 shows
+        // KEYWORD results immediately (FTS5 is milliseconds), the heavy
+        // semantic scan runs on the global thread pool, and
+        // applySemanticResults() merges it in when it lands. searchGen_
+        // discards results of superseded queries.
+        const quint64 gen = ++searchGen_;
         QElapsedTimer t; t.start();
 
-        // Always run keyword (FTS5 BM25) search first.
+        // ---- Stage 1: keyword (FTS5 BM25) results, RIGHT NOW ----
         auto hits = search_->search(query, 50);  // limit to top 50 results
 
         // v1.7.15: what the AI actually sees is the query's NATURAL-
         // LANGUAGE text (words + quoted phrases only). The raw search-bar
         // string carries FTS5 syntax — type:pdf, AND/OR/NOT, -draft,
-        // rail* — that BGE-small-en-v1.5 has never seen; the old code
-        // embedded it verbatim, which steered the query vector away from
-        // the words the user actually typed (even toward words they
-        // EXCLUDED) and surfaced unrelated documents as "AI matches".
-        // That is the "AI is not listening to my words" report.
+        // rail* — that BGE-small-en-v1.5 has never seen; embedding it
+        // verbatim steered the query vector away from the words the user
+        // actually typed and surfaced unrelated documents as "AI
+        // matches". That was the "AI is not listening to my words" report.
         const auto parsed = QueryParser::parse(query);
         const QString semanticQuery = parsed.semanticText;
 
-        // If semantic search is enabled AND the BGE service is ready AND
-        // the query has natural-language words, run hybrid search to
-        // merge keyword results with semantic matches.
-        // This is the "AI" feature — without this wiring, the Semantic
-        // toggle button does nothing functional. (A pure-filter query
-        // like "type:pdf" has no words to embed, so it runs keyword-only
-        // — the old behavior of embedding "type:pdf" matched documents
-        // merely *about* PDFs: pure noise.)
-        if (semanticEnabled_ && bgeService_ && bgeService_->isReady() && hybridSearch_
-            && !semanticQuery.isEmpty()) {
-            // Pass the type filter to the hybrid engine so semantic-only
-            // results respect it (e.g., type:pdf won't show .txt files).
-            hybridSearch_->setTypeFilter(parsed.typeFilter);
+        // Semantic scan is wanted when AI is on, the BGE service is
+        // ready, and the query has natural-language words to embed. A
+        // pure-filter query like "type:pdf" has no words — keyword-only.
+        const bool wantSemantic = semanticEnabled_ && bgeService_
+            && bgeService_->isReady() && hybridSearch_
+            && !semanticQuery.isEmpty() && !searchWorkersStop_.load();
 
-            // Convert SearchHit → ExistingSearchResult for the hybrid engine.
+        // v1.7.3/1.7.4: hide stale entries (file deleted/moved while the
+        // app was closed) before display, then PURGE the rows whose
+        // drive is still reachable so they never come back.
+        const QStringList stalePaths = hideStaleResults(hits);
+        const int staleHidden = stalePaths.size();
+        const int stalePurged = purgeStaleRows(stalePaths,
+                                               QStringLiteral("keyword search"));
+        // v1.7.18: the pane is being reused for search results — drop any
+        // duplicates-view state here (ResultsPane disarms its own delete
+        // action on setResults). This also lets the late semantic merge
+        // detect that the user switched to the duplicates view while the
+        // scan was running, and refuse to stomp it (see the guard there).
+        dupResults_.clear();
+        dupKeys_.clear();
+        resultsPane_->setResults(hits);
+
+        if (staleHidden > 0) {
+            statusBar()->showMessage(
+                QStringLiteral("%1 stale result%2 hidden (file deleted "
+                               "or moved)%3")
+                    .arg(staleHidden)
+                    .arg(staleHidden == 1 ? "" : "s")
+                    .arg(stalePurged > 0
+                        ? QStringLiteral(" — %1 stale index entr%2 removed")
+                              .arg(stalePurged)
+                              .arg(stalePurged == 1 ? "y" : "ies")
+                        : QString()),
+                6000);
+        }
+
+        if (!wantSemantic) {
+            // Keyword-only search (existing behavior).
+            resultsPane_->setAiSummary(QString());
+            statusBar()->showMessage(
+                QString("%1 result%2 in %3 ms")
+                    .arg(hits.size())
+                    .arg(hits.size() == 1 ? "" : "s")
+                    .arg(t.elapsed()));
+        } else {
+            // ---- Stage 2: semantic scan on the global thread pool. The
+            // user is already looking at keyword results; the AI merge
+            // arrives via applySemanticResults() when ready. The status
+            // line says so, honestly, in real time.
+            statusBar()->showMessage(
+                QString("%1 result%2 in %3 ms — AI ranking in background…")
+                    .arg(hits.size())
+                    .arg(hits.size() == 1 ? "" : "s")
+                    .arg(t.elapsed()));
+            resultsPane_->setAiSummary(QString(
+                "<b>Keyword results shown.</b> AI ranking is running in "
+                "the background — documents above the similarity bar are "
+                "merged in as they arrive. Your keyword order never "
+                "changes."));
+
+            // Convert SearchHit → ExistingSearchResult for the engine.
             std::vector<DocuSearch::ExistingSearchResult> keywordResults;
             keywordResults.reserve(hits.size());
             for (const auto& h : hits) {
@@ -1669,218 +1730,230 @@ void MainWindow::onSearch(const QString& query) {
                 keywordResults.push_back(r);
             }
 
-            // Run hybrid search (keyword + cosine, weighted average).
-            // The AI embeds the CLEAN semantic query text — never the
-            // raw search-bar string (see the note above).
-            auto hybridResults = hybridSearch_->search(semanticQuery, keywordResults);
-
-            // Convert HybridResult → SearchHit for display.
-            QList<SearchHit> merged;
-            merged.reserve(hybridResults.size());
-            for (const auto& hr : hybridResults) {
-                SearchHit h;
-                h.fileId       = hr.fileId;
-                h.filename     = hr.filename;
-                h.path         = hr.path;
-                h.extension    = hr.extension;
-                h.score        = hr.combinedScore;
-                // Visible AI contribution indicator. Show three cases:
-                //  1. Pure keyword match (semanticScore = 0)  → no badge
-                //  2. Hybrid match (both > 0)                 → "AI + keyword"
-                //  3. Pure semantic match (keywordScore = 0)   → "AI only"
-                // The user said "AI has no role in search. It is acting
-                // like normal keyword search" — this badge makes the AI
-                // contribution visible so they can SEE when AI is working.
-                if (hr.semanticScore > 0.01f && hr.keywordScore > 0.01f) {
-                    h.snippet = QString(
-                        "<b>[AI + keyword]</b> keyword: %1%  •  semantic: %2%")
-                        .arg(int(hr.keywordScore * 100))
-                        .arg(int(hr.semanticScore * 100));
-                } else if (hr.semanticScore > 0.01f) {
-                    h.snippet = QString(
-                        "<b>[AI match]</b> semantic similarity: %1%  "
-                        "(no keyword match — AI found this document)")
-                        .arg(int(hr.semanticScore * 100));
-                } else {
-                    h.snippet = QString("[keyword match] relevance: %1%")
-                        .arg(int(hr.keywordScore * 100));
-                }
-                // Phase 2 BUGFIX: previously the line below OVERWROTE
-                //   the [AI + keyword] / [AI match] badge with the original
-                //   keyword snippet, making AI contributions invisible to the
-                //   user. Now we PREPEND the AI badge to the original snippet
-                //   so the user sees BOTH the badge AND the keyword context.
-                for (const auto& orig : hits) {
-                    if (orig.fileId == hr.fileId) {
-                        h.size          = orig.size;
-                        h.modifiedDate  = orig.modifiedDate;
-                        h.isFavorite    = orig.isFavorite;
-                        // Phase 2: keep the AI badge, append original snippet if any.
-                        if (!orig.snippet.isEmpty()) {
-                            h.snippet = h.snippet + "<br>" + orig.snippet;
-                        }
-                        break;
-                    }
-                }
-                // Semantic-only hits (AI found the document, keywords did
-                // not) carry NO metadata through the fusion layer: no
-                // extension, no size, no date. They used to render with an
-                // empty badge ("unrecognized") and "0 B" even though the
-                // file was perfectly fine. Backfill straight from disk.
-                if (h.size <= 0 || h.extension.isEmpty()
-                    || !h.modifiedDate.isValid()) {
-                    const QFileInfo fi(h.path);
-                    if (h.extension.isEmpty())
-                        h.extension = fi.suffix().toLower();
-                    if (h.size <= 0)
-                        h.size = fi.size();
-                    if (!h.modifiedDate.isValid())
-                        h.modifiedDate = fi.lastModified();
-                }
-                merged.append(h);
-            }
-            // v1.7.3/1.7.4: hide stale entries (file deleted/moved while the
-            // app was closed) before display, then PURGE the rows whose
-            // drive is still reachable so they never come back.
-            const QStringList stalePaths = hideStaleResults(merged);
-            const int staleHidden = stalePaths.size();
-            const int stalePurged = purgeStaleRows(stalePaths, QStringLiteral("hybrid search"));
-            resultsPane_->setResults(merged);
-            if (staleHidden > 0) {
-                statusBar()->showMessage(
-                    QStringLiteral("%1 stale result%2 hidden (file deleted "
-                                   "or moved)%3")
-                        .arg(staleHidden)
-                        .arg(staleHidden == 1 ? "" : "s")
-                        .arg(stalePurged > 0
-                            ? QStringLiteral(" — %1 stale index entr%2 removed")
-                                  .arg(stalePurged)
-                                  .arg(stalePurged == 1 ? "y" : "ies")
-                            : QString()),
-                    6000);
-            }
-            // Phase 4: surface the AI contribution honestly. The fusion
-            // is now strictly ADDITIVE — keyword results are never
-            // reordered or dropped — so the status line reports the
-            // keyword count and the AI-only additions separately.
-            int aiContribCount = 0;
-            int aiOnlyCount = 0;
-            for (const auto& hr : hybridResults) {
-                if (hr.semanticScore > 0.01f) ++aiContribCount;
-                if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
-            }
-            statusBar()->showMessage(
-                QString("%1 result%2 · keyword %3 · AI-found %4 · %5 ms")
-                    .arg(merged.size())
-                    .arg(merged.size() == 1 ? "" : "s")
-                    .arg(merged.size() - aiOnlyCount)
-                    .arg(aiOnlyCount)
-                    .arg(t.elapsed()));
-            // Persistent summary pill directly above the results list —
-            // the status-bar toast disappears, this stays until the next
-            // search so users can actually SEE what AI did.
-            if (aiOnlyCount > 0) {
-                resultsPane_->setAiSummary(QString(
-                    "<b>AI added %1 document%2</b> that keyword search "
-                    "missed (listed after your %3 keyword result%4). "
-                    "Keyword order is never changed.")
-                    .arg(aiOnlyCount)
-                    .arg(aiOnlyCount == 1 ? "" : "s")
-                    .arg(merged.size() - aiOnlyCount)
-                    .arg(merged.size() - aiOnlyCount == 1 ? "" : "s"));
-            } else if (aiContribCount > 0) {
-                // AI confirmed keyword hits only — no new documents
-                // cleared the similarity bar this pass.
-                const int confirmed = aiContribCount - aiOnlyCount;
-                resultsPane_->setAiSummary(QString(
-                    "<b>AI confirmed %1 keyword match%2</b> — no new "
-                    "documents scored above the similarity bar. Keyword "
-                    "order is never changed.")
-                    .arg(confirmed)
-                    .arg(confirmed == 1 ? "" : "es"));
-            } else if (bgeService_ && bgeService_->isReady()) {
-                // Zero semantic contribution: explain exactly why, with the
-                // real numbers from the scan, instead of a vague complaint.
-                const auto stats = bgeService_->getStats();
-                const float bestSim = bgeService_->lastBestSimilarity();
-                const int thrPct = hybridSearch_
-                    ? qRound(hybridSearch_->threshold() * 100) : 45;
-                if (stats.total == 0) {
-                    resultsPane_->setAiSummary(QString(
-                        "<b>Semantic index is empty.</b> AI ranking starts "
-                        "working once documents are extracted — each indexed "
-                        "document builds an embedding on its own."));
-                } else if (bestSim < 0.0f) {
-                    // Nothing was comparable this pass. Only blame the
-                    // chunk backfill while work is genuinely pending —
-                    // the old wording claimed "chunk index building"
-                    // even when the real problem was that semantic
-                    // search never ran (see the onBgeReady ordering
-                    // fix) or no comparable embedding exists.
-                    const qint64 pendingDocs   = countMissingEmbeddings();
-                    const qint64 pendingChunks = countMissingChunkDocs();
-                    if (pendingDocs > 0 || pendingChunks > 0) {
-                        resultsPane_->setAiSummary(QString(
-                            "<b>AI index warming up.</b> %1 document%2 "
-                            "embedded; %3 still pending in the AI index "
-                            "build — results below are keyword-only for "
-                            "now. This is one-time background work.")
-                            .arg(stats.total)
-                            .arg(stats.total == 1 ? " is" : "s are")
-                            .arg(pendingDocs + pendingChunks));
-                    } else {
-                        resultsPane_->setAiSummary(QString(
-                            "<b>Semantic scan found nothing to compare.</b> "
-                            "%1 embedding%2 exist but the last query "
-                            "compared none — check the log (BGE) for "
-                            "tokenizer/model errors.")
-                            .arg(stats.total)
-                            .arg(stats.total == 1 ? "" : "s"));
-                    }
-                } else {
-                    resultsPane_->setAiSummary(QString(
-                        "<b>No semantic match above the %1% similarity bar.</b> "
-                        "Closest of %2 embedded documents scored %3%. Lower "
-                        "the AI threshold in Settings → Search to admit "
-                        "weaker semantic matches.")
-                        .arg(thrPct)
-                        .arg(stats.total)
-                        .arg(qRound(bestSim * 100)));
-                }
-            } else {
-                resultsPane_->setAiSummary(QString(
-                    "<b>Semantic ranking unavailable</b> — the AI model is "
-                    "not loaded, so results are keyword-only."));
-            }
-        } else {
-            // Keyword-only search (existing behavior).
-            // v1.7.3/1.7.4: hide stale entries, purge the purgeable ones.
-            const QStringList stalePaths = hideStaleResults(hits);
-            const int staleHidden = stalePaths.size();
-            purgeStaleRows(stalePaths, QStringLiteral("keyword search"));
-            resultsPane_->setResults(hits);
-            resultsPane_->setAiSummary(QString());
-            statusBar()->showMessage(
-                staleHidden > 0
-                    ? QStringLiteral("%1 result%2 in %3 ms · %4 stale hidden")
-                          .arg(hits.size())
-                          .arg(hits.size() == 1 ? "" : "s")
-                          .arg(t.elapsed())
-                          .arg(staleHidden)
-                    : QString("%1 result%2 in %3 ms")
-                          .arg(hits.size())
-                          .arg(hits.size() == 1 ? "" : "s")
-                          .arg(t.elapsed()));
+            // v1.7.18: the query embedding + chunk/document cosine scans
+            // run OFF the UI thread. semanticSearchMutex_ serializes
+            // overlapping scans on the shared HybridSearchEngine (a
+            // second setTypeFilter+search must never interleave with the
+            // first); searchWorkersStop_ + the dtor join make sure a
+            // worker can never touch a dying engine — the same lifetime
+            // contract as bgeInitFuture_.
+            auto* watcher =
+                new QFutureWatcher<std::vector<HybridResult>>(this);
+            connect(watcher,
+                    &QFutureWatcher<std::vector<HybridResult>>::finished,
+                    this,
+                    [this, watcher, gen, query, hits, t]() {
+                watcher->deleteLater();
+                if (searchWorkersStop_.load()) return;
+                if (gen != searchGen_) return;  // superseded — newer query owns the UI
+                applySemanticResults(query, hits, watcher->result(),
+                                     t.elapsed());
+            });
+            const QString typeFilter = parsed.typeFilter;
+            semanticSearchFuture_ = QtConcurrent::run(
+                [this, semanticQuery, keywordResults, typeFilter]()
+                    -> std::vector<HybridResult> {
+                if (searchWorkersStop_.load()) return {};
+                QMutexLocker lock(&semanticSearchMutex_);
+                if (searchWorkersStop_.load()) return {};
+                hybridSearch_->setTypeFilter(typeFilter);
+                // The AI embeds the CLEAN semantic query text — never
+                // the raw search-bar string (see the v1.7.15 note).
+                return hybridSearch_->search(semanticQuery, keywordResults);
+            });
+            watcher->setFuture(semanticSearchFuture_);
         }
 
         // Highlight search terms in the extracted text pane (yellow).
         // This makes it easy for users to find the relevant parts of
-        // the document after clicking a search result.
+        // the document after clicking a result.
         if (previewPane_) {
             previewPane_->setSearchQuery(query);
         }
     } catch (...) {
         statusBar()->showMessage("Search error - try a different query");
+    }
+}
+
+// v1.7.18: landing point of stage 2 (see onSearch). The semantic scan
+// finished on the global thread pool; merge its results with the keyword
+// list already on screen — keyword order is never touched, AI additions
+// are appended after it — and render. Runs on the UI thread, delivered
+// by the QFutureWatcher, only when the generation still matches.
+void MainWindow::applySemanticResults(const QString& query,
+                                      const QList<SearchHit>& keywordHits,
+                                      std::vector<HybridResult> hybridResults,
+                                      qint64 totalMs) {
+    Q_UNUSED(query);
+    // v1.7.18: if the user switched the pane to the duplicates view while
+    // the semantic scan was in flight, never stomp it with a late search
+    // result. (Stage 1 of onSearch clears dupKeys_; only a duplicates run
+    // started AFTER that can have re-populated it.)
+    if (!dupKeys_.isEmpty()) return;
+    QList<SearchHit> merged;
+    merged.reserve(static_cast<int>(hybridResults.size()));
+    for (const auto& hr : hybridResults) {
+        SearchHit h;
+        h.fileId       = hr.fileId;
+        h.filename     = hr.filename;
+        h.path         = hr.path;
+        h.extension    = hr.extension;
+        h.score        = hr.combinedScore;
+        // Visible AI contribution indicator. Show three cases:
+        //  1. Pure keyword match (semanticScore = 0)  → no badge
+        //  2. Hybrid match (both > 0)                 → "AI + keyword"
+        //  3. Pure semantic match (keywordScore = 0)   → "AI only"
+        // The badge makes the AI contribution visible so the user can
+        // SEE when AI is working.
+        if (hr.semanticScore > 0.01f && hr.keywordScore > 0.01f) {
+            h.snippet = QString(
+                "<b>[AI + keyword]</b> keyword: %1%  •  semantic: %2%")
+                .arg(int(hr.keywordScore * 100))
+                .arg(int(hr.semanticScore * 100));
+        } else if (hr.semanticScore > 0.01f) {
+            h.snippet = QString(
+                "<b>[AI match]</b> semantic similarity: %1%  "
+                "(no keyword match — AI found this document)")
+                .arg(int(hr.semanticScore * 100));
+        } else {
+            h.snippet = QString("[keyword match] relevance: %1%")
+                .arg(int(hr.keywordScore * 100));
+        }
+        // Phase 2 BUGFIX: keep the AI badge AND append the original
+        // keyword snippet so the user sees both.
+        for (const auto& orig : keywordHits) {
+            if (orig.fileId == hr.fileId) {
+                h.size          = orig.size;
+                h.modifiedDate  = orig.modifiedDate;
+                h.isFavorite    = orig.isFavorite;
+                if (!orig.snippet.isEmpty()) {
+                    h.snippet = h.snippet + "<br>" + orig.snippet;
+                }
+                break;
+            }
+        }
+        // Semantic-only hits (AI found the document, keywords did not)
+        // carry NO metadata through the fusion layer: no extension, no
+        // size, no date. Backfill straight from disk.
+        if (h.size <= 0 || h.extension.isEmpty()
+            || !h.modifiedDate.isValid()) {
+            const QFileInfo fi(h.path);
+            if (h.extension.isEmpty())
+                h.extension = fi.suffix().toLower();
+            if (h.size <= 0)
+                h.size = fi.size();
+            if (!h.modifiedDate.isValid())
+                h.modifiedDate = fi.lastModified();
+        }
+        merged.append(h);
+    }
+    // v1.7.3/1.7.4: hide stale entries (a file can vanish while the
+    // semantic scan is in flight), then purge the purgeable ones.
+    const QStringList stalePaths = hideStaleResults(merged);
+    const int staleHidden = stalePaths.size();
+    const int stalePurged = purgeStaleRows(stalePaths, QStringLiteral("hybrid search"));
+    resultsPane_->setResults(merged);
+    if (staleHidden > 0) {
+        statusBar()->showMessage(
+            QStringLiteral("%1 stale result%2 hidden (file deleted "
+                           "or moved)%3")
+                .arg(staleHidden)
+                .arg(staleHidden == 1 ? "" : "s")
+                .arg(stalePurged > 0
+                    ? QStringLiteral(" — %1 stale index entr%2 removed")
+                          .arg(stalePurged)
+                          .arg(stalePurged == 1 ? "y" : "ies")
+                    : QString()),
+            6000);
+    }
+    // Phase 4: surface the AI contribution honestly. The fusion is
+    // strictly ADDITIVE — keyword results are never reordered or
+    // dropped — so the status line reports the keyword count and the
+    // AI-only additions separately.
+    int aiContribCount = 0;
+    int aiOnlyCount = 0;
+    for (const auto& hr : hybridResults) {
+        if (hr.semanticScore > 0.01f) ++aiContribCount;
+        if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
+    }
+    statusBar()->showMessage(
+        QString("%1 result%2 · keyword %3 · AI-found %4 · %5 ms")
+            .arg(merged.size())
+            .arg(merged.size() == 1 ? "" : "s")
+            .arg(merged.size() - aiOnlyCount)
+            .arg(aiOnlyCount)
+            .arg(totalMs));
+    // Persistent summary pill directly above the results list —
+    // the status-bar toast disappears, this stays until the next
+    // search so users can actually SEE what AI did.
+    if (aiOnlyCount > 0) {
+        resultsPane_->setAiSummary(QString(
+            "<b>AI added %1 document%2</b> that keyword search "
+            "missed (listed after your %3 keyword result%4). "
+            "Keyword order is never changed.")
+            .arg(aiOnlyCount)
+            .arg(aiOnlyCount == 1 ? "" : "s")
+            .arg(merged.size() - aiOnlyCount)
+            .arg(merged.size() - aiOnlyCount == 1 ? "" : "s"));
+    } else if (aiContribCount > 0) {
+        // AI confirmed keyword hits only — no new documents
+        // cleared the similarity bar this pass.
+        const int confirmed = aiContribCount - aiOnlyCount;
+        resultsPane_->setAiSummary(QString(
+            "<b>AI confirmed %1 keyword match%2</b> — no new "
+            "documents scored above the similarity bar. Keyword "
+            "order is never changed.")
+            .arg(confirmed)
+            .arg(confirmed == 1 ? "" : "es"));
+    } else if (bgeService_ && bgeService_->isReady()) {
+        // Zero semantic contribution: explain exactly why, with the
+        // real numbers from the scan, instead of a vague complaint.
+        const auto stats = bgeService_->getStats();
+        const float bestSim = bgeService_->lastBestSimilarity();
+        const int thrPct = hybridSearch_
+            ? qRound(hybridSearch_->threshold() * 100) : 45;
+        if (stats.total == 0) {
+            resultsPane_->setAiSummary(QString(
+                "<b>Semantic index is empty.</b> AI ranking starts "
+                "working once documents are extracted — each indexed "
+                "document builds an embedding on its own."));
+        } else if (bestSim < 0.0f) {
+            // Nothing was comparable this pass. Only blame the chunk
+            // backfill while work is genuinely pending.
+            const qint64 pendingDocs   = countMissingEmbeddings();
+            const qint64 pendingChunks = countMissingChunkDocs();
+            if (pendingDocs > 0 || pendingChunks > 0) {
+                resultsPane_->setAiSummary(QString(
+                    "<b>AI index warming up.</b> %1 document%2 "
+                    "embedded; %3 still pending in the AI index "
+                    "build — results below are keyword-only for "
+                    "now. This is one-time background work.")
+                    .arg(stats.total)
+                    .arg(stats.total == 1 ? " is" : "s are")
+                    .arg(pendingDocs + pendingChunks));
+            } else {
+                resultsPane_->setAiSummary(QString(
+                    "<b>Semantic scan found nothing to compare.</b> "
+                    "%1 embedding%2 exist but the last query "
+                    "compared none — check the log (BGE) for "
+                    "tokenizer/model errors.")
+                    .arg(stats.total)
+                    .arg(stats.total == 1 ? "" : "s"));
+            }
+        } else {
+            resultsPane_->setAiSummary(QString(
+                "<b>No semantic match above the %1% similarity bar.</b> "
+                "Closest of %2 embedded documents scored %3%. Lower "
+                "the AI threshold in Settings → Search to admit "
+                "weaker semantic matches.")
+                .arg(thrPct)
+                .arg(stats.total)
+                .arg(qRound(bestSim * 100)));
+        }
+    } else {
+        resultsPane_->setAiSummary(QString(
+            "<b>Semantic ranking unavailable</b> — the AI model is "
+            "not loaded, so results are keyword-only."));
     }
 }
 

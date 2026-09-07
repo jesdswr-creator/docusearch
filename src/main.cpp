@@ -117,13 +117,16 @@ int main(int argc, char* argv[]) {
     // clashed with the app's theme. It now derives from the SAME tokens
     // as MainWindow::applyTheme() — the card and text follow the active
     // theme's surfaces, and the progress chunk + magnifier use the exact
-    // button color (@primary@) of the saved theme. Reading the saved
-    // darkMode here also keeps the splash consistent with the fixed
-    // theme wiring (the window renders the same theme right after).
+    // button color (@primary@) of the saved theme.
+    // v1.7.18: the saved settings are read ONCE, up front, and reused:
+    // the application palette below must already match the saved theme
+    // BEFORE MainWindow is constructed, or a dark-mode user sees a light
+    // gray first-paint flash behind the (dark) splash — part of the
+    // "splash is still buggy" report.
+    const AppSettings saved = DocuSearch::Config::instance().load();
     DocuSearch::SplashOverlay splash;
     {
         SplashOverlay::ThemeColors c;
-        const AppSettings saved = DocuSearch::Config::instance().load();
         if (saved.darkMode) {
             // Midnight palette — buttons are #4d8df6.
             c.cardTop    = QColor("#1b212b");
@@ -150,21 +153,44 @@ int main(int argc, char* argv[]) {
     splash.show();
     app.processEvents();  // Force paint the splash immediately
 
+    // v1.7.18: THEME-AWARE STARTUP PALETTE. This used to be hardcoded
+    // light, so a dark-mode user got a light first paint (before the
+    // QSS loads) — a visible white/gray flash at the reveal. The colors
+    // mirror Theme::apply(Dark)/Theme::apply(Light) so the pre-QSS paint
+    // and the themed paint agree. MainWindow::applyTheme() refines this
+    // with the full token stylesheet right after construction.
     QPalette pal;
-    pal.setColor(QPalette::Window,          QColor(243, 243, 243));
-    pal.setColor(QPalette::Base,            QColor(255, 255, 255));
-    pal.setColor(QPalette::AlternateBase,   QColor(249, 249, 249));
-    pal.setColor(QPalette::WindowText,      QColor(32, 32, 32));
-    pal.setColor(QPalette::Text,            QColor(32, 32, 32));
-    pal.setColor(QPalette::ButtonText,      QColor(32, 32, 32));
-    pal.setColor(QPalette::Button,          QColor(243, 243, 243));
-    pal.setColor(QPalette::Highlight,       QColor(0, 120, 212));
-    pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-    pal.setColor(QPalette::ToolTipBase,     QColor(255, 255, 255));
-    pal.setColor(QPalette::ToolTipText,     QColor(32, 32, 32));
-    pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
-    pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
-    pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
+    if (saved.darkMode) {
+        pal.setColor(QPalette::Window,          QColor("#1c1c1c"));
+        pal.setColor(QPalette::Base,            QColor("#262626"));
+        pal.setColor(QPalette::AlternateBase,   QColor("#2d2d2d"));
+        pal.setColor(QPalette::WindowText,      QColor("#f5f5f5"));
+        pal.setColor(QPalette::Text,            QColor("#f5f5f5"));
+        pal.setColor(QPalette::ButtonText,      QColor("#f5f5f5"));
+        pal.setColor(QPalette::Button,          QColor("#2d2d2d"));
+        pal.setColor(QPalette::Highlight,       QColor("#4cc2ff"));
+        pal.setColor(QPalette::HighlightedText, QColor("#003049"));
+        pal.setColor(QPalette::ToolTipBase,     QColor("#2d2d2d"));
+        pal.setColor(QPalette::ToolTipText,     QColor("#f5f5f5"));
+        pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(110, 110, 110));
+        pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(110, 110, 110));
+        pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(110, 110, 110));
+    } else {
+        pal.setColor(QPalette::Window,          QColor("#f2f1ee"));
+        pal.setColor(QPalette::Base,            QColor("#ffffff"));
+        pal.setColor(QPalette::AlternateBase,   QColor("#faf9f7"));
+        pal.setColor(QPalette::WindowText,      QColor("#1b1b1b"));
+        pal.setColor(QPalette::Text,            QColor("#1b1b1b"));
+        pal.setColor(QPalette::ButtonText,      QColor("#1b1b1b"));
+        pal.setColor(QPalette::Button,          QColor("#ffffff"));
+        pal.setColor(QPalette::Highlight,       QColor("#0067c0"));
+        pal.setColor(QPalette::HighlightedText, QColor("#ffffff"));
+        pal.setColor(QPalette::ToolTipBase,     QColor("#1b1b1b"));
+        pal.setColor(QPalette::ToolTipText,     QColor("#ffffff"));
+        pal.setColor(QPalette::Disabled, QPalette::WindowText,  QColor(160, 160, 160));
+        pal.setColor(QPalette::Disabled, QPalette::Text,        QColor(160, 160, 160));
+        pal.setColor(QPalette::Disabled, QPalette::ButtonText,  QColor(160, 160, 160));
+    }
     QApplication::setPalette(pal);
 
     // ── Construct MainWindow once the event loop is running ──
@@ -179,10 +205,18 @@ int main(int argc, char* argv[]) {
     bool windowShown = false;
     auto showWindowAndDropSplash = [&]() {
         windowShown = true;
-        if (w) w->show();
-        // v1.7.17: fade the splash out over the just-shown window instead
-        // of hard-closing it — the pop-to-reveal snap read as a glitch.
-        splash.fadeOutAndClose();
+        // v1.7.18: REVEAL ORDER FIX. v1.7.17 showed the main window
+        // first and faded the splash over it — the (usually maximized)
+        // window popped into existence behind and around the small
+        // translucent card, all visible through the splash's transparent
+        // margins, plus its own first-paint flash. That overlap WAS the
+        // remaining glitch. Now the splash fades out over the desktop
+        // while the event loop is idle (a genuinely smooth 200 ms), and
+        // ONLY THEN does the main window show. Nothing ever appears or
+        // disappears behind a half-transparent overlay.
+        splash.fadeOutAndClose([&w]() {
+            if (w) w->show();
+        });
     };
 
     // ── v1.7.8: SPLASH SAFETY NET ──

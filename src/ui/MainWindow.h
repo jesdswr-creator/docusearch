@@ -25,10 +25,15 @@
 #include <QString>
 #include <QStringList>
 #include <QFuture>
+#include <QFutureWatcher>
+#include <QMutex>
+#include <vector>
 #include <memory>
 #include <atomic>
 
 #include "../core/Types.h"
+#include "../search/HybridSearchEngine.h"   // v1.7.18: HybridResult in the
+                                             // applySemanticResults signature
 
 class QSplitter;
 class QMenu;
@@ -59,6 +64,9 @@ class TagsNotesPane;
 class IndexingProgressWidget;
 class SwitchControl;
 
+// v1.7.18: HybridSearchEngine.h is included at the top of this header
+// (HybridResult appears in applySemanticResults). BgeService stays
+// forward-declared for its unique_ptr member.
 class BgeService;
 class HybridSearchEngine;
 
@@ -181,6 +189,21 @@ private:
     void refreshSavedSearches();
     void openFile(const QString& path);
 
+    // v1.7.18: BACKGROUND HALF OF THE TWO-STAGE SEARCH. onSearch() shows
+    // keyword results immediately and runs the semantic scan (BGE query
+    // embedding + chunk/document cosine scans) on the global thread pool;
+    // when it lands this renders the merged list — keyword order never
+    // touched, AI additions appended, badges + summary + final status.
+    // Runs on the UI thread (delivered by the QFutureWatcher); the heavy
+    // work never blocks input. `generation` is compared against searchGen_
+    // by the caller so a superseded query's result is dropped untouched.
+    // (A plain private method — deliberately NOT a slot, so moc never
+    // has to normalize its std::vector parameter.)
+    void applySemanticResults(const QString& query,
+                              const QList<SearchHit>& keywordHits,
+                              std::vector<HybridResult> results,
+                              qint64 totalMs);
+
     // Fast metadata-only scan of a folder.
     void scanFolderFast(const QString& folder);
 
@@ -266,6 +289,19 @@ public:
     QFuture<void>                      bgeInitFuture_;
     std::unique_ptr<HybridSearchEngine> hybridSearch_;
     bool            semanticEnabled_     = false;
+
+    // v1.7.18: TWO-STAGE SEARCH STATE.
+    // searchGen_ increments on every onSearch(); a background semantic
+    // result whose generation no longer matches is discarded (the user
+    // typed a newer query). semanticSearchFuture_ is joined in the dtor
+    // (mirrors bgeInitFuture_) so a worker can never touch a dying
+    // hybridSearch_/bgeService_. semanticSearchMutex_ serializes the
+    // worker section: two overlapping scans must not interleave
+    // setTypeFilter+search on the shared HybridSearchEngine.
+    quint64         searchGen_           = 0;
+    QFuture<std::vector<HybridResult>> semanticSearchFuture_;
+    QMutex          semanticSearchMutex_;
+    std::atomic<bool> searchWorkersStop_{false};
     bool            aiBackfillRunning_   = false;  // batch embed in flight
     bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
     int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
