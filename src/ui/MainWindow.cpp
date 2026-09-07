@@ -20,6 +20,7 @@
 #include "../core/SehTranslator.h"
 #include "../core/FileUtils.h"
 #include "../core/StringUtils.h"
+#include "../core/TextQuality.h"
 #include "../database/Database.h"
 #include "../database/Schema.h"
 #include "../database/FileRepository.h"
@@ -3408,6 +3409,94 @@ void MainWindow::runStartupIntegrityPass() {
         }
     }
 
+    // v1.7.16: ONE-TIME junk-text audit. Older builds accepted the text
+    // layer some scanner drivers embed INTO a PDF at scan time even when
+    // it is garbage: a rotated page OCR'd by the scanner itself yields
+    // punctuation-soup letter fragments that the old classifier's scope
+    // rules never examined (they only judged letter-dominant text).
+    // That junk was indexed as real content - keyword search missed
+    // every real word, and the AI embeddings of junk vectors pushed
+    // unrelated results into semantic search. The classifier now has a
+    // fragment-soup gate, so this pass re-judges every stored text
+    // against it: flagged rows lose their text, FTS row and (stale-junk)
+    // embeddings and drop back to metadata_only, letting the normal
+    // pipeline re-extract them - PdfExtractor now routes the file to
+    // OCR, where auto-orientation reads the REAL page. The classifier
+    // itself is microseconds per row (substr-bounded reads, pumped
+    // every 500 rows), so every row is examined in one pass - a LIMIT
+    // here would silently un-audit large libraries. The expensive part,
+    // re-extraction of flagged rows, is drained gradually by the normal
+    // extraction sessions. One-shot via the persisted flag, set ONLY
+    // after a successful scan: new junk cannot enter afterwards
+    // (extraction now rejects it at the source).
+    int junkRequeued = 0;
+    if (!settings_.junkTextAuditDone) {
+        bool auditScanned = false;
+        QList<qint64> junkIds;
+        {
+            sqlite3_stmt* jq = nullptr;
+            if (sqlite3_prepare_v2(raw,
+                    "SELECT f.id, substr(d.extracted_text, 1, 20000) "
+                    "FROM DocumentText d JOIN Files f ON f.id = d.file_id "
+                    "WHERE f.indexing_status = 'content_done' "
+                    "AND length(d.extracted_text) > 0;",
+                    -1, &jq, nullptr) == SQLITE_OK) {
+                int seen = 0;
+                while (sqlite3_step(jq) == SQLITE_ROW) {
+                    const unsigned char* t = sqlite3_column_text(jq, 1);
+                    const QString text = t
+                        ? QString::fromUtf8(reinterpret_cast<const char*>(t))
+                        : QString();
+                    QString why;
+                    if (TextQuality::looksLikeGarbage(text, &why)) {
+                        DS_INFO("Index", QString("Junk-text audit: file %1 "
+                                                 "flagged (%2)")
+                                                 .arg(qint64(sqlite3_column_int64(jq, 0)))
+                                                 .arg(why));
+                        junkIds.append(sqlite3_column_int64(jq, 0));
+                    }
+                    if ((++seen % 500) == 0)
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
+                }
+                sqlite3_finalize(jq);
+                auditScanned = true;
+            }
+        }
+        if (auditScanned) {
+            for (const qint64 id : junkIds) {
+                // Same purge the re-extraction path performs on content
+                // change: text, FTS row and both embedding tables, then
+                // the row drops back to metadata_only + ocr pending.
+                for (const char* delSql : {
+                         "DELETE FROM DocumentText WHERE file_id=?1;",
+                         "DELETE FROM SearchIndex WHERE file_id=?1;",
+                         "DELETE FROM BgeEmbeddings WHERE file_id=?1;",
+                         "DELETE FROM EmbeddingChunks WHERE file_id=?1;" }) {
+                    sqlite3_stmt* del = nullptr;
+                    if (sqlite3_prepare_v2(raw, delSql, -1, &del, nullptr) == SQLITE_OK) {
+                        sqlite3_bind_int64(del, 1, id);
+                        sqlite3_step(del);
+                        sqlite3_finalize(del);
+                    }
+                }
+                sqlite3_exec(raw,
+                    QString("UPDATE Files SET indexing_status='metadata_only', "
+                            "ocr_status='pending' WHERE id=%1;").arg(id)
+                        .toUtf8().constData(),
+                    nullptr, nullptr, nullptr);
+                ++junkRequeued;
+                if ((junkRequeued % 100) == 0)
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
+            }
+            settings_.junkTextAuditDone = true;
+            Config::instance().save(settings_);
+            DS_INFO("Index", QString("Junk-text audit complete: %1 poisoned "
+                                     "rows requeued for re-extraction (OCR "
+                                     "re-reads them with auto-orientation)")
+                                     .arg(junkRequeued));
+        }
+    }
+
     int hashed = 0;
     if (settings_.hashLargeFiles) {
         QList<qint64> ids;
@@ -3449,20 +3538,22 @@ void MainWindow::runStartupIntegrityPass() {
         }
     }
 
-    if (requeued > 0 || hashed > 0 || failedRequeued > 0) {
+    if (requeued > 0 || hashed > 0 || failedRequeued > 0 || junkRequeued > 0) {
         DS_INFO("Index", QString("Startup integrity pass: %1 fake-done rows "
                                  "requeued for extraction, %2 failed rows "
-                                 "retried, %3 hashes backfilled.")
-                             .arg(requeued).arg(failedRequeued).arg(hashed));
+                                 "retried, %3 junk-text rows requeued, "
+                                 "%4 hashes backfilled.")
+                             .arg(requeued).arg(failedRequeued)
+                             .arg(junkRequeued).arg(hashed));
         statusBar()->showMessage(
             QString("Index repair: %1 file%2 requeued for extraction, "
                     "%3 hash%4 computed.")
-                .arg(requeued + failedRequeued)
-                .arg(requeued + failedRequeued == 1 ? "" : "s")
+                .arg(requeued + failedRequeued + junkRequeued)
+                .arg(requeued + failedRequeued + junkRequeued == 1 ? "" : "s")
                 .arg(hashed)
                 .arg(hashed == 1 ? "" : "es"), 10000);
         updateIndexStats();
-        if (requeued > 0 || failedRequeued > 0) {
+        if (requeued > 0 || failedRequeued > 0 || junkRequeued > 0) {
             // Fresh work exists — wake extraction (requestAutoExtract
             // yields on its own if the startup scan is still running).
             autoExtractRetryLeft_ = 20;

@@ -139,6 +139,12 @@ struct AppSettings {
     // fast re-arming, so a brand-new index fully extracts itself without
     // the user babysitting the Extract button.
     bool        firstRunDone            = false;
+    // v1.7.16: becomes true once the startup integrity pass has audited
+    // every stored extracted text against the (new) garbage classifier
+    // and requeued the junk rows for re-extraction. One-time by design:
+    // new junk cannot enter afterwards (extraction now rejects it at the
+    // source), so re-scanning every launch would be pure waste.
+    bool        junkTextAuditDone       = false;
 };
 
 } // namespace DocuSearch

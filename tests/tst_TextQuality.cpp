@@ -68,6 +68,251 @@ private slots:
         QVERIFY(looksLikeGarbage(s));
     }
 
+    // ---- v1.7.16: garbage: scanner-embedded fragment soup (gate C) ----
+
+    void garbage_scannerFragmentSoup_flagged() {
+        // Real-world pattern (reference: "Minhaj Pay 04 10 24.pdf",
+        // Canon IJ Scan Utility): a ROTATED page OCR'd by the scanner
+        // itself, embedded into the PDF as a text layer. Punctuation
+        // soup + 1-2 letter fragments; gate B never even looked at it
+        // because only 53% of the non-space characters are letters.
+        const QString s = R"junk(AVAA'IIVH NHAISAAA HINOS ;;
+i
+g
+!c
+H
+I-
+aL
+-)-
+J-c
+P-\
+-^,!t
+!
+c 'J ;i:i
+L^,/.
+'u >
+4)
+' tr Arrj-o
+*
+d)t/
+.-
+>>.c)lJ
+?^ 7 -a'.f, .,
+il:!!'LY
+\-V.n.'-
+-! 'r)2-'
+c. J Bcn^v
+\
+L
+F
+rA
+<
+--.lo^-J+
++-ra,
+)'-:mL
+\ir.-n.
+-^^J
+,.f. ^i a; < i
+-2'V
+Z,
+^--aAry'-u.
+'--l -:-
+= 9
+\- \- >.
+r =rtn-
+C
+a.
+_J)
+ijr
+^'
+.^-
+a r
+,J-
+V
+A
+. r .t
+OJ
+aL(,
+U
+k
+tJ.
+S.
+rt
+tb-
+l-b ')T
+l.F"
+r!
+3o
+z
+O
+-)d
+CJ
+rlj
+HV
+trx
+a*
+L19
+.e^
+trL
+a
+}L'
+ar '-tr
+dI-r
+i!
+oJ
+L:a
+x
+e-
+_d
+t-)
+U
+C
+tf;
+Uz
+bo \-
+.;Z
+zii
+L\
+ul-
+.Y
+L--
+A*
+:o
+:t^
+-o-
+>,.c
+-5
+>itn
+>,x
+ao
+2.2
+d:
+P
+FC
+>,!
+\-:
+LC
+(6 ni
+:dD-=
+LL
+Ul
+L
+ilizc
+a.
+l
+^.1
+a't
+l!
+-i-
+ol
+.c
+o.l
+=f
+c.laNNq
+fiC
+'.u
+i/
+: rc.!
+:? i^C
+G.-L.,
+_li
+v,
+Ct rt --
+'ir->
+)\fr
+.!i uf l_'
+*J-i(,
+a,
+--)
+4=',9)junk";
+        QString why;
+        QVERIFY(looksLikeGarbage(s, &why));
+        QVERIFY(why.contains("fragment-soup"));
+    }
+
+    // ---- v1.7.16: real text that gate C must NEVER flag ----
+
+    void clean_bankStatementTable_passes() {
+        // Numeric-heavy bank statement: only ~45% letters (below gate
+        // B's letter-dominance line - the exact zone gate C owns), but
+        // punctuation stays ~11%, tokens are long real words.
+        const QString s = "ACCOUNT STATEMENT - PERIOD 01/04/2024 TO "
+                          "30/06/2024 DATE DESCRIPTION DEBIT CREDIT "
+                          "BALANCE 01/04/2024 OPENING BALANCE 0.00 "
+                          "125,430.00 03/04/2024 UPI/SALARY APR 78,250.00 "
+                          "203,680.00 07/04/2024 CHQ 004351 CLEARED "
+                          "25,000.00 178,680.00 15/04/2024 NEFT VENDOR "
+                          "PYMT 46,300.00 132,380.00 TOTAL DEBITS "
+                          "71,300.00 TOTAL CREDITS 78,250.00 CLOSING "
+                          "BALANCE 132,380.00";
+        QVERIFY(!looksLikeGarbage(s));
+    }
+
+    void clean_mediocreScannerOcr_passes() {
+        // A scanner text layer that OCR'd READABLY (the common case):
+        // imperfect words but real structure. Junk-classifying this
+        // would discard a usable layer and waste OCR passes.
+        const QString s = "No.SWR/P.676/I/Engg./D&D (57) Date: 19.09.2024. "
+                          "MEMORANDUM Sub: Pay Fixation of Trainee IE/D & D "
+                          "on Absorption to the regular working post as JE/D "
+                          "& D in Civil Engg. Dept of SWR. In conformity with "
+                          "Sr.DPO/UBL Office Order No.27/ENGG/SUP/2024 the "
+                          "following Trainee Junior Engineer is now absorbed "
+                          "to the regular working post in Level-6 of 7th PC "
+                          "Pay Matrix, his pay is fixed duly taking training "
+                          "period into account for granting of increment on "
+                          "absorption as under.";
+        QVERIFY(!looksLikeGarbage(s));
+    }
+
+    void scope_shortFragmentSoup_neverFlagged() {
+        // Below gate C's 40-token signal bound - even obvious junk
+        // fragments are kept (false positives are expensive).
+        QVERIFY(!looksLikeGarbage(";; i g !c H I- at -)- J-c P- "
+                                  "-^,!t ! c 'J ;i:i L^,/. 'u > 4) "
+                                  "' tr Arrj-o * - d)t/ .-"));
+    }
+
+    // ---- v1.7.16: assessOcrText (OCR auto-orientation metrics) ----
+
+    void assess_englishText_readsRealWords() {
+        const auto q = DocuSearch::TextQuality::assessOcrText(
+            "MEMORANDUM Sub: Pay Fixation of Trainee Engineer on "
+            "Absorption to the regular working post in the Civil "
+            "Department with pay fixed as under and increments "
+            "granted from the date of absorption.");
+        QVERIFY(q.latinDominant);
+        QVERIFY(q.tokens >= 12);
+        QVERIFY(q.wordRate > 0.10);
+        QVERIFY(q.runScore > 100);
+    }
+
+    void assess_fragmentJunk_nearZeroWordRate() {
+        const auto q = DocuSearch::TextQuality::assessOcrText(
+            "AVAA'IIVH NHAISAAA HINOS ;; i g !c H I- aL -)- J-c P- "
+            "-^,!t ! c 'J ;i:i L^,/. 'u > 4) ' tr Arrj-o - d)t/ .- "
+            ">>.c)lJ ?^ 7 -a'.f, ., il:!!'LY \\-V.n.'- -! 'r)2-' "
+            "c. J Bcn^v \\ L F rA < --.lo^-J+ +-ra, )'-:mL \\ir.-n.");
+        QVERIFY(q.latinDominant);          // fragments ARE Latin letters
+        QVERIFY(q.wordRate < 0.02);        // ...but they are not words
+    }
+
+    void assess_devanagari_notLatinDominant() {
+        const auto q = DocuSearch::TextQuality::assessOcrText(
+            "दक्षिण पश्चिम रेलवे मुख्यालय कार्यालय कार्मिक विभाग "
+            "रेल सौधा गदाग रोड हुब्बल्ली दिनांक विषय संदर्भ");
+        QVERIFY(!q.latinDominant);         // word rate is meaningless here
+        QCOMPARE(q.dictHits, 0);
+    }
+
+    void assess_runScore_exactValues() {
+        // Runs of >=3 alnum chars: "abc"(3) + "fghi"(4) count, "de" does not.
+        QCOMPARE(DocuSearch::TextQuality::assessOcrText(
+                     QStringLiteral("abc de fghi")).runScore, 7);
+        QCOMPARE(DocuSearch::TextQuality::assessOcrText(
+                     QStringLiteral("ab de fg")).runScore, 0);
+    }
+
     // ---- real text: must NEVER be flagged ----
 
     void clean_englishProse_passes() {

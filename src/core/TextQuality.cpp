@@ -20,6 +20,23 @@
 //       - >=25 alphabetic tokens (short snippets carry too little
 //         signal - never flagged)
 //
+//  Gate C (v1.7.16) -- scanner/fragment soup: for text that is NOT
+//     letter-dominant (gate B's scope line - exactly where scanner-OCR
+//     junk lives), flag when ALL of the following hold:
+//       - >=40 alphabetic tokens (more signal than gate B - this gate
+//         judges text gate B never even evaluates)
+//       - punctuation/symbol share > 25% of non-space characters
+//         (real documents: 2-12% even for invoices and bank tables;
+//         the Minhaj-class scanner junk: 44%)
+//       - mean alphabetic token length < 2.8 (junk: 1.55 - mostly 1-2
+//         letter fragments; real text: >= 3.9)
+//       - share of tokens with >=4 letters < 20% (junk: 5%; real
+//         text: >= 44%)
+//     Triple-redundant structural evidence; every threshold sits at
+//     twice the distance from the nearest measured real-world sample.
+//     NOTE: common-word rate deliberately NOT used here - the Minhaj
+//     junk scores HIGHER on it (6.7%) than a real invoice (5.6%).
+//
 // Everything else - CJK, Devanagari, Arabic, Cyrillic, mixed
 // scripts, numeric tables, code listings - passes untouched.
 
@@ -42,6 +59,11 @@ constexpr double   kMinAsciiShare    = 0.85;    // of letters, gate B scope
 constexpr double   kMaxCommonRate    = 0.02;    // gate B: common-word rate
 constexpr double   kMinVowellessRate = 0.45;    // gate B: vowel-less ratio
 constexpr int      kMinVowellessLen  = 4;       // word length for that ratio
+// gate C (v1.7.16): scanner/fragment soup thresholds
+constexpr int      kMinFragTokens     = 40;     // signal bound for gate C
+constexpr double   kMaxFragPunctShare = 0.25;   // punctuation/symbols of non-space
+constexpr double   kMaxFragMeanLen    = 2.8;    // mean alphabetic token length
+constexpr double   kMaxFragLongShare  = 0.20;   // share of tokens with >=4 letters
 
 bool isWeirdChar(uint u) {
     return (u >= 0xE000 && u <= 0xF8FF) ||  // Private Use Area
@@ -149,13 +171,14 @@ bool looksLikeGarbage(const QString& text, QString* reason) {
     const QString sample = text.left(kMaxSampleChars);
 
     // ---- character-level stats over non-space chars ----
-    int n = 0, weird = 0, letters = 0;
+    int n = 0, weird = 0, letters = 0, digits = 0;
     for (const QChar c : sample) {
         if (c.isSpace()) continue;
         const uint u = c.unicode();
         ++n;
         if (isWeirdChar(u)) ++weird;
         if (isAnyLetter(u)) ++letters;
+        if (c.isDigit()) ++digits;
     }
     if (n < kMinSampleChars) return false;          // too little signal
 
@@ -169,10 +192,7 @@ bool looksLikeGarbage(const QString& text, QString* reason) {
         }
     }
 
-    // ---- gate B scope: Latin-dominant text only ----
-    if (letters < kMinLetterRatio * n) return false;
-
-    // ---- tokenize: runs of Latin letters ----
+    // ---- tokenize once: runs of Latin letters (both word gates) ----
     QStringList tokens;
     QString cur;
     cur.reserve(16);
@@ -195,32 +215,125 @@ bool looksLikeGarbage(const QString& text, QString* reason) {
     }
     if (tokens.size() < kMinTokens) return false;   // not enough signal
 
-    // ---- gate B evidence 1: common-word rate ----
-    const QSet<QString> common = commonWords();
-    int hits = 0;
-    for (const QString& t : tokens) {
-        if (common.contains(t.toLower())) ++hits;
-    }
-    const double commonRate = double(hits) / double(tokens.size());
+    // v1.7.16: gate B only owns LETTER-dominant text. Text below the
+    // letter-ratio line used to fall out of every scope and be trusted
+    // blindly - exactly where scanner-OCR fragment junk lives.
+    const bool letterDominant = letters >= kMinLetterRatio * n;
 
-    // ---- gate B evidence 2: vowel-less ratio (words >= 4 letters) ----
-    int longWords = 0, vowelless = 0;
-    for (const QString& t : tokens) {
-        if (t.size() >= kMinVowellessLen) {
-            ++longWords;
-            if (!hasVowel(t)) ++vowelless;
+    if (letterDominant) {
+        // ---- gate B evidence 1: common-word rate ----
+        const QSet<QString> common = commonWords();
+        int hits = 0;
+        for (const QString& t : tokens) {
+            if (common.contains(t.toLower())) ++hits;
+        }
+        const double commonRate = double(hits) / double(tokens.size());
+
+        // ---- gate B evidence 2: vowel-less ratio (words >= 4 letters) ----
+        int longWords = 0, vowelless = 0;
+        for (const QString& t : tokens) {
+            if (t.size() >= kMinVowellessLen) {
+                ++longWords;
+                if (!hasVowel(t)) ++vowelless;
+            }
+        }
+        const double vowellessRate = longWords > 0
+            ? double(vowelless) / double(longWords) : 0.0;
+
+        if (commonRate < kMaxCommonRate && vowellessRate > kMinVowellessRate) {
+            if (reason) *reason = QString("word-sanity: common %1, vowelless %2")
+                                      .arg(commonRate, 0, 'f', 3)
+                                      .arg(vowellessRate, 0, 'f', 3);
+            return true;
+        }
+        return false;
+    }
+
+    // ---- gate C: scanner/fragment soup (v1.7.16) ----
+    // Structural evidence only, all three required (see header comment).
+    if (tokens.size() >= kMinFragTokens) {
+        const double punctShare =
+            double(n - letters - digits) / double(n);
+        qint64 lenSum = 0;
+        int longTokens = 0;
+        for (const QString& t : tokens) {
+            lenSum += t.size();
+            if (t.size() >= 4) ++longTokens;
+        }
+        const double meanLen = double(lenSum) / double(tokens.size());
+        const double longShare = double(longTokens) / double(tokens.size());
+        if (punctShare > kMaxFragPunctShare &&
+            meanLen < kMaxFragMeanLen &&
+            longShare < kMaxFragLongShare) {
+            if (reason) *reason = QString("fragment-soup: punct %1, "
+                                          "meanlen %2, long %3")
+                                      .arg(punctShare, 0, 'f', 3)
+                                      .arg(meanLen, 0, 'f', 2)
+                                      .arg(longShare, 0, 'f', 3);
+            return true;
         }
     }
-    const double vowellessRate = longWords > 0
-        ? double(vowelless) / double(longWords) : 0.0;
-
-    if (commonRate < kMaxCommonRate && vowellessRate > kMinVowellessRate) {
-        if (reason) *reason = QString("word-sanity: common %1, vowelless %2")
-                                  .arg(commonRate, 0, 'f', 3)
-                                  .arg(vowellessRate, 0, 'f', 3);
-        return true;
-    }
     return false;
+}
+
+// ============================================================
+// assessOcrText (v1.7.16): quality metrics for OCR output.
+//
+// runScore is the v1.7.10 metric (chars in runs of >=3 alnum). It
+// measures VOLUME of readable characters but not whether they form
+// language: a dense sideways page OCR'd to fragments still scores
+// hundreds (measured 1234 on the reference scan vs 1399 upright -
+// a 13% gap a fixed 48-point threshold can never cross).
+//
+// wordRate closes that hole: share of 2+ letter Latin tokens that are
+// common words. Upright real text: 0.15-0.40. Sideways fragments:
+// near 0. It is only computed when the text is Latin-dominant, so
+// CJK/Devanagari/Arabic OCR is never judged against an English list.
+// ============================================================
+OcrTextStats assessOcrText(const QString& text) {
+    OcrTextStats s;
+
+    // ---- run score (v1.7.10 metric, verbatim) ----
+    int run = 0;
+    for (const QChar c : text) {
+        if (c.isLetterOrNumber()) { ++run; }
+        else { if (run >= 3) s.runScore += run; run = 0; }
+    }
+    if (run >= 3) s.runScore += run;
+
+    // ---- tokens + dictionary hits ----
+    const QSet<QString> common = commonWords();
+    QString cur;
+    cur.reserve(16);
+    int allLetters = 0, latinLetters = 0;
+    auto flush = [&]() {
+        if (cur.size() >= 2) {
+            ++s.tokens;
+            if (common.contains(cur.toLower())) ++s.dictHits;
+        }
+        cur.clear();
+    };
+    for (const QChar c : text) {
+        const uint u = c.unicode();
+        if (isAnyLetter(u)) {
+            ++allLetters;
+            if (isAlphaChar(u)) {
+                ++latinLetters;
+                cur.append(c);
+                continue;
+            }
+            flush();               // non-Latin letter ends any Latin token
+        } else if (!isAlphaChar(u)) {
+            flush();
+        }
+    }
+    flush();
+
+    s.latinDominant = allLetters > 0 &&
+        double(latinLetters) / double(allLetters) >= kMinAsciiShare;
+    if (s.tokens > 0)
+        s.wordRate = double(s.dictHits) / double(s.tokens);
+    return s;
 }
 
 } // namespace DocuSearch::TextQuality

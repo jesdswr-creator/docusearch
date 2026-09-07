@@ -9,6 +9,7 @@
 #include "../core/StringUtils.h"
 #include "../core/Constants.h"
 #include "../core/SehTranslator.h"
+#include "../core/TextQuality.h"
 
 #ifdef DOCUSEARCH_HAS_PDFIUM
 #  include "../pdf/PdfiumDocument.h"
@@ -40,23 +41,59 @@ namespace {
 // word-count metric (< 3 two-char runs) treated that sideways junk as
 // "we already read words" and never tried the rotated passes, which is
 // exactly why rotated PDFs came back empty or garbled.
-int ocrQualityScore(const QString& s) {
-    int score = 0;
-    int run = 0;
-    for (const QChar& c : s) {
-        if (c.isLetterOrNumber()) { ++run; }
-        else { if (run >= 3) score += run; run = 0; }
-    }
-    if (run >= 3) score += run;
-    return score;
-}
+//
+// v1.7.16: the metric alone is NOT enough. Measured on the reference
+// scan ("Minhaj Pay", dense sideways memorandum): the sideways junk
+// scored 1234 vs 1399 upright - a 13% gap no fixed threshold can
+// separate, because tables/numbers/stamps OCR into long-ish junk runs
+// at ANY orientation. TextQuality::assessOcrText now also reports
+// wordRate (share of tokens that are common words, 0.39 upright vs
+// ~0.05 sideways on that scan) and the two metrics below combine them.
+// The old local run-score helper lives on as OcrTextStats::runScore.
 
-// Below this quality score the upright OCR is treated as "the page is
+// Below this run score the upright OCR is treated as "the page is
 // probably stored sideways" and the rotated passes are tried.
-// 48 chars in 3+ letter runs is roughly a dozen real words — a nearly
+// 48 chars in 3+ letter runs is roughly a dozen real words - a nearly
 // blank page scores 0-10, sideways junk scores < 20, any real text
 // page scores hundreds.
 constexpr int kMinUprightOcrScore = 48;
+
+// v1.7.16: a Latin-dominant OCR text with at least this many tokens
+// and a word rate below this is fragment junk even when its run score
+// is high. Real upright text measures 0.15-0.40; sideways fragments
+// land near 0. Generous on purpose: a false trigger only costs up to
+// three extra OCR passes (the best candidate still wins), while a
+// missed trigger leaves rotated scans permanently unreadable.
+constexpr double kMinOcrWordRate = 0.10;
+
+// v1.7.16: rank an orientation candidate. Higher = keep.
+//   - Latin-dominant text with enough tokens: word rate dominates
+//     (1% of real words is worth 120 run-score points, capped so a
+//     wall of junk runs can never out-rank word-bearing text). This
+//     is what makes a correctly-oriented short page (few words)
+//     still beat a dense sideways fragment page.
+//   - Non-Latin text (CJK, Devanagari, ...) or too little signal:
+//     fall back to the v1.7.10 run score alone.
+int ocrCandidateRank(const TextQuality::OcrTextStats& q) {
+    if (!q.latinDominant || q.tokens < 12) return q.runScore;
+    return int(q.wordRate * 12000.0) + std::min(q.runScore, 2000);
+}
+
+// v1.7.16: should the rotated passes run for this upright result?
+bool ocrLooksMisoriented(const TextQuality::OcrTextStats& q) {
+    if (q.runScore < kMinUprightOcrScore) return true;   // near-empty
+    return q.latinDominant && q.tokens >= 12 &&
+           q.wordRate < kMinOcrWordRate;                 // fragment junk
+}
+
+// v1.7.16: early-exit once a rotation candidate reads as real text -
+// no later rotation (all wrong by construction once one is right)
+// can do better, so skip the remaining passes.
+bool ocrLooksSolid(const TextQuality::OcrTextStats& q) {
+    return q.runScore >= kMinUprightOcrScore &&
+           (!q.latinDominant || q.tokens < 12 ||
+            q.wordRate >= kMinOcrWordRate);
+}
 
 // v1.7.10: Windows.Media.Ocr accuracy degrades past ~2600 px per side
 // (OcrEngine::MaxImageDimension). Scans rendered at 150 DPI A4 are
@@ -256,9 +293,11 @@ void OcrWorkerPool::workerLoop(int workerId) {
                 if (!img.isNull()) {
                     img = prepareForOcr(std::move(img));
                     QString best = engine.ocrImage(img);
-                    const int uprightScore = ocrQualityScore(best);
-                    int bestScore = uprightScore;
-                    if (bestScore < kMinUprightOcrScore) {
+                    const TextQuality::OcrTextStats uprightQ =
+                        TextQuality::assessOcrText(best);
+                    TextQuality::OcrTextStats bestQ = uprightQ;
+                    int bestRank = ocrCandidateRank(bestQ);
+                    if (ocrLooksMisoriented(bestQ)) {
                         for (const int deg : {90, 270, 180}) {
                             if (stopping_.load()) break;
                             QTransform tf;
@@ -267,19 +306,25 @@ void OcrWorkerPool::workerLoop(int workerId) {
                                 img.transformed(tf, Qt::SmoothTransformation);
                             if (rotImg.isNull()) continue;
                             const QString candidate = engine.ocrImage(rotImg);
-                            const int sc = ocrQualityScore(candidate);
-                            if (sc > bestScore) {
-                                bestScore = sc;
+                            const TextQuality::OcrTextStats cq =
+                                TextQuality::assessOcrText(candidate);
+                            const int cr = ocrCandidateRank(cq);
+                            if (cr > bestRank) {
+                                bestRank = cr;
                                 best = candidate;
+                                bestQ = cq;
                                 DS_INFO("OCR", QString("Image OCR auto-orient: "
                                                        "%1 rotated %2 deg "
-                                                       "(upright score %3, "
-                                                       "rotated score %4)")
+                                                       "(upright score %3/rank %4, "
+                                                       "rotated score %5/rank %6)")
                                                        .arg(task.path,
                                                        QString::number(deg),
-                                                       QString::number(uprightScore),
-                                                       QString::number(bestScore)));
+                                                       QString::number(uprightQ.runScore),
+                                                       QString::number(ocrCandidateRank(uprightQ)),
+                                                       QString::number(cq.runScore),
+                                                       QString::number(cr)));
                             }
+                            if (ocrLooksSolid(bestQ)) break;
                         }
                     }
                     text = best;
@@ -325,31 +370,46 @@ void OcrWorkerPool::workerLoop(int workerId) {
                         // — the entire point of auto-orientation — almost
                         // never ran and rotated PDFs kept coming back
                         // empty/garbled.
-                        const int uprightScore = ocrQualityScore(pageText);
-                        int bestScore = uprightScore;
+                        // v1.7.16: run score alone still misses DENSE
+                        // sideways pages (measured: junk 1234 vs upright
+                        // 1399 on the reference scan). The verdict now
+                        // also demands real words; candidates are ranked
+                        // by word rate first so the orientation that
+                        // reads LANGUAGE always beats the one that reads
+                        // the most junk characters.
+                        const TextQuality::OcrTextStats uprightQ =
+                            TextQuality::assessOcrText(pageText);
+                        TextQuality::OcrTextStats bestQ = uprightQ;
+                        int bestRank = ocrCandidateRank(bestQ);
                         int bestRot = 0;
-                        if (bestScore < kMinUprightOcrScore) {
+                        if (ocrLooksMisoriented(bestQ)) {
                             for (const int rot : {1, 3, 2}) {
                                 const QImage rotImg = doc.renderPage(i, dpi, rot);
                                 if (rotImg.isNull()) continue;
                                 const QString candidate = engine.ocrImage(rotImg);
-                                const int sc = ocrQualityScore(candidate);
-                                if (sc > bestScore) {
-                                    bestScore = sc;
+                                const TextQuality::OcrTextStats cq =
+                                    TextQuality::assessOcrText(candidate);
+                                const int cr = ocrCandidateRank(cq);
+                                if (cr > bestRank) {
+                                    bestRank = cr;
                                     bestRot = rot;
                                     pageText = candidate;
+                                    bestQ = cq;
                                 }
+                                if (ocrLooksSolid(bestQ)) break;
                             }
                             if (bestRot != 0) {
                                 DS_INFO("OCR", QString("PDF OCR auto-orient: %1 page %2/%3 "
-                                                       "rotated %4 deg (upright score %5, "
-                                                       "rotated score %6)")
+                                                       "rotated %4 deg (upright score %5/rank %6, "
+                                                       "rotated score %7/rank %8)")
                                                        .arg(task.path,
                                                        QString::number(i + 1),
                                                        QString::number(pages),
                                                        QString::number(bestRot * 90),
-                                                       QString::number(uprightScore),
-                                                       QString::number(bestScore)));
+                                                       QString::number(uprightQ.runScore),
+                                                       QString::number(ocrCandidateRank(uprightQ)),
+                                                       QString::number(bestQ.runScore),
+                                                       QString::number(bestRank)));
                             }
                         }
                         if (!pageText.isEmpty()) {

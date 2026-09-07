@@ -110,10 +110,22 @@ If OCR is consistently very slow:
 Possible causes:
 1. Image is smaller than 50×50 pixels (Windows.Media.Ocr's minimum).
 2. Image is mostly decorative (gradient, blurry, low contrast).
-3. Text in the image is rotated 90°/180° — Windows.Media.Ocr handles
-   small rotations but not extreme angles.
+3. Text in the image is rotated 90°/180° — auto-orientation retries
+   all four orientations and keeps the one that reads real words, but
+   extremely poor scans can still defeat it.
 4. Image is a screenshot of code with very thin fonts — try
    increasing the DPI/resolution.
+
+### Q: I scanned a document sideways/rotated. Will search still find it?
+
+Yes. DocuSearch OCRs the page in all four orientations and keeps the
+one that reads actual words, so a sideways-stored scan is indexed by
+its real content. The same applies when the scanner itself embedded a
+garbage text layer into the PDF (some scanner software OCRs the page
+at scan time and writes nonsense for rotated pages): DocuSearch
+detects the junk, ignores it, and reads the page image with its own
+OCR instead. Files already indexed before this fix are re-read
+automatically at the next app start (one-time repair pass).
 
 ### Q: Can I use a different OCR engine (Tesseract, PaddleOCR, etc.)?
 
