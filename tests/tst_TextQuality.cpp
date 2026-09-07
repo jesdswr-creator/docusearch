@@ -76,155 +76,156 @@ private slots:
         // itself, embedded into the PDF as a text layer. Punctuation
         // soup + 1-2 letter fragments; gate B never even looked at it
         // because only 53% of the non-space characters are letters.
-        const QString s = R"junk(AVAA'IIVH NHAISAAA HINOS ;;
-i
-g
-!c
-H
-I-
-aL
--)-
-J-c
-P-\
--^,!t
-!
-c 'J ;i:i
-L^,/.
-'u >
-4)
-' tr Arrj-o
-*
-d)t/
-.-
->>.c)lJ
-?^ 7 -a'.f, .,
-il:!!'LY
-\-V.n.'-
--! 'r)2-'
-c. J Bcn^v
-\
-L
-F
-rA
-<
---.lo^-J+
-+-ra,
-)'-:mL
-\ir.-n.
--^^J
-,.f. ^i a; < i
--2'V
-Z,
-^--aAry'-u.
-'--l -:-
-= 9
-\- \- >.
-r =rtn-
-C
-a.
-_J)
-ijr
-^'
-.^-
-a r
-,J-
-V
-A
-. r .t
-OJ
-aL(,
-U
-k
-tJ.
-S.
-rt
-tb-
-l-b ')T
-l.F"
-r!
-3o
-z
-O
--)d
-CJ
-rlj
-HV
-trx
-a*
-L19
-.e^
-trL
-a
-}L'
-ar '-tr
-dI-r
-i!
-oJ
-L:a
-x
-e-
-_d
-t-)
-U
-C
-tf;
-Uz
-bo \-
-.;Z
-zii
-L\
-ul-
-.Y
-L--
-A*
-:o
-:t^
--o-
->,.c
--5
->itn
->,x
-ao
-2.2
-d:
-P
-FC
->,!
-\-:
-LC
-(6 ni
-:dD-=
-LL
-Ul
-L
-ilizc
-a.
-l
-^.1
-a't
-l!
--i-
-ol
-.c
-o.l
-=f
-c.laNNq
-fiC
-'.u
-i/
-: rc.!
-:? i^C
-G.-L.,
-_li
-v,
-Ct rt --
-'ir->
-)\fr
-.!i uf l_'
-*J-i(,
-a,
---)
-4=',9)junk";
+        const QString s =
+                          "AVAA'IIVH NHAISAAA HINOS ;;\n"
+                          "i\n"
+                          "g\n"
+                          "!c\n"
+                          "H\n"
+                          "I-\n"
+                          "aL\n"
+                          "-)-\n"
+                          "J-c\n"
+                          "P-\\\n"
+                          "-^,!t\n"
+                          "!\n"
+                          "c 'J ;i:i\n"
+                          "L^,/.\n"
+                          "'u >\n"
+                          "4)\n"
+                          "' tr Arrj-o\n"
+                          "*\n"
+                          "d)t/\n"
+                          ".-\n"
+                          ">>.c)lJ\n"
+                          "?^ 7 -a'.f, .,\n"
+                          "il:!!'LY\n"
+                          "\\-V.n.'-\n"
+                          "-! 'r)2-'\n"
+                          "c. J Bcn^v\n"
+                          "\\\n"
+                          "L\n"
+                          "F\n"
+                          "rA\n"
+                          "<\n"
+                          "--.lo^-J+\n"
+                          "+-ra,\n"
+                          ")'-:mL\n"
+                          "\\ir.-n.\n"
+                          "-^^J\n"
+                          ",.f. ^i a; < i\n"
+                          "-2'V\n"
+                          "Z,\n"
+                          "^--aAry'-u.\n"
+                          "'--l -:-\n"
+                          "= 9\n"
+                          "\\- \\- >.\n"
+                          "r =rtn-\n"
+                          "C\n"
+                          "a.\n"
+                          "_J)\n"
+                          "ijr\n"
+                          "^'\n"
+                          ".^-\n"
+                          "a r\n"
+                          ",J-\n"
+                          "V\n"
+                          "A\n"
+                          ". r .t\n"
+                          "OJ\n"
+                          "aL(,\n"
+                          "U\n"
+                          "k\n"
+                          "tJ.\n"
+                          "S.\n"
+                          "rt\n"
+                          "tb-\n"
+                          "l-b ')T\n"
+                          "l.F\"\n"
+                          "r!\n"
+                          "3o\n"
+                          "z\n"
+                          "O\n"
+                          "-)d\n"
+                          "CJ\n"
+                          "rlj\n"
+                          "HV\n"
+                          "trx\n"
+                          "a*\n"
+                          "L19\n"
+                          ".e^\n"
+                          "trL\n"
+                          "a\n"
+                          "}L'\n"
+                          "ar '-tr\n"
+                          "dI-r\n"
+                          "i!\n"
+                          "oJ\n"
+                          "L:a\n"
+                          "x\n"
+                          "e-\n"
+                          "_d\n"
+                          "t-)\n"
+                          "U\n"
+                          "C\n"
+                          "tf;\n"
+                          "Uz\n"
+                          "bo \\-\n"
+                          ".;Z\n"
+                          "zii\n"
+                          "L\\\n"
+                          "ul-\n"
+                          ".Y\n"
+                          "L--\n"
+                          "A*\n"
+                          ":o\n"
+                          ":t^\n"
+                          "-o-\n"
+                          ">,.c\n"
+                          "-5\n"
+                          ">itn\n"
+                          ">,x\n"
+                          "ao\n"
+                          "2.2\n"
+                          "d:\n"
+                          "P\n"
+                          "FC\n"
+                          ">,!\n"
+                          "\\-:\n"
+                          "LC\n"
+                          "(6 ni\n"
+                          ":dD-=\n"
+                          "LL\n"
+                          "Ul\n"
+                          "L\n"
+                          "ilizc\n"
+                          "a.\n"
+                          "l\n"
+                          "^.1\n"
+                          "a't\n"
+                          "l!\n"
+                          "-i-\n"
+                          "ol\n"
+                          ".c\n"
+                          "o.l\n"
+                          "=f\n"
+                          "c.laNNq\n"
+                          "fiC\n"
+                          "'.u\n"
+                          "i/\n"
+                          ": rc.!\n"
+                          ":? i^C\n"
+                          "G.-L.,\n"
+                          "_li\n"
+                          "v,\n"
+                          "Ct rt --\n"
+                          "'ir->\n"
+                          ")\\fr\n"
+                          ".!i uf l_'\n"
+                          "*J-i(,\n"
+                          "a,\n"
+                          "--)\n"
+                          "4=',9";
         QString why;
         QVERIFY(looksLikeGarbage(s, &why));
         QVERIFY(why.contains("fragment-soup"));
