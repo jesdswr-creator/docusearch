@@ -5,6 +5,7 @@
 #include "MainWindow.h"
 #include "Theme.h"
 #include "IconUtils.h"
+#include "ModernTooltip.h"
 #include "SearchBar.h"
 #include "ResultsPane.h"
 #include "PreviewPane.h"
@@ -76,6 +77,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QRadioButton>
+#include <QCheckBox>    // v1.7.17: close-confirm "don't ask again"
 #include <QPushButton>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -97,6 +99,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QMouseEvent>
+#include <QCursor>      // v1.7.17: ModernTooltip anchor position
 #include <QWindow>
 #include <QGuiApplication>
 
@@ -573,6 +576,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     statusBar()->showMessage("Ready. Click 'Add Folder' to begin indexing documents.");
 
+    // ── v1.7.17: FIRST-RUN WELCOME ──
+    // A brand-new library shows an empty search page — no hint that the
+    // next step is adding a folder, and no hint that AI search arrives
+    // LATER than keyword search. On the very first launch a welcome
+    // dialog appears (deferred ~700 ms so the window paints first):
+    // it offers the Add-Folder action up front and honestly explains
+    // the pipeline: indexing fast -> keyword search immediately,
+    // extraction + AI embedding take time -> full AI once embedded.
+    if (!settings_.welcomeDone) {
+        QTimer::singleShot(700, this, [this]() {
+            if (!settings_.welcomeDone) showWelcomeDialog();
+        });
+    }
+
     // NOTE: Auto-extract on startup is DISABLED to prevent crashes.
     // Extraction only happens after Add Folder or manual Extract button click.
 
@@ -611,6 +628,82 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
+    // ── v1.7.17: CONFIRM BEFORE CLOSING ──
+    // One accidental click on the title-bar X (or Alt+F4) used to tear
+    // everything down instantly — mid-scan, mid-extraction, no take-back.
+    // A modern confirm dialog now stands in the way: it states plainly
+    // that closing is SAFE (the library is saved, background work resumes
+    // next launch), discloses any work still running, and offers a
+    // "Don't ask again" switch that persists immediately.
+    if (settings_.closeConfirmAsk) {
+        QStringList busy;
+        if (autoScanRunning_)            busy << "a folder scan";
+        if (contentExtractionRunning_)   busy << "text extraction";
+        if (aiBackfillRunning_)          busy << "AI embedding";
+        if (ocrPool_ && ocrWorkOutstanding()) busy << "OCR";
+
+        QDialog dlg(this);
+        dlg.setWindowTitle(QStringLiteral("Close DocuSearch?"));
+        dlg.setMinimumWidth(440);
+        auto* v = new QVBoxLayout(&dlg);
+        v->setSpacing(10);
+
+        auto* msg = new QLabel(
+            QStringLiteral(
+                "Close DocuSearch now?\n\n"
+                "Closing is safe: your library is saved, and indexing, "
+                "extraction and AI embedding resume automatically the next "
+                "time you open DocuSearch."),
+            &dlg);
+        msg->setWordWrap(true);
+        v->addWidget(msg);
+
+        // Honest disclosure when background work is mid-flight.
+        QLabel* busyLbl = nullptr;
+        if (!busy.isEmpty()) {
+            busyLbl = new QLabel(
+                QStringLiteral(
+                    "Heads-up: %1 %2 still running right now — closing "
+                    "pauses %3 until the next launch.")
+                    .arg(busy.join(QStringLiteral(", ")))
+                    .arg(busy.size() == 1 ? "is" : "are")
+                    .arg(busy.size() == 1 ? "it" : "them"),
+                &dlg);
+            busyLbl->setWordWrap(true);
+            busyLbl->setStyleSheet(
+                QStringLiteral("color:#b45309; font-weight:600;"));
+            v->addWidget(busyLbl);
+        }
+
+        auto* dontAsk = new QCheckBox(
+            QStringLiteral("Don't ask again — close immediately next time"),
+            &dlg);
+        v->addWidget(dontAsk);
+
+        auto* row = new QHBoxLayout();
+        row->addStretch();
+        auto* cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dlg);
+        cancelBtn->setObjectName(QStringLiteral("secondaryBtn"));
+        auto* closeBtn  = new QPushButton(QStringLiteral("Close"), &dlg);
+        closeBtn->setObjectName(QStringLiteral("primaryBtn"));
+        closeBtn->setDefault(true);
+        row->addWidget(cancelBtn);
+        row->addWidget(closeBtn);
+        v->addLayout(row);
+
+        connect(closeBtn,  &QPushButton::clicked, &dlg, &QDialog::accept);
+        connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+
+        if (dlg.exec() != QDialog::Accepted) {
+            e->ignore();   // stay open — nothing persisted, nothing stopped
+            return;
+        }
+        if (dontAsk->isChecked()) {
+            settings_.closeConfirmAsk = false;
+            Config::instance().save(settings_);
+        }
+    }
+
     // P0.1: Persist window geometry and splitter sizes.
     QSettings qs(QSettings::IniFormat, QSettings::UserScope, "DocuSearch", "DocuSearch");
     qs.setValue("geometry", saveGeometry());
@@ -1323,6 +1416,10 @@ void MainWindow::applyTheme() {
     pal.setColor(QPalette::Disabled, QPalette::WindowText, QColor(muted));
     pal.setColor(QPalette::Disabled, QPalette::Text,     QColor(muted));
     QApplication::setPalette(pal);
+    // v1.7.17: the custom ModernTooltip reads the EXACT same tokens as the
+    // QSS QToolTip rule, so the two tooltip paths stay one visual system.
+    ModernTooltip::setStyle(QColor(tooltipBg), QColor(tooltipText),
+                            QColor(tooltipBorder));
 
     // ── QSS with @token@ substitution ────────────────────────
     // DocuSearch v1.5 "Modern Professional" master stylesheet.
@@ -2017,6 +2114,122 @@ void MainWindow::scanFolderFast(const QString& folder) {
             .arg(hashed > 0 ? QString(
                 ", %1 fingerprint%2 computed")
                 .arg(hashed).arg(hashed == 1 ? "" : "s") : QString()), 5000);
+}
+
+// ============================================================
+// v1.7.17: FIRST-RUN WELCOME — onboarding + honest expectations
+// ============================================================
+// The first launch used to drop the user on an empty search page with
+// only a status-bar hint. This dialog does three things:
+//   1. Makes the next action obvious: add your first folder.
+//   2. Sets expectations BEFORE the user wonders whether something is
+//      broken: indexing finishes in seconds and keyword search works
+//      immediately, while extraction + AI embedding keep running in
+//      the background — full AI search by meaning arrives as vectors
+//      complete (the Extracted / Embedded badges show the progress).
+//   3. Runs ONCE: welcomeDone is persisted the moment the dialog is
+//      answered, whichever button was used.
+void MainWindow::showWelcomeDialog() {
+    if (settings_.welcomeDone) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Welcome to DocuSearch"));
+    dlg.setMinimumWidth(500);
+    auto* v = new QVBoxLayout(&dlg);
+    v->setContentsMargins(24, 22, 24, 18);
+    v->setSpacing(8);
+
+    auto* head = new QLabel(QStringLiteral("Welcome to DocuSearch"), &dlg);
+    head->setStyleSheet(QStringLiteral(
+        "font-size:19px; font-weight:800; background:transparent; color:%1;")
+        .arg(Theme::active().primaryStrong));
+    v->addWidget(head);
+
+    auto* sub = new QLabel(
+        QStringLiteral("Add your first folder to build your searchable library."),
+        &dlg);
+    sub->setWordWrap(true);
+    v->addWidget(sub);
+    v->addSpacing(6);
+
+    // ---- The pipeline, explained honestly (dot + head + one-liner) ----
+    struct Step { QColor dot; QString head; QString body; };
+    const QColor primary = Theme::active().primary;
+    const QList<Step> steps = {
+        { QColor("#10b981"),
+          QStringLiteral("Indexing — fast"),
+          QStringLiteral("Your files are discovered and listed within "
+                         "seconds of adding a folder.") },
+        { primary,
+          QStringLiteral("Keyword search — works right away"),
+          QStringLiteral("Search by file name immediately; full-text "
+                         "results keep filling in as text extraction "
+                         "progresses automatically.") },
+        { QColor("#8b5cf6"),
+          QStringLiteral("Extraction + AI embedding — takes time"),
+          QStringLiteral("DocuSearch reads every file (OCR included) and "
+                         "builds AI vectors in the background. Full AI "
+                         "search by meaning turns on as embedding "
+                         "completes — the Extracted / Embedded badges in "
+                         "the top-right show the progress.") },
+    };
+    for (const Step& s : steps) {
+        auto* rowW = new QWidget(&dlg);
+        auto* h = new QHBoxLayout(rowW);
+        h->setContentsMargins(0, 2, 0, 2);
+        h->setSpacing(10);
+        auto* dot = new QLabel(rowW);
+        dot->setFixedSize(12, 12);
+        dot->setStyleSheet(QStringLiteral(
+            "background:%1; border-radius:6px; min-width:12px; max-width:12px;")
+            .arg(s.dot.name()));
+        dot->setAlignment(Qt::AlignVCenter | Qt::AlignHCenter);
+        h->addWidget(dot, 0, Qt::AlignTop);
+
+        auto* txt = new QLabel(
+            QStringLiteral("<b>%1</b><br>%2").arg(s.head, s.body), rowW);
+        txt->setWordWrap(true);
+        txt->setTextFormat(Qt::RichText);
+        h->addWidget(txt, 1);
+        v->addWidget(rowW);
+    }
+    v->addSpacing(4);
+
+    auto* foot = new QLabel(
+        QStringLiteral("You can add more folders any time from the Search bar."),
+        &dlg);
+    foot->setStyleSheet(QStringLiteral(
+        "font-size:11px; background:transparent; color:%1;")
+        .arg(Theme::active().muted));
+    v->addWidget(foot);
+    v->addSpacing(6);
+
+    auto* row = new QHBoxLayout();
+    row->addStretch();
+    auto* laterBtn = new QPushButton(QStringLiteral("I'll add a folder later"), &dlg);
+    laterBtn->setObjectName(QStringLiteral("secondaryBtn"));
+    auto* addBtn   = new QPushButton(QStringLiteral("Add my first folder"), &dlg);
+    addBtn->setObjectName(QStringLiteral("primaryBtn"));
+    addBtn->setDefault(true);
+    row->addWidget(laterBtn);
+    row->addWidget(addBtn);
+    v->addLayout(row);
+
+    bool addChosen = false;
+    connect(addBtn, &QPushButton::clicked, &dlg, [&]() {
+        addChosen = true;
+        dlg.accept();
+    });
+    connect(laterBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+
+    dlg.exec();
+
+    // One-time by design: whichever way the dialog closes (button or X),
+    // onboarding is complete and never interrupts a launch again.
+    settings_.welcomeDone = true;
+    Config::instance().save(settings_);
+
+    if (addChosen) onAddFolder();   // straight into the folder picker
 }
 
 void MainWindow::onAddFolder() {
@@ -3883,6 +4096,52 @@ void MainWindow::updateOcrStatusIndicator() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // ── v1.7.17: MODERN TOOLTIP PRESENTATION ──
+    // The native QTipLabel is a square, system-styled, instant window —
+    // it never matched the app's Fluent glass look (the old workaround
+    // below only made its corners translucent). We now intercept the
+    // ToolTip event app-wide and show our own ModernTooltip instead:
+    // rounded glass card, hairline border, soft shadow, fade+slide in,
+    // edge-aware positioning. Widgets with an EMPTY toolTip() fall
+    // through untouched — that is how QMenu action tooltips (delivered
+    // on the menu itself) keep their native path and the QSS chip.
+    if (e->type() == QEvent::ToolTip && obj->isWidgetType()) {
+        auto* wgt = static_cast<QWidget*>(obj);
+        const QString tip = wgt->toolTip();
+        if (!tip.trimmed().isEmpty()) {
+            if (ModernTooltip::tipVisible()
+                && ModernTooltip::currentHost() == wgt
+                && ModernTooltip::currentText() == tip) {
+                return true;   // already showing exactly this tip
+            }
+            ModernTooltip::showTip(wgt, tip, QCursor::pos());
+            return true;       // suppress the native square QTipLabel
+        }
+    } else if (ModernTooltip::tipVisible()) {
+        // Same moments Qt hides its own tooltip — hide ours identically.
+        switch (e->type()) {
+            case QEvent::Leave:
+            case QEvent::MouseButtonPress:
+            case QEvent::Wheel:
+            case QEvent::ApplicationDeactivate:
+            case QEvent::Close:
+                ModernTooltip::hideTip();
+                break;
+            case QEvent::Hide:
+            case QEvent::Destroy:
+                if (obj == ModernTooltip::currentHost())
+                    ModernTooltip::hideTip();
+                break;
+            case QEvent::MouseMove:
+                // Moving WITHIN the host keeps the tip (native behavior);
+                // moving onto any other widget hides it.
+                if (obj != ModernTooltip::currentHost())
+                    ModernTooltip::hideTip();
+                break;
+            default:
+                break;
+        }
+    }
     // Translucent tooltip windows — REAL rounded corners.
     // Qt creates tooltips as QTipLabel: a square native top-level window.
     // Our QSS draws a border-radius on it, but without translucency the
@@ -3890,6 +4149,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // corner still looked clipped/square. Flipping the window translucent
     // here (before Qt creates its native window — QEvent::Show arrives
     // first) makes everything outside the QSS radius fully transparent.
+    // v1.7.17: this path now only serves the fallback cases left to the
+    // native tooltip (empty toolTip() above — e.g. QMenu actions).
     if (e->type() == QEvent::Show && obj->isWidgetType()) {
         auto* w = static_cast<QWidget*>(obj);
         if (w->windowType() == Qt::ToolTip && w->inherits("QTipLabel")

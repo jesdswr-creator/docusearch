@@ -91,6 +91,23 @@ QPushButton:pressed { background: @primaryStrong@; }
 QPushButton:focus { border-color: @primaryBorder@; }
 QPushButton:disabled { background: @border2@; color: @muted@; }
 
+/* v1.7.17: NEUTRAL secondary button for dialogs — the global rule above
+   makes every QPushButton an accent fill, which flattens the two-tier
+   hierarchy (Close vs Cancel / Add folder vs Later). Secondary buttons
+   keep the surface look with a hover lift; the default accent fill
+   stays reserved for the dialog's primary action. */
+QPushButton#secondaryBtn {
+    background: @surface2@;
+    color: @text@;
+    border: 1px solid @border2@;
+}
+QPushButton#secondaryBtn:hover {
+    background: @hover@;
+    border-color: @primaryBorder@;
+}
+QPushButton#secondaryBtn:pressed { background: @hoverSoft@; }
+QPushButton#secondaryBtn:disabled { background: @surface2@; color: @muted@; }
+
 /* ── Title bar window buttons (min/max/close) ──
    Surface-tinted background with subtle inset border for a "button on
    a chrome bar" look. Close hover = bright red with smooth transition. */

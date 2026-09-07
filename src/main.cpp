@@ -180,7 +180,9 @@ int main(int argc, char* argv[]) {
     auto showWindowAndDropSplash = [&]() {
         windowShown = true;
         if (w) w->show();
-        splash.close();
+        // v1.7.17: fade the splash out over the just-shown window instead
+        // of hard-closing it — the pop-to-reveal snap read as a glitch.
+        splash.fadeOutAndClose();
     };
 
     // ── v1.7.8: SPLASH SAFETY NET ──
@@ -195,7 +197,7 @@ int main(int argc, char* argv[]) {
         if (!windowShown) {
             DS_WARN("App", "Main window not visible 30 s after launch — "
                            "dropping the splash so nothing hides behind it.");
-            splash.close();
+            splash.fadeOutAndClose();
         }
     });
 
@@ -204,9 +206,11 @@ int main(int argc, char* argv[]) {
             w = std::make_unique<DocuSearch::MainWindow>();
         } catch (...) {
             // Constructor failure (e.g. DB locked) — the ctor shows its
-            // own message box; just drop the splash and quit cleanly.
-            splash.close();
-            QTimer::singleShot(0, &app, []() { QApplication::quit(); });
+            // own message box; fade the splash out, then quit cleanly
+            // (the callback keeps app.exec() alive until the fade ends).
+            splash.fadeOutAndClose([]() {
+                QTimer::singleShot(0, qApp, []() { QApplication::quit(); });
+            });
             return;
         }
         const int remain = kMinSplashMs - static_cast<int>(splashClock.elapsed());

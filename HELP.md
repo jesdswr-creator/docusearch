@@ -39,6 +39,31 @@ The first window you see has:
 - A 3-pane main area (results | preview | metadata+tags)
 - A status bar at the bottom showing indexed count + OCR status
 
+On the very first launch a **welcome dialog** appears. It offers to add
+your first folder right away and explains what happens next:
+
+1. **Indexing** — fast. Your files are discovered and listed within
+   seconds.
+2. **Keyword search** — works right away. Search by file name
+   immediately; full-text results keep filling in as text extraction
+   progresses automatically.
+3. **Extraction + AI embedding** — takes time. DocuSearch reads every
+   file (OCR included) and builds AI vectors in the background. Full
+   AI search by meaning turns on as embedding completes — the
+   **Extracted / Embedded** badges in the top-right show the progress.
+
+The welcome dialog appears only once; choose "I'll add a folder later"
+and it will not ask again.
+
+### Closing the app
+
+Clicking **Close** (or pressing Alt+F4) shows a confirmation first, so
+a stray click never stops background work mid-scan. Closing is always
+safe — your library is saved, and indexing, extraction and embedding
+resume automatically the next time you open DocuSearch. The dialog
+tells you when a scan, extraction, embedding or OCR is still running.
+Tick **"Don't ask again"** to close without confirmation from then on.
+
 ---
 
 ## Adding Folders

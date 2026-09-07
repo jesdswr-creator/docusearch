@@ -55,6 +55,8 @@ AppSettings Config::load() const {
     s.ocrLanguage            = settings_->value("ocrLanguage", s.ocrLanguage).toString();
     s.firstRunDone           = settings_->value("firstRunDone", s.firstRunDone).toBool();
     s.junkTextAuditDone      = settings_->value("junkTextAuditDone", s.junkTextAuditDone).toBool();
+    s.welcomeDone            = settings_->value("welcomeDone", s.welcomeDone).toBool();
+    s.closeConfirmAsk        = settings_->value("closeConfirmAsk", s.closeConfirmAsk).toBool();
     return s;
 }
 
@@ -74,6 +76,8 @@ void Config::save(const AppSettings& s) {
     settings_->setValue("ocrLanguage",          s.ocrLanguage);
     settings_->setValue("firstRunDone",         s.firstRunDone);
     settings_->setValue("junkTextAuditDone",    s.junkTextAuditDone);
+    settings_->setValue("welcomeDone",          s.welcomeDone);
+    settings_->setValue("closeConfirmAsk",      s.closeConfirmAsk);
     settings_->sync();
     emit settingsChanged(s);
 }

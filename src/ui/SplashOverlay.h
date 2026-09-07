@@ -33,6 +33,27 @@
 // (@primary@) of the active theme. Defaults below keep the classic
 // navy look when no theme is applied.
 //
+// v1.7.17 — SMOOTHNESS, ROUND TWO. The sweep was already time-based,
+// yet users still read the intro as "glitchy". Three remaining causes,
+// all fixed here:
+//
+//   1. HARD EDGES. The splash popped into existence at opacity 1 and
+//      hard-closed when the main window appeared. Those two snaps read
+//      as visual glitches even when every frame was smooth. The splash
+//      now FADES IN over 160 ms on show and FADES OUT over 200 ms via
+//      fadeOutAndClose() (windowOpacity runs on the compositor, so the
+//      fade stays smooth even while the CPU is busy building the
+//      main window underneath).
+//   2. FULL-WINDOW REPAINTS. Every animation tick called update() on
+//      the whole 540x340 translucent top-level. Translucent windows
+//      repaint through the DWM, so repainting 183k pixels 60x per
+//      second was the single heaviest startup load — and dropped
+//      frames ARE the glitch. Only the strip that actually changes
+//      (progress slot + caption line) is invalidated now; the card,
+//      title and magnifier are static and repaint on demand only.
+//   3. WASTED TICKS. The 16 ms timer kept repainting after close().
+//      Ticks are skipped while the splash is not visible.
+//
 // Header-only, no Q_OBJECT needed (no signals/slots; the timer is
 // connected via lambdas inside the class).
 // ============================================================
@@ -47,6 +68,9 @@
 #include <QLineF>
 #include <QStringList>
 #include <QElapsedTimer>
+#include <QVariantAnimation>
+#include <functional>
+#include <memory>
 #include <cmath>
 #include <algorithm>
 
@@ -77,12 +101,69 @@ public:
         // always derived from m_clock.elapsed() inside paintEvent, so a
         // coalesced or delayed timer can never rewind or freeze the
         // animation — it only means fewer intermediate frames.
+        // v1.7.17: start fully transparent; showEvent() fades us in.
+        setWindowOpacity(0.0);
+
         m_animTimer.setInterval(16);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
-            update();   // repaint from the current elapsed time
+            if (!isVisible()) return;   // no wasted repaints after close
+            // v1.7.17: repaint ONLY the strip that changes (slot + caption).
+            // The card, title and magnifier are static; invalidating the
+            // whole translucent window 60x/s was the dropped-frame glitch.
+            update(m_animRect);
         });
         m_clock.start();
         m_animTimer.start();
+
+        // v1.7.17: dirty region = progress slot + caption line, grown by
+        // the chunk fade margin and antialiasing bleed. Computed once;
+        // the layout is fixed-size so it can never go stale.
+        const QRectF card(20, 20, width() - 40, height() - 40);
+        const QRectF slot(card.left() + 30, card.top() + 176,
+                          card.width() - 60, 7);
+        QRectF anim(slot.adjusted(-8, -8, 8, 8));
+        anim |= QRectF(card.left() + 30, slot.bottom() + 12 - 6,
+                       card.width() - 60, 22 + 12);
+        m_animRect = anim.toAlignedRect().adjusted(-2, -2, 2, 2);
+    }
+
+    ~SplashOverlay() override {
+        if (m_fade) m_fade->stop();
+        m_animTimer.stop();
+    }
+
+    // v1.7.17: fade the splash out (200 ms) and close it. The optional
+    // callback runs after close() — main.cpp uses it to quit() on the
+    // constructor-failure path so the fade is never cut short.
+    // Safe to call from anywhere the event loop is running; a hidden
+    // splash closes immediately (nothing to animate).
+    void fadeOutAndClose(std::function<void()> after = {}) {
+        m_fadeOutDone = std::move(after);
+        if (!isVisible()) {
+            close();
+            if (m_fadeOutDone) m_fadeOutDone();
+            return;
+        }
+        if (m_fade) m_fade->stop();
+        m_fade = std::make_unique<QVariantAnimation>();
+        m_fade->setStartValue(windowOpacity());
+        m_fade->setEndValue(0.0);
+        m_fade->setDuration(200);
+        m_fade->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_fade.get(), &QVariantAnimation::valueChanged, this,
+                [this](const QVariant& v) { setWindowOpacity(v.toDouble()); });
+        connect(m_fade.get(), &QVariantAnimation::finished, this, [this]() {
+            close();
+            m_animTimer.stop();
+            if (m_fadeOutDone) {
+                auto done = std::move(m_fadeOutDone);
+                m_fadeOutDone = nullptr;
+                done();
+            }
+        });
+        // NOT DeleteWhenStopped: m_fade (unique_ptr) owns the animation;
+        // DeleteWhenStopped would double-delete it at stop.
+        m_fade->start();
     }
 
     // Apply the active theme's colors (call before show()).
@@ -101,6 +182,17 @@ protected:
             const QRect avail = scr->availableGeometry();
             move(avail.center() - QRect(0, 0, width(), height()).center());
         }
+        // v1.7.17: fade in — the splash grows out of the desktop instead
+        // of snapping into existence (the first half of the "glitch").
+        if (m_fade) m_fade->stop();
+        m_fade = std::make_unique<QVariantAnimation>();
+        m_fade->setStartValue(0.0);
+        m_fade->setEndValue(1.0);
+        m_fade->setDuration(160);
+        m_fade->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_fade.get(), &QVariantAnimation::valueChanged, this,
+                [this](const QVariant& v) { setWindowOpacity(v.toDouble()); });
+        m_fade->start();   // owned by m_fade (see fadeOutAndClose note)
     }
 
     void paintEvent(QPaintEvent*) override {
@@ -230,6 +322,10 @@ protected:
 private:
     QTimer         m_animTimer;
     QElapsedTimer  m_clock;        // time-based animation source
+    // v1.7.17: fade animation + the dirty strip repainted per tick.
+    std::unique_ptr<QVariantAnimation> m_fade;
+    std::function<void()> m_fadeOutDone;
+    QRect           m_animRect;
     // v1.7.6 themed colors — defaults = the classic navy splash.
     ThemeColors m_colors = {
         QColor("#0f172a"),          // cardTop

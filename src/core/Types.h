@@ -145,6 +145,13 @@ struct AppSettings {
     // new junk cannot enter afterwards (extraction now rejects it at the
     // source), so re-scanning every launch would be pure waste.
     bool        junkTextAuditDone       = false;
+    // v1.7.17: becomes true once the first-run welcome dialog has been
+    // shown AND answered (add-folder chosen or explicitly dismissed), so
+    // onboarding never interrupts a launch again.
+    bool        welcomeDone             = false;
+    // v1.7.17: confirm before the main window closes. Default on; the
+    // dialog's "Don't ask again" flips it off (persisted immediately).
+    bool        closeConfirmAsk         = true;
 };
 
 } // namespace DocuSearch

@@ -156,6 +156,13 @@ private slots:
     // folders without a restart.
     void removeAndRebuildDatabase();
 
+    // v1.7.17: first-run onboarding — a welcome dialog that walks the
+    // user through adding their first folder and sets expectations
+    // honestly: indexing is fast and keyword search works right away,
+    // extraction and AI embedding take time and full AI search arrives
+    // as embedding progresses. One-time (AppSettings::welcomeDone).
+    void showWelcomeDialog();
+
 private:
     // UI builders
     void buildTitleBar();
