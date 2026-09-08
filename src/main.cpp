@@ -254,7 +254,7 @@ int main(int argc, char* argv[]) {
 
     auto* dbWatch = new QFutureWatcher<void>(&app);
     QObject::connect(dbWatch, &QFutureWatcher<void>::finished, &app,
-        [&w, &splash, &splashClock, &showWindowAndDropSplash, startup, dbWatch]() {
+        [&app, &w, &splash, &splashClock, &showWindowAndDropSplash, startup, dbWatch]() {
             dbWatch->deleteLater();
             if (!startup->db || !startup->db->isOpen()) {
                 const QString err = startup->error.isEmpty()
