@@ -2,7 +2,7 @@
 
 **Offline Intelligent Document Search & OCR System for Windows 11**
 
-C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · Poppler PDF
+C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · PDFium PDF
 
 ---
 
@@ -54,7 +54,7 @@ docusearch/
 ├── install.bat                 ← One-click Windows build + package script
 ├── BUILD.md                    ← Full build & setup guide (read this!)
 ├── README.md                   ← Project overview
-├── CMakeLists.txt              ← CMake build (Qt6, SQLite, Windows.Media.Ocr runtime, Poppler)
+├── CMakeLists.txt              ← CMake build (Qt6, SQLite, Windows.Media.Ocr runtime, PDFium)
 ├── vcpkg.json                  ← C++ dependency manifest
 ├── installer/
 │   ├── DocuSearch.wxs          ← WiX v4 MSI definition
@@ -164,7 +164,8 @@ See `docusearch/BUILD.md` §10 for common issues:
 ## License
 
 DocuSearch source: BSD 3-Clause. Bundled libraries retain their original
-licenses (Qt: LGPL/Commercial, SQLite: Public Domain, Poppler: GPL,
+licenses (Qt: LGPL/Commercial, SQLite: Public Domain, PDFium:
+Apache-2.0/BSD-style,
 ONNX Runtime: MIT, BGE Small EN v1.5: MIT, Windows.Media.Ocr:
 built into Windows 10 1809+ (no redistribution needed).
 

@@ -9,7 +9,7 @@
       2. Verifies docusearch_ocr_helper.exe exists.
       3. Verifies Windows.Media.Ocr language packs are installed.
       4. Verifies Qt6 DLLs are present.
-      5. Verifies Poppler DLLs are present.
+      5. Verifies the PDFium DLL (pdfium.dll) is present.
       6. Verifies zlib / minizip DLL is present (OOXML extraction).
       7. Verifies write access to %APPDATA%\DocuSearch\.
       8. Verifies SQLite DLL is present.

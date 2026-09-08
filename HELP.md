@@ -197,7 +197,7 @@ If a file is too large (>100 MB) or too long (>500 KB of text), it
 will be partially indexed — the first portion is searchable, the
 remainder is skipped. See Settings → Limits for the exact values.
 
-Scanned PDFs (where Poppler returns no text) are flagged as
+Scanned PDFs (where no usable text layer is present) are flagged as
 `needs_ocr` instead of `failed`. You can OCR them later by clicking
 the green OCR button.
 

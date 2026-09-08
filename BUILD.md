@@ -2,7 +2,7 @@
 
 **Offline Intelligent Document Search & OCR System for Windows 11**
 
-C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · Poppler PDF
+C++20 · Qt 6 Widgets · SQLite + FTS5 · Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) · PDFium PDF
 
 ---
 
@@ -59,10 +59,21 @@ Set `CMAKE_PREFIX_PATH` to your Qt installation, e.g.
 ### 1.3 C++ libraries (via vcpkg)
 ```bat
 vcpkg install qtbase:x64-windows qtsvg:x64-windows ^
-           sqlite3[fts5]:x64-windows ^
-           tesseract:x64-windows leptonica:x64-windows ^
-           poppler:x64-windows zlib:x64-windows
+           sqlite3[fts5]:x64-windows zlib:x64-windows
 ```
+
+### 1.3b PDFium SDK (PDF rendering + text extraction)
+
+PDFium is **not** a vcpkg package here — download the prebuilt SDK from
+<https://github.com/bblanchon/pdfium-binaries/releases>
+(`pdfium-windows-x64.tar.gz`), extract it, and pass the folder to CMake:
+
+```bat
+cmake -B build -S . -DPDFIUM_ROOT="C:\dev\pdfium-win-x64" ...
+```
+
+It provides `include/fpdfview.h` + `lib/pdfium.dll.lib`; `pdfium.dll`
+itself is bundled into every distribution (ZIP/MSI/MSIX).
 
 ### 1.4 Packaging tools (optional — only for MSI / MSIX)
 - **WiX v4** — install as a dotnet tool: `dotnet tool install -g wix`
@@ -363,8 +374,8 @@ This is required because the indexer needs to walk `D:\`, `E:\`, etc.
 
 DocuSearch is distributed as source code under the BSD 3-Clause license.
 Bundled libraries retain their original licenses (Qt: LGPL/Commercial,
-SQLite: Public Domain, Poppler: GPL, ONNX Runtime: MIT, BGE Small EN
-v1.5: MIT). The OCR engine is **Windows.Media.Ocr** — the official
+SQLite: Public Domain, PDFium: Apache-2.0/BSD-style, ONNX Runtime: MIT,
+BGE Small EN The OCR engine is **Windows.Media.Ocr** — the official
 WinRT OCR API built into Windows 10 1809+. No DLLs are redistributed
 (the OS provides the engine). See **docs/OCR_LICENSING.md** for the
 full OCR compliance documentation.

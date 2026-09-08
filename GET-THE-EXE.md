@@ -7,9 +7,9 @@ This document explains the three real options.
 
 ## ⚠️ Why I can't just hand you an .exe
 
-DocuSearch is a Qt 6 + Windows.Media.Ocr + Poppler + SQLite application.
+DocuSearch is a Qt 6 + Windows.Media.Ocr + PDFium + SQLite application.
 Building it produces a `.exe` plus ~50 Qt DLLs, Qt plugins, MSVC
-runtime DLLs, and Poppler/zlib DLLs — all of which must match the
+runtime DLLs, and PDFium/zlib DLLs — all of which must match the
 compiler (MSVC 2022), architecture (x64), and Windows version (10/11)
 of the target machine.
 
@@ -50,8 +50,8 @@ tab — no Windows PC required.
 
 4. **Watch the build** at
    `https://github.com/YOUR-USERNAME/docusearch/actions`
-   It takes ~30–45 minutes on the first run (vcpkg compiles Poppler
-   from source), then ~5 minutes on subsequent runs (cached).
+   It takes ~30–45 minutes on the first run (vcpkg compiles the
+   dependencies from source), then ~5 minutes on subsequent runs (cached).
 
 5. **Download the binaries** from the run page:
    - `DocuSearch-Setup-msi` artifact → unzip → double-click the .msi
@@ -99,8 +99,8 @@ library computer), this is the simplest path.
    ```
 5. The `dist\` folder opens with the .msi, .msix, and .zip ready to use.
 
-First build takes ~30 min (vcpkg compiles Poppler). Subsequent
-builds take ~2 min.
+First build takes ~30 min (vcpkg compiles the dependencies).
+Subsequent builds take ~2 min.
 
 ---
 

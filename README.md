@@ -13,7 +13,7 @@ Your data never leaves your machine.
 - **Full-text search** powered by SQLite FTS5 with BM25 ranking
 - **Advanced query syntax**: phrases, boolean (AND/OR/NOT), field filters
   (`type:pdf`, `folder:Railway`, `date:>2024-01-01`)
-- **PDF text extraction** via Poppler (born-digital PDFs) + **OCR** via
+- **PDF text extraction** via PDFium (born-digital PDFs) + **OCR** via
   Windows.Media.Ocr (the official WinRT OCR API — supports 25+ languages,
   no licensing risk for commercial use)
 - **Auto-scan every 1 hour** — detects new and modified files automatically
@@ -55,7 +55,7 @@ the duplicate finder works on document formats only.
 | UI Framework | Qt 6.7 (Widgets) |
 | Database | SQLite 3 + FTS5 (full-text search) |
 | OCR | Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) |
-| PDF | Poppler (cpp binding) |
+| PDF | PDFium (bblanchon binaries; Apache-2.0/BSD-style, single DLL) |
 | Build | CMake + vcpkg (manifest mode) |
 | Installer | WiX v4 (MSI) |
 | CI | GitHub Actions (Windows Server 2022) |

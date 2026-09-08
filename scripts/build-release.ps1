@@ -242,87 +242,20 @@ if ($MakeMsi) {
 if ($MakeMsix) {
     Write-Host ""
     Write-Host "[7/8] Building MSIX package..." -ForegroundColor Yellow
-
-    # 7a. Build the MSIX assets (square logos + splash) from the master icon.
-    $assetsDir = Join-Path $projectRoot "$BuildDir\msix\assets"
-    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
-    # Generate the asset variants required by the AppxManifest from the
-    # master 256px PNG. (v1.7.11: removed a dead $iconScript variable
-    # that pointed at a nonexistent ..\scripts path.)
-    $masterPng = Join-Path $projectRoot "resources\icons\DocuSearch-256.png"
-    if (Test-Path $masterPng) {
-        $assetSizes = @{
-            "StoreLogo.png"           = 50
-            "Square44x44Logo.png"     = 44
-            "Square71x71Logo.png"     = 71
-            "Square150x150Logo.png"   = 150
-            "Square310x310Logo.png"   = 310
-            "Wide310x150Logo.png"     = 310
-            "SplashScreen.png"        = 620   # MSIX splash: 620x300
-        }
-        # Use the Windows built-in System.Drawing to resize the master.
-        Add-Type -AssemblyName System.Drawing
-        foreach ($entry in $assetSizes.GetEnumerator()) {
-            $src = [System.Drawing.Image]::FromFile($masterPng)
-            $w = if ($entry.Key -eq "Wide310x150Logo.png") { 310 } elseif ($entry.Key -eq "SplashScreen.png") { 620 } else { $entry.Value }
-            $h = if ($entry.Key -eq "Wide310x150Logo.png") { 150 } elseif ($entry.Key -eq "SplashScreen.png") { 300 } else { $entry.Value }
-            $bmp = New-Object System.Drawing.Bitmap $w, $h
-            $g   = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-            $g.PixelOffsetMode   = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-            # v1.7.11: letterbox instead of stretch. The master icon is
-            # SQUARE; drawing it at 310x150 / 620x300 distorted it on the
-            # wide tile and the splash. Center a height-sized square on a
-            # transparent canvas instead.
-            $side = [Math]::Min($w, $h)
-            $x = [int](($w - $side) / 2)
-            $y = [int](($h - $side) / 2)
-            $g.DrawImage($src, $x, $y, $side, $side)
-            $bmp.Save((Join-Path $assetsDir $entry.Key), [System.Drawing.Imaging.ImageFormat]::Png)
-            $bmp.Dispose(); $src.Dispose(); $g.Dispose()
-        }
-        Write-Host "      Generated MSIX assets." -ForegroundColor DarkGray
-    } else {
-        Write-Warning "Master icon $masterPng not found - MSIX assets will be missing."
-    }
-
-    # 7b. Stage the MSIX layout
-    $msixStage = Join-Path $projectRoot "$BuildDir\msix"
-    Copy-Item -Path "$buildOutput\*" -Destination $msixStage -Recurse -Force
-    Copy-Item -Path (Join-Path $projectRoot "installer\AppxManifest.xml") `
-              -Destination $msixStage -Force
-
-    # v1.7.11: stamp the STAGED manifest's Identity Version from the
-    # single version source, so the MSIX can never lag the app again
-    # (the repo copy sat frozen at 1.6.5.0 while the app hit 1.7.10).
-    $stagedManifest = Join-Path $msixStage "AppxManifest.xml"
-    (Get-Content $stagedManifest -Raw) `
-        -replace '(?<![A-Za-z])Version="\d+\.\d+\.\d+\.\d+"', "Version=`"$VersionMsi`"" |
-        Set-Content $stagedManifest -Encoding utf8
-
-    # 7c. MakeAppx pack
-    $makeAppx = (Get-Command makeappx -ErrorAction SilentlyContinue).Source
-    if (-not $makeAppx) {
-        $sdk = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory |
-               Sort-Object Name -Descending |
-               Select-Object -First 1
-        if ($sdk) {
-            $makeAppx = Join-Path $sdk.FullName "x64\makeappx.exe"
-        }
-    }
-    if (-not $makeAppx -or -not (Test-Path $makeAppx)) {
-        Write-Error "makeappx.exe not found. Install the Windows SDK."
-        exit 1
-    }
-
+    # v1.7.20: delegate to scripts/build-msix.ps1 - the SAME script CI uses.
+    # (The old inline copy of assets/staging/stamping/packing drifted from
+    # CI once; there is now exactly one implementation of the MSIX flow.)
+    # Identity stays the manifest placeholder here; pass
+    # -IdentityName/-IdentityPublisher (or edit installer/AppxManifest.xml)
+    # with the Partner Center product identity before a Store submission.
     $msixOut = Join-Path $projectRoot "dist\DocuSearch-$Version-x64.msix"
-    $distDir = Split-Path $msixOut -Parent
-    if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
-    if (Test-Path $msixOut) { Remove-Item $msixOut -Force }
-
-    & $makeAppx pack /d $msixStage /p $msixOut /nv
-    if ($LASTEXITCODE -ne 0) { Write-Error "MakeAppx pack failed"; exit 1 }
+    & pwsh -File (Join-Path $PSScriptRoot "build-msix.ps1") `
+        -ProjectRoot $projectRoot `
+        -BuildOutputDir $buildOutput `
+        -StageDir (Join-Path $projectRoot "$BuildDir\msix") `
+        -Version $Version `
+        -OutFile $msixOut
+    if ($LASTEXITCODE -ne 0) { Write-Error "MSIX build failed"; exit 1 }
     Write-Host "      Wrote $msixOut" -ForegroundColor Green
 } else {
     Write-Host ""

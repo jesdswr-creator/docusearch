@@ -35,7 +35,7 @@ Extract the portable ZIP on a clean Windows 10/11 machine and verify:
 - [ ] `DocuSearch.exe` runs without errors
 - [ ] `docusearch_ocr_helper.exe` exists
 - [ ] `Qt6Core.dll`, `Qt6Gui.dll`, `Qt6Widgets.dll`, `Qt6Sql.dll`, `Qt6Concurrent.dll` present
-- [ ] `poppler*.dll` present (PDF text extraction)
+- [ ] `pdfium.dll` present (PDF text extraction)
 - [ ] `zlib*.dll` present (DOCX/XLSX/PPTX extraction)
 - [ ] `sqldrivers\qsqlite.dll` present (SQLite driver plugin)
 - [ ] `scripts\verify_setup.ps1` present (setup verifier)
@@ -154,7 +154,7 @@ installed (most consumer installs have one by default):
 ## License / Legal
 
 - [ ] **BSD 3-Clause** license file present (`installer/LICENSE.rtf`)
-- [ ] **Third-party notices** included (Qt, Poppler, zlib, SQLite)
+- [ ] **Third-party notices** included (Qt, PDFium, zlib, SQLite)
 - [ ] **No proprietary binaries bundled** — OCR uses Windows.Media.Ocr
       (the official WinRT API built into Windows 10 1809+; no DLLs
       redistributed, no install scripts needed)
@@ -186,7 +186,7 @@ installed (most consumer installs have one by default):
 From the DocuSearch folder on a Windows machine:
 
 ```powershell
-# 1. Verify setup (checks helper exe + Qt DLLs + Poppler + OCR
+# 1. Verify setup (checks helper exe + Qt DLLs + PDFium + OCR
 #    language packs + write access to AppData)
 .\scripts\verify_setup.ps1
 
