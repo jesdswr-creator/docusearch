@@ -48,10 +48,17 @@
 #include "database/Database.h"
 
 class QTimer;
-class FileRepository;
 class QFutureWatcherBase;
 
 namespace DocuSearch {
+
+// NOTE: this forward declaration MUST live inside namespace DocuSearch.
+// Declaring it at global scope makes every member/pointer declared
+// before the real header bind to ::FileRepository (a direct declaration
+// beats a using-directive in unqualified lookup) — the type is then
+// permanently incomplete even after database/FileRepository.h is
+// included (CI-verified: MSVC C2027 in both the app and the tests).
+class FileRepository;
 
 class ExtractionController : public QObject {
     Q_OBJECT

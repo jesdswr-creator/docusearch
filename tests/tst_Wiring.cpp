@@ -59,6 +59,10 @@
 
 using namespace DocuSearch;
 
+// Shorthands: the status strings live in inner namespaces.
+using IS = Constants::IndexingStatus;
+using OS = Constants::OcrStatus;
+
 // 'needs_ocr' is a raw SQL literal everywhere in the pipeline (the
 // extractors write it directly); it has no Constants entry.
 static const char* kNeedsOcr = "needs_ocr";
@@ -308,8 +312,8 @@ private slots:
         QVERIFY(!ex.verifyWiring());         // the audit catches it
 
         const qint64 id = seedFile("unwired.pdf", "pdf",
-                                   Constants::kMetadataOnly,
-                                   Constants::kNotNeeded);
+                                   IS::kMetadataOnly,
+                                   OS::kNotNeeded);
         QVERIFY(id > 0);
 
         QSignalSpy finishedSpy(&ex, &ExtractionController::sessionFinished);
@@ -319,7 +323,7 @@ private slots:
         QCOMPARE(finishedSpy.at(0).at(1).toInt(), 1);   // failed == 1
         QString st;
         QCOMPARE(fileRowStatus(id, &st), (qint64)1);
-        QCOMPARE(st, QString(Constants::kFailed));      // marked failed, not lost
+        QCOMPARE(st, QString(IS::kFailed));      // marked failed, not lost
     }
 
     // --------------------------------------------------------
@@ -327,15 +331,15 @@ private slots:
     // --------------------------------------------------------
     void gatherTodoItemsSplitsTextAndOcrWork() {
         const qint64 txtPdf = seedFile("doc1.pdf", "pdf",
-                                       Constants::kMetadataOnly, Constants::kNotNeeded);
+                                       IS::kMetadataOnly, OS::kNotNeeded);
         const qint64 ocrPdf = seedFile("scan1.pdf", "pdf",
-                                       kNeedsOcr,   Constants::kPending);
+                                       kNeedsOcr,   OS::kPending);
         const qint64 img    = seedFile("pic1.png", "png",
-                                       Constants::kMetadataOnly, Constants::kPending);
+                                       IS::kMetadataOnly, OS::kPending);
         const qint64 txt    = seedFile("note.txt", "txt",
-                                       Constants::kMetadataOnly, Constants::kNotNeeded);
+                                       IS::kMetadataOnly, OS::kNotNeeded);
         const qint64 done   = seedFile("done.pdf", "pdf",
-                                       Constants::kContentDone, Constants::kNotNeeded);
+                                       IS::kContentDone, OS::kNotNeeded);
 
         const auto lists = ExtractionController::gatherTodoItems(db_->raw());
 
@@ -350,7 +354,7 @@ private slots:
         QVERIFY(!ocrIds.contains(txt));
         QString st;
         fileRowStatus(txt, &st);
-        QCOMPARE(st, QString(Constants::kSkipped));   // ...to 'skipped'
+        QCOMPARE(st, QString(IS::kSkipped));   // ...to 'skipped'
         QVERIFY(!textIds.contains(ocrPdf));
         QVERIFY(!textIds.contains(done));
         QVERIFY(!ocrIds.contains(done));
@@ -361,9 +365,9 @@ private slots:
     // 3. SESSION: once-only extraction (re-entrancy regression)
     // --------------------------------------------------------
     void sessionExtractsEachFileExactlyOnce() {
-        const qint64 f1 = seedFile("a1.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
-        const qint64 f2 = seedFile("a2.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
-        const qint64 f3 = seedFile("a3.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("a1.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
+        const qint64 f2 = seedFile("a2.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
+        const qint64 f3 = seedFile("a3.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
 
         auto worker = QSharedPointer<FakeWorker>::create();
         worker->sleepMs = 80;             // SLOWER than the 20 ms tick
@@ -400,7 +404,7 @@ private slots:
         QVERIFY(documentTextEquals(f3, "text of a3.pdf"));
         QString st;
         fileRowStatus(f1, &st);
-        QCOMPARE(st, QString(Constants::kContentDone));
+        QCOMPARE(st, QString(IS::kContentDone));
         QVERIFY(statsSpy.count() >= 3);
 
         // Signal sequence: on at start, off at end.
@@ -416,9 +420,9 @@ private slots:
     //    todo[0] forever. This test FAILS on that code.
     // --------------------------------------------------------
     void secondSessionIsFullyAccounted() {
-        const qint64 f1 = seedFile("b1.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
-        const qint64 f2 = seedFile("b2.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
-        const qint64 f3 = seedFile("b3.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("b1.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
+        const qint64 f2 = seedFile("b2.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
+        const qint64 f3 = seedFile("b3.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
 
         auto worker = QSharedPointer<FakeWorker>::create();
 
@@ -453,8 +457,8 @@ private slots:
     // 5. CANCEL: session-gen drops the in-flight result
     // --------------------------------------------------------
     void cancelMidSessionDropsLateResults() {
-        const qint64 f1 = seedFile("c1.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
-        const qint64 f2 = seedFile("c2.pdf", "pdf", Constants::kMetadataOnly, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("c1.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
+        const qint64 f2 = seedFile("c2.pdf", "pdf", IS::kMetadataOnly, OS::kNotNeeded);
 
         auto worker = QSharedPointer<FakeWorker>::create();
         worker->sleepMs = 250;
@@ -484,7 +488,7 @@ private slots:
         QTest::qWait(600);   // let the pool thread finish + continuation fire
         QString st;
         fileRowStatus(f2, &st);
-        QVERIFY(st != QString(Constants::kContentDone));
+        QVERIFY(st != QString(IS::kContentDone));
         QCOMPARE(documentTextRows(f2), 0);
     }
 
@@ -492,7 +496,7 @@ private slots:
     // 6. DB RESET: late OCR results must not write
     // --------------------------------------------------------
     void dbResetDropsLateOcrResults() {
-        const qint64 f1 = seedFile("d1.png", "png", kNeedsOcr, Constants::kPending);
+        const qint64 f1 = seedFile("d1.png", "png", kNeedsOcr, OS::kPending);
 
         ExtractionController ex;
         ex.setDatabase(db_.get());
@@ -508,8 +512,8 @@ private slots:
     // 7. OCR session accounting ends the session + re-arms
     // --------------------------------------------------------
     void ocrAccountingEndsSession() {
-        const qint64 f1 = seedFile("e1.png", "png", kNeedsOcr, Constants::kPending);
-        const qint64 f2 = seedFile("e2.png", "png", kNeedsOcr, Constants::kPending);
+        const qint64 f1 = seedFile("e1.png", "png", kNeedsOcr, OS::kPending);
+        const qint64 f2 = seedFile("e2.png", "png", kNeedsOcr, OS::kPending);
 
         ExtractionController ex;
         ex.setDatabase(db_.get());
@@ -544,9 +548,9 @@ private slots:
     // 8. BACKFILL: drain, chain, complete (via the interface seam)
     // --------------------------------------------------------
     void backfillDrainsBacklog() {
-        const qint64 f1 = seedFile("g1.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
-        const qint64 f2 = seedFile("g2.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
-        const qint64 f3 = seedFile("g3.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("g1.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
+        const qint64 f2 = seedFile("g2.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
+        const qint64 f3 = seedFile("g3.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
         for (qint64 id : {f1, f2, f3}) seedDocumentText(id, "body text");
 
         FakeEmbeddingService fake;
@@ -576,7 +580,7 @@ private slots:
     // 9. BACKFILL: the all-fail deadlock guard stops the chain
     // --------------------------------------------------------
     void backfillDeadlockGuardStopsAfterTwoAllFailBatches() {
-        const qint64 f1 = seedFile("h1.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("h1.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
         seedDocumentText(f1, "doomed text");
 
         FakeEmbeddingService fake;
@@ -607,7 +611,7 @@ private slots:
     // 10. REBUILD: purge chain wipes rows, then re-embeds
     // --------------------------------------------------------
     void rebuildHandoverReachesBackfill() {
-        const qint64 f1 = seedFile("q1.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
+        const qint64 f1 = seedFile("q1.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
         seedDocumentText(f1, "rebuildable body");
         {
             const float v[2] = {0.5f, 0.5f};
@@ -651,10 +655,10 @@ private slots:
     // 11. STATS QUERIES (pure SQL)
     // --------------------------------------------------------
     void statsQueriesCountMissing() {
-        const qint64 fresh   = seedFile("s1.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
-        const qint64 stale   = seedFile("s2.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
-        const qint64 noVec   = seedFile("s3.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
-        const qint64 longDoc = seedFile("s4.pdf", "pdf", Constants::kContentDone, Constants::kNotNeeded);
+        const qint64 fresh   = seedFile("s1.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
+        const qint64 stale   = seedFile("s2.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
+        const qint64 noVec   = seedFile("s3.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
+        const qint64 longDoc = seedFile("s4.pdf", "pdf", IS::kContentDone, OS::kNotNeeded);
         for (qint64 id : {fresh, stale, noVec}) seedDocumentText(id, "t");
         seedDocumentText(longDoc, QString(1100, 'w'));
 
