@@ -60,8 +60,8 @@
 using namespace DocuSearch;
 
 // Shorthands: the status strings live in inner namespaces.
-using IS = Constants::IndexingStatus;
-using OS = Constants::OcrStatus;
+using IS = DocuSearch::Constants::IndexingStatus;
+using OS = DocuSearch::Constants::OcrStatus;
 
 // 'needs_ocr' is a raw SQL literal everywhere in the pipeline (the
 // extractors write it directly); it has no Constants entry.
