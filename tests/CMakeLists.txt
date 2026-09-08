@@ -30,7 +30,7 @@ set(TEST_SOURCES
     ../src/embeddings/BgeEmbeddingDb.cpp
 )
 
-find_package(Qt6 REQUIRED COMPONENTS Test Sql)
+find_package(Qt6 REQUIRED COMPONENTS Test Sql Concurrent)
 find_package(SQLite3 REQUIRED)
 
 # Helper: declare one test executable
@@ -74,6 +74,26 @@ docusearch_add_test(tst_FileRepository)
 docusearch_add_test(tst_FtsTokenizer)
 docusearch_add_test(tst_BgeTokenizer)
 docusearch_add_test(tst_SchemaMigration)
+
+# ---- Wiring tests (v1.7.21) --------------------------------------------
+# The pipeline controllers constructed HEADLESS against a temp sqlite
+# database: the construction contract (everything declared is actually
+# built — verifyWiring), the once-only extraction contract (re-entrancy
+# regression), the second-session regression (the v1.7.20 stale-capture
+# bug: the old continuation captured session 1's state and every later
+# session's results were silently dropped), cancel/session-generation
+# drops, OCR accounting, the embedding backfill drain + deadlock guard
+# (through IEmbeddingService with a fake service), the rebuild purge
+# chain, and the backlog counters. This is the suite that catches the
+# "declared but never constructed / never wired" bug class — the class
+# logic tests structurally cannot see.
+docusearch_add_test(tst_Wiring)
+target_sources(tst_Wiring PRIVATE
+    ../src/core/SehTranslator.cpp
+    ../src/core/ExtractionController.cpp
+    ../src/embeddings/EmbeddingController.cpp
+)
+target_link_libraries(tst_Wiring PRIVATE Qt6::Concurrent)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
 # Verifies the Windows.Media.Ocr helper exe crash safety. Tests that the

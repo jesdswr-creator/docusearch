@@ -71,6 +71,11 @@ class SwitchControl;
 // forward-declared for its unique_ptr member.
 class BgeService;
 class HybridSearchEngine;
+// v1.7.21: headless pipeline controllers (QtCore-only, wiring-tested
+// in tests/tst_Wiring.cpp — the suite that catches "declared but
+// never constructed / never wired" bugs).
+class ExtractionController;
+class EmbeddingController;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -102,8 +107,6 @@ private slots:
     void onSemanticToggled(bool checked);
     void onBgeReady();
     void onBgeFailed();
-    void onBgeEmbeddingProgress(int current, int total);
-    void onBgeEmbeddingFinished(int success, int fail);
     void onIndexingProgress(const DocuSearch::IndexingProgress& p);
     void onPhaseChanged(const QString& phase);
     void onIndexingStarted();
@@ -227,11 +230,6 @@ private:
     void enableNativeResize();
     bool nativeResizeApplied_ = false;
 
-    // Embedding backfill diagnostics + shared count helpers.
-    qint64 countMissingEmbeddings();   // docs with text but no embedding
-    qint64 countMissingChunkDocs();    // embedded docs without chunk rows
-    bool   aiBackfillChunkMode_ = false;
-    int    aiBackfillDeadlock_  = 0;   // consecutive zero-success batches
 
 public:
     Q_INVOKABLE void updateIndexStats();
@@ -248,6 +246,13 @@ public:
     std::unique_ptr<SearchEngine>   search_;
     std::unique_ptr<OcrWorkerPool>  ocrPool_;
     std::unique_ptr<FileWatcher>    watcher_;
+    // v1.7.21: HEADLESS PIPELINE CONTROLLERS. The extraction session
+    // machine and the AI-embedding backfill/rebuild state machine moved
+    // out of this class into QtCore-only controllers that the wiring
+    // tests construct headless. Declared AFTER db_/repo_ so they are
+    // destroyed FIRST — their pools drain while the database is open.
+    std::unique_ptr<ExtractionController> extractionController_;
+    std::unique_ptr<EmbeddingController>  embeddingController_;
     // Phase 9: Debounce file watcher events (merge add+modify within 500ms).
     QHash<QString, qint64> fileEventDebounce_;
     QTimer* fileEventDebounceTimer_ = nullptr;
@@ -328,21 +333,11 @@ public:
     // report. One dedicated thread + the mutex keeps scans serialized
     // (as before) while making them immune to global-pool starvation.
     QThreadPool*    searchPool_          = nullptr;
-    // v1.7.20: DEDICATED pools so search / extraction / embedding each own
-    // a thread and background work can never starve or freeze another
-    // path (the user-facing ask: "search, extraction and embedding all
-    // are separate threads so that bg work will not affect or freeze
-    // searching").
-    //   extractPool_ — per-file text extraction (16 MB stacks; see the
-    //     SEH note in onExtract — Poppler recursion overflows 1 MB).
-    //   embedPool_   — BGE model init + batch embedding (ONNX inference).
-    // The semantic scan keeps its dedicated searchPool_ (v1.7.19); OCR
-    // already runs on its own OcrWorkerPool QThreads.
-    QThreadPool*    extractPool_         = nullptr;
-    QThreadPool*    embedPool_           = nullptr;
-    bool            aiBackfillRunning_   = false;  // batch embed in flight
-    bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
-    int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
+    // v1.7.20 (carried): every background path owns a thread — search
+    // keeps its dedicated searchPool_ (v1.7.19), OCR runs on its own
+    // OcrWorkerPool QThreads, and since v1.7.21 extraction runs on
+    // ExtractionController's pool and embedding on EmbeddingController's
+    // pool (both eagerly constructed + audited by verifyWiring()).
 
     // v1.7.13: the duplicates result set the pane is currently showing
     // (dupKeys_ runs parallel to dupResults_), backing the "Delete
@@ -350,23 +345,6 @@ public:
     // nothing or the pane is reused for search results.
     QList<SearchHit> dupResults_;
     QStringList      dupKeys_;
-
-    // Scan SearchIndex for files with no BgeEmbeddings row and queue a
-    // batch (capped) on the background BGE worker. Called when the BGE
-    // service becomes ready AND whenever the user switches AI on, so the
-    // embedding backlog drains without any manual user action. Follow-up
-    // batches are chained from onBgeEmbeddingFinished until drained.
-    void ensureEmbeddingsBackfill();
-
-    // One-click "Rebuild All AI Embeddings" (Settings -> AI Search):
-    // batch-deletes every BgeEmbeddings/EmbeddingChunks row, then hands
-    // over to ensureEmbeddingsBackfill() so the whole library is
-    // re-embedded from FULL document text. Embeddings built before the
-    // v1.6.6 tokenizer fix were computed from text truncated at 128
-    // tokens; this action recomputes them at exact length (up to 512).
-    // The purge runs in small chained batches so the UI never freezes.
-    void startEmbeddingRebuild();
-    void purgeEmbeddingsTick();
 
     // Persistent status chip text for the AI control (state + counts).
     void setAiChip(const QString& text, bool active);
@@ -402,33 +380,10 @@ public:
     bool            darkMode_             = true;
     // Pastel theme cycling: 0=Lavender, 1=Mint, 2=Peach, 3=Midnight (dark)
     int             pastelTheme_          = 0;
-    bool            contentExtractionRunning_ = false;
-    std::atomic<bool> extractCancelFlag_{false};
-    // v1.7.20: extraction is now fully asynchronous — the 200 ms driver
-    // tick STARTS one file on extractPool_ and returns immediately; the
-    // QFutureWatcher continuation does the accounting. extractFileInFlight_
-    // makes the tick a no-op while a file is being extracted (also kills a
-    // LATENT RE-ENTRANCY BUG: the old UI-thread busy-wait pumped
-    // processEvents() for the whole extraction, so for any file slower
-    // than 200 ms the repeating timer re-entered the tick and extracted
-    // the SAME file again — nested, on several pool threads, skipping
-    // neighbours via double ++idx). extractSessionGen_ invalidates the
-    // continuation of a cancelled/reset session so a late result can
-    // never write into a newer session.
-    QFutureWatcher<ExtractionResult>* extractWatcher_ = nullptr;
-    bool            extractFileInFlight_  = false;
-    int             extractSessionGen_    = 0;
-    // v1.7.9: OCR pool session accounting — how many OCR tasks the
-    // current extraction session enqueued / how many results arrived.
-    int             ocrExpected_          = 0;
-    int             ocrReceived_          = 0;
-    // v1.7.10: first-run extract-all. True until the first full drain
-    // finishes; raises the per-session cap (200 instead of 30) and the
-    // re-arm delay (3 s instead of 60 s) so a new index extracts itself.
-    bool            extractAllMode_       = false;
-    // v1.7.10: true while removeAndRebuildDatabase() has detached the
-    // old database — late OCR results / extraction-timer ticks must not
-    // write into the freshly created (empty) database.
+    // v1.7.21: the extraction session state (running flag, cancel flag,
+    // in-flight guard, session generation, OCR accounting, first-run
+    // mode, watcher) moved INTO ExtractionController — this class keeps
+    // only the db-reset latch for its own late watcher-driven writes.
     bool            dbResetting_          = false;
 
     bool            autoScanRunning_      = false;

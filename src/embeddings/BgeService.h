@@ -11,6 +11,7 @@
 
 #include "BgeEmbeddingEngine.h"
 #include "BgeEmbeddingDb.h"
+#include "IEmbeddingService.h"
 
 #include <QObject>
 #include <QString>
@@ -26,7 +27,10 @@ class QThreadPool;   // v1.7.20: dedicated embedding worker pool
 
 namespace DocuSearch {
 
-class BgeService : public QObject {
+// v1.7.21: implements IEmbeddingService so EmbeddingController (and its
+// wiring tests) can drive the backfill through the interface — the two
+// methods already existed with matching signatures.
+class BgeService : public QObject, public IEmbeddingService {
     Q_OBJECT
 public:
     explicit BgeService(QObject* parent = nullptr);
@@ -36,7 +40,7 @@ public:
     // Never throws — all errors are caught and logged.
     bool initialize(const QString& dbPath, const QString& modelPath);
 
-    bool   isReady() const { return m_initialized; }
+    bool   isReady() const override { return m_initialized; }   // IEmbeddingService
     QString getStatus() const { return m_statusMessage; }
 
     // Search for documents semantically similar to the query.
@@ -91,7 +95,8 @@ public:
 
     // Embed a batch of documents in the background. Emits
     // embeddingProgress and embeddingFinished signals.
-    void embedDocumentsBatch(const QVector<int>& fileIds, const QStringList& texts);
+    void embedDocumentsBatch(const QVector<int>& fileIds,
+                             const QStringList& texts) override;   // IEmbeddingService
 
     // v1.7.20: run ALL background work (batch embedding worker) on a
     // DEDICATED thread pool owned by MainWindow instead of the global

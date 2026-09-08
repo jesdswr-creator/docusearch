@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.20
+    VERSION 1.7.21
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -213,6 +213,8 @@ set(APP_SOURCES
     src/core/FileUtils.cpp
     src/core/SehTranslator.cpp
     src/core/CrashHandler.cpp
+    # v1.7.21: headless extraction-session controller (wiring-tested)
+    src/core/ExtractionController.cpp
     # database
     src/database/Database.cpp
     src/database/Schema.cpp
@@ -244,6 +246,8 @@ set(APP_SOURCES
     src/preview/OfficePreview.cpp
     src/preview/FilePreviewPane.cpp
     # embeddings (semantic search)
+    # v1.7.21: headless embedding-backfill controller (wiring-tested)
+    src/embeddings/EmbeddingController.cpp
     src/embeddings/BgeTokenizer.cpp
     src/embeddings/BgeEmbeddingEngine.cpp
     src/embeddings/BgeEmbeddingDb.cpp
@@ -281,6 +285,10 @@ set(APP_HEADERS
     src/core/FileUtils.h
     src/core/SehTranslator.h
     src/core/CrashHandler.h
+    # v1.7.21: headless pipeline controllers
+    src/core/ExtractionController.h
+    src/embeddings/EmbeddingController.h
+    src/embeddings/IEmbeddingService.h
     src/database/Database.h
     src/database/Schema.h
     src/database/FileRepository.h

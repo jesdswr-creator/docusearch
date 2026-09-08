@@ -34,6 +34,8 @@
 #include "../documents/DocumentExtractorRegistry.h"
 #include "../preview/FilePreviewPane.h"
 #include "../embeddings/BgeService.h"
+#include "../core/ExtractionController.h"
+#include "../embeddings/EmbeddingController.h"
 #include "../search/HybridSearchEngine.h"
 #include "../settings/SettingsManager.h"
 
@@ -115,6 +117,13 @@
 #include <algorithm>   // std::clamp (OCR pool size from settings)
 
 namespace DocuSearch {
+
+namespace {
+// Forward declaration: the definition lives in the anonymous namespace
+// further down this file, but the ctor's path-gate lambda (injected
+// into ExtractionController) sits before that point in the file.
+QSet<QString> normalizedExtSet(const QStringList& exts);
+}
 
 // ── Brand logo pixmap ─────────────────────────────────────────
 // The title bar must carry the REAL DocuSearch logo (the same artwork
@@ -352,13 +361,56 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     connect(ocrPool_.get(), &OcrWorkerPool::logMessage, this,
             [](const QString& m) { DS_INFO("OCR", m); });
 
+    // ── v1.7.21: HEADLESS PIPELINE CONTROLLERS ──
+    // The extraction + embedding state machines moved out of this
+    // god-object into QtCore-only controllers that tst_Wiring can
+    // construct headless against a temp database — the wiring test
+    // suite that would have caught the "OCR pool declared but never
+    // constructed" and "extraction gathered by nobody" bugs (both hid
+    // exactly here). Construction is EAGER and audited at startup.
+    extractionController_ = std::make_unique<ExtractionController>(this);
+    extractionController_->setDatabase(db_.get());
+    extractionController_->setFileRepository(repo_.get());
+    extractionController_->setWorkerFn([](const QString& path, const QString& ext) {
+        return DocumentExtractorRegistry::instance().extractByExtension(path, ext);
+    });
+    extractionController_->setPathGate([this](const QString& p) -> bool {
+        // Settings-driven admissibility (the controller adds the
+        // constant extension allowlist + existence checks itself).
+        for (const QString& drive : settings_.indexedDrives) {
+            if (p.startsWith(drive, Qt::CaseInsensitive)) {
+                if (FileUtils::isUnderAny(p, settings_.excludedFolders))
+                    return false;
+                const QString e = FileUtils::extensionOf(p).toLower();
+                return !normalizedExtSet(settings_.excludedExtensions).contains(e);
+            }
+        }
+        return false;
+    });
+    extractionController_->setOcrHooks(
+        [this](const QList<ExtractionController::ExtractionTodo>& l) -> int {
+            if (!ocrPool_ || l.isEmpty()) return 0;
+            QList<OcrTask> tasks;
+            tasks.reserve(l.size());
+            for (const auto& t : l)
+                tasks.append(OcrTask{t.fileId, t.path, t.ext});
+            ocrPool_->enqueueBatch(tasks);
+            return tasks.size();
+        },
+        [this]() { if (ocrPool_) ocrPool_->clearQueue(); },
+        [this]() -> int { return ocrPool_ ? ocrPool_->queueSize() : 0; });
+    extractionController_->setFirstRunMode(!settings_.firstRunDone);
+
+    embeddingController_ = std::make_unique<EmbeddingController>(this);
+    embeddingController_->setDatabase(db_.get());
+
     // v1.7.10 FIRST-RUN EXTRACT-ALL: until the very first full extraction
     // drain completes (firstRunDone), extraction sessions run 200 files
     // and re-arm in 3 s, so a fresh index fully extracts itself right
     // after the first Add-Folder scan — the user never has to keep
     // clicking Extract to see content search working.
-    extractAllMode_ = !settings_.firstRunDone;
-    if (extractAllMode_)
+    // (v1.7.21: the flag lives in ExtractionController — set above.)
+    if (extractionController_->firstRunMode())
         DS_INFO("Extract", "First run — extraction will drain the whole "
                            "queue automatically.");
 
@@ -462,10 +514,11 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 
     // Startup diff: check for files that changed while app was closed.
     QTimer::singleShot(2000, this, [this]() {
-        if (!contentExtractionRunning_) {
-            statusBar()->showMessage("Checking for file changes...", 3000);
-            autoScanIndexedFolders();
+        if (extractionController_ && extractionController_->isRunning()) {
+            return;  // extraction busy — the hourly scan will catch up
         }
+        statusBar()->showMessage("Checking for file changes...", 3000);
+        autoScanIndexedFolders();
     });
 
     // v1.7.8: one-time non-document purge, scheduled AFTER the window is
@@ -608,6 +661,71 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     // NOTE: Auto-extract on startup is DISABLED to prevent crashes.
     // Extraction only happens after Add Folder or manual Extract button click.
 
+    // ── v1.7.21: controller → UI signal forwarders ──
+    // The controllers are headless; every status message, progress
+    // update, stats/preview refresh request and re-arm tick arrives
+    // here as a signal. This connect block IS the wiring the startup
+    // audit below cannot fully see — keep the two in sync.
+    connect(extractionController_.get(), &ExtractionController::statusMessage, this,
+            [this](const QString& m, int t) { statusBar()->showMessage(m, t); });
+    connect(extractionController_.get(), &ExtractionController::extractingChanged, this,
+            [this](bool on) { if (searchBar_) searchBar_->setExtracting(on); });
+    connect(extractionController_.get(), &ExtractionController::progressUpdated, this,
+            [this](int value, int max, bool visible) {
+                if (!extractionProgressBar_) return;
+                extractionProgressBar_->setRange(0, qMax(1, max));
+                extractionProgressBar_->setValue(value);
+                extractionProgressBar_->setVisible(visible);
+            });
+    connect(extractionController_.get(), &ExtractionController::statsDirty,
+            this, &MainWindow::updateIndexStats);
+    connect(extractionController_.get(), &ExtractionController::previewDirty, this,
+            [this]() { refreshPreviewForSelectedFile(); });
+    connect(extractionController_.get(), &ExtractionController::firstRunDrainComplete, this,
+            [this]() {
+                settings_.firstRunDone = true;
+                saveSettings();
+            });
+    connect(extractionController_.get(), &ExtractionController::backfillWakeRequested, this,
+            [this]() {
+                if (embeddingController_) embeddingController_->ensureBackfill();
+            });
+    connect(extractionController_.get(), &ExtractionController::autoRearmRequested, this,
+            [this](int delayMs) {
+                QTimer::singleShot(delayMs, this, [this]() {
+                    // v1.7.4: fresh patience budget for this wake so a
+                    // scan that happens to be running can never starve
+                    // the queue.
+                    autoExtractRetryLeft_ = 20;
+                    requestAutoExtract();
+                });
+            });
+    connect(embeddingController_.get(), &EmbeddingController::chipChanged,
+            this, &MainWindow::setAiChip);
+    connect(embeddingController_.get(), &EmbeddingController::statusMessage, this,
+            [this](const QString& m, int t) { statusBar()->showMessage(m, t); });
+    connect(embeddingController_.get(), &EmbeddingController::rebuildBlocked, this,
+            [this](const QString& why) {
+                QMessageBox::information(this, "AI Search", why);
+            });
+
+    // ── v1.7.21: STARTUP WIRING AUDIT ──
+    // Every declared subsystem must actually be constructed. This one
+    // check at startup would have caught the historical "OCR pool
+    // declared but never constructed" bug on day one instead of after
+    // a release; tst_Wiring asserts the same contract headless.
+    {
+        const bool wiringOk =
+            db_ && repo_ && search_ && ocrPool_ && watcher_ &&
+            extractionController_ && extractionController_->verifyWiring() &&
+            embeddingController_ && embeddingController_->verifyWiring();
+        if (!wiringOk)
+            DS_WARN("Startup", "WIRING AUDIT FAILED — a declared subsystem "
+                               "was never constructed (see warnings above).");
+        DS_INFO("Startup", QString("Wiring audit: %1")
+                               .arg(wiringOk ? "OK" : "FAILED"));
+    }
+
     // Keyboard shortcuts
     auto* focusSearchAct = new QAction(this);
     focusSearchAct->setShortcut(QKeySequence("Ctrl+K"));
@@ -631,13 +749,11 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 
 MainWindow::~MainWindow() {
     if (autoScanTimer_) autoScanTimer_->stop();
-    // Cancel any in-progress extraction so the timer callback doesn't
-    // fire on a half-destroyed window.
-    // v1.7.20: also invalidate the async continuation — a result landing
-    // during teardown must write nothing (the gen check drops it even if
-    // the queued finished() fires while members are being destroyed).
-    extractCancelFlag_.store(true);
-    ++extractSessionGen_;
+    // v1.7.21: the pipelines live in the controllers — invalidate the
+    // extraction session FIRST (a result landing during teardown must
+    // write nothing; the generation check drops it) and drain its pool
+    // while the database is still open.
+    if (extractionController_) extractionController_->shutdownForTeardown();
     // v1.7.18: stop + join the background SEMANTIC SEARCH worker before
     // hybridSearch_/bgeService_ die — the worker captures `this` and uses
     // both. Mirrors the bgeInitFuture_ contract below.
@@ -652,15 +768,11 @@ MainWindow::~MainWindow() {
     if (searchPool_) searchPool_->waitForDone();
     // v1.7.11: join the BGE init worker — it captures `this` and uses
     // bgeService_, which is about to be destroyed with the window.
-    // v1.7.20: bgeInitFuture_ runs on the dedicated embedPool_ — drain it
-    // after the join (clear() drops queued embedding batches; the BGE
-    // service dtor joins any in-flight batch itself).
+    // v1.7.21: that future runs on EmbeddingController's pool — join it
+    // first, THEN drain the pool (clear() drops queued embedding
+    // batches; the BGE service dtor joins any in-flight batch itself).
     if (bgeInitFuture_.isValid()) bgeInitFuture_.waitForFinished();
-    if (embedPool_) { embedPool_->clear(); embedPool_->waitForDone(); }
-    // v1.7.20: drain the dedicated extraction pool the same way — clear()
-    // drops not-yet-started files, waitForDone() waits out the one file
-    // in flight (bounded: single-file extractions never run nested now).
-    if (extractPool_) { extractPool_->clear(); extractPool_->waitForDone(); }
+    if (embeddingController_) embeddingController_->shutdownForTeardown();
     if (ocrPool_) ocrPool_->shutdown();
     if (watcher_) watcher_->stop();
     if (db_)      db_->close();
@@ -677,8 +789,10 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     if (settings_.closeConfirmAsk) {
         QStringList busy;
         if (autoScanRunning_)            busy << "a folder scan";
-        if (contentExtractionRunning_)   busy << "text extraction";
-        if (aiBackfillRunning_)          busy << "AI embedding";
+        if (extractionController_ && extractionController_->isRunning())
+                                         busy << "text extraction";
+        if (embeddingController_ && embeddingController_->isBackfillRunning())
+                                         busy << "AI embedding";
         if (ocrPool_ && ocrWorkOutstanding()) busy << "OCR";
 
         QDialog dlg(this);
@@ -1978,8 +2092,12 @@ void MainWindow::applySemanticResults(const QString& query,
         } else if (bestSim < 0.0f) {
             // Nothing was comparable this pass. Only blame the chunk
             // backfill while work is genuinely pending.
-            const qint64 pendingDocs   = countMissingEmbeddings();
-            const qint64 pendingChunks = countMissingChunkDocs();
+            const qint64 pendingDocs   = embeddingController_
+                                             ? embeddingController_->countMissingEmbeddings()
+                                             : 0;
+            const qint64 pendingChunks = embeddingController_
+                                             ? embeddingController_->countMissingChunkDocs()
+                                             : 0;
             if (pendingDocs > 0 || pendingChunks > 0) {
                 resultsPane_->setAiSummary(QString(
                     "<b>AI index warming up.</b> %1 document%2 "
@@ -2586,571 +2704,13 @@ void MainWindow::refreshPreviewForSelectedFile() {
 // approach (which had Poppler/minizip thread-safety crashes).
 // ============================================================
 void MainWindow::onExtract() {
-    if (!repo_ || !db_) return;
-    if (contentExtractionRunning_) {
-        // Toggle cancel if already running.
-        extractCancelFlag_.store(true);
-        statusBar()->showMessage("Cancelling extraction...", 3000);
-        return;
-    }
-
-    // Gather files needing content extraction.
-    struct TodoItem { qint64 fileId; QString path; QString ext; };
-    QList<TodoItem> todo;      // text extraction (inline pipeline)
-    QList<TodoItem> ocrTodo;   // v1.7.9: OCR pipeline (needs_ocr + images)
-    {
-        sqlite3* raw = db_->raw();
-        if (!raw) return;
-
-        // Retire plain-text-ish types the user excluded from extraction.
-        // Leaving them as 'metadata_only' made them look like pending work
-        // forever; 'skipped' is honest and keeps them filename-searchable.
-        sqlite3_exec(raw,
-            "UPDATE Files SET indexing_status='skipped' "
-            "WHERE indexing_status='metadata_only' "
-            "AND lower(extension) IN ('txt','csv','md','rtf','log');",
-            nullptr, nullptr, nullptr);
-
-        sqlite3_stmt* s = nullptr;
-        const char* sql =
-            "SELECT id, path, extension FROM Files "
-            "WHERE indexing_status = 'metadata_only' "
-            "AND extension IN ("
-            "'pdf','doc','docx',"
-            "'xls','xlsx','xlsm',"
-            "'ppt','pptx') "
-            "ORDER BY id;";
-        if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(s) == SQLITE_ROW) {
-                TodoItem it;
-                it.fileId = sqlite3_column_int64(s, 0);
-                const unsigned char* p = sqlite3_column_text(s, 1);
-                const unsigned char* e = sqlite3_column_text(s, 2);
-                it.path = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
-                it.ext  = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
-                todo.append(it);
-            }
-            sqlite3_finalize(s);
-        }
-
-        // v1.7.9: gather OCR work — this used to be collected by NOBODY.
-        // needs_ocr rows (scanned PDFs, garbled text layers flagged by the
-        // extractors) and images (ocr_status 'pending' from the scan) were
-        // invisible to this function, so "Extract" said there was nothing
-        // to do while those files never became searchable. They run on the
-        // OCR worker pool (PDFium page renders + Windows OCR), not the
-        // text-extractor pipeline.
-        sqlite3_stmt* o = nullptr;
-        const char* ocrSql =
-            "SELECT id, path, extension FROM Files "
-            "WHERE (indexing_status = 'needs_ocr' "
-            "       AND extension IN ('pdf','doc','docx',"
-            "                        'xls','xlsx','xlsm','ppt','pptx')) "
-            "   OR (extension IN ('jpg','jpeg','png','tif','tiff',"
-            "                     'bmp','gif','webp') "
-            "       AND indexing_status IN ('metadata_only','needs_ocr') "
-            "       AND ocr_status IN ('pending','needs_ocr')) "
-            "ORDER BY id;";
-        if (sqlite3_prepare_v2(raw, ocrSql, -1, &o, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(o) == SQLITE_ROW) {
-                TodoItem it;
-                it.fileId = sqlite3_column_int64(o, 0);
-                const unsigned char* p = sqlite3_column_text(o, 1);
-                const unsigned char* e = sqlite3_column_text(o, 2);
-                it.path = p ? QString::fromUtf8(reinterpret_cast<const char*>(p)) : QString();
-                it.ext  = e ? QString::fromUtf8(reinterpret_cast<const char*>(e)) : QString();
-                ocrTodo.append(it);
-            }
-            sqlite3_finalize(o);
-        }
-    }
-
-    if (todo.isEmpty() && ocrTodo.isEmpty()) {
-        // Show detailed extraction status instead of a generic message.
-        try {
-            QString statusMsg = getExtractionStatusString();
-            statusBar()->showMessage(statusMsg, 5000);
-        } catch (...) {
-            statusBar()->showMessage("All files extracted.", 3000);
-        }
-        return;
-    }
-
-    contentExtractionRunning_ = true;
-    extractCancelFlag_.store(false);
-    if (searchBar_) searchBar_->setExtracting(true);  // Phase 1.4: button shows "Cancel"
-    const int total = todo.size();
-    // Restore the 30-file batch limit. Processing all pending files in one
-    // go was unstable (large batches + 10ms timer interval → memory pressure
-    // + UI event starvation → crashes). The 30-file batch + 200ms interval
-    // was the original stable behavior. User clicks Extract again to
-    // continue with the next 30.
-    //
-    // v1.7.10 FIRST-RUN MODE: until the very first full extraction drain
-    // finishes (settings_.firstRunDone == false), sessions are 200 files
-    // and re-arm after 3 s instead of 60 s — a brand-new index extracts
-    // itself end-to-end without the user babysitting the Extract button
-    // ("on first run how about extract all files?"). The 200 ms per-file
-    // pacing is untouched, so stability is preserved.
-    const int sessionCap = extractAllMode_ ? 200 : 30;
-    const int maxFilesThisSession = qMin(total, sessionCap);
-    statusBar()->showMessage(
-        QString("Extracting %1 of %2 files... (click Stop Extracting to cancel)")
-            .arg(maxFilesThisSession).arg(total));
-
-    // Show progress bar
-    if (extractionProgressBar_) {
-        extractionProgressBar_->setRange(0, maxFilesThisSession);
-        extractionProgressBar_->setValue(0);
-        extractionProgressBar_->setVisible(true);
-    }
-
-    // v1.7.9: hand the OCR work to the pool. The session stays open until
-    // the pool drains (onOcrTaskCompleted finishes it), so the button's
-    // "Stop Extracting" cancel covers OCR too.
-    ocrReceived_ = 0;
-    ocrExpected_ = 0;
-    if (ocrPool_ && !ocrTodo.isEmpty()) {
-        QList<OcrTask> tasks;
-        tasks.reserve(ocrTodo.size());
-        for (const TodoItem& it : ocrTodo)
-            tasks.append(OcrTask{it.fileId, it.path, it.ext});
-        ocrPool_->enqueueBatch(tasks);
-        ocrExpected_ = ocrTodo.size();
-        statusBar()->showMessage(
-            QString("OCR queued for %1 scanned/image file%2...")
-                .arg(ocrTodo.size()).arg(ocrTodo.size() == 1 ? "" : "s"), 5000);
-    }
-
-    struct ExtractState {
-        QList<TodoItem> todo;
-        int idx = 0;
-        int done = 0;
-        int failed = 0;
-        // v1.7.20: the file currently handed to extractPool_ (the tick no
-        // longer blocks on it, so the continuation needs its own copy),
-        // plus the session generation the continuation validates against
-        // (a continuation from a cancelled session must write nothing).
-        TodoItem current;
-        QString  currentFileName;
-        int      sessionGen = 0;
-    };
-    auto state = QSharedPointer<ExtractState>::create();
-    state->todo = std::move(todo);
-    ++extractSessionGen_;
-    state->sessionGen = extractSessionGen_;
-
-    // v1.7.20: DEDICATED EXTRACTION POOL — one file at a time, on its own
-    // 16 MB-stack thread. Never the global QtConcurrent pool: that pool is
-    // shared with the folder-scan walk, so a busy scan delayed every
-    // extraction, and extraction starved everything else queued there.
-    // This is the user's ask made literal: search (searchPool_, v1.7.19),
-    // extraction (extractPool_) and embedding (embedPool_) each own a
-    // thread, so background work can no longer affect or freeze searching.
-    if (!extractPool_) {
-        extractPool_ = new QThreadPool(this);
-        extractPool_->setMaxThreadCount(1);
-        // CRITICAL: large stack — Poppler's recursive parser blows a 1 MB
-        // stack on deeply nested PDFs (the global pool had this via
-        // main.cpp; the dedicated pool needs it set itself).
-        extractPool_->setStackSize(16 * 1024 * 1024);
-    }
-    if (!extractWatcher_) {
-        extractWatcher_ = new QFutureWatcher<ExtractionResult>(this);
-        // The accounting that used to run INLINE after the UI-thread
-        // busy-wait now runs when the pool thread delivers the result.
-        // Still on the UI thread (queued signal) — db_->raw() remains a
-        // NOMUTEX connection touched only here, exactly as before.
-        connect(extractWatcher_, &QFutureWatcher<ExtractionResult>::finished,
-                this, [this, total, maxFilesThisSession, state]() {
-            extractFileInFlight_ = false;
-            if (dbResetting_) return;
-            // Session cancelled or replaced while this file was in
-            // flight — drop the result, touch nothing.
-            if (!state || state->sessionGen != extractSessionGen_) return;
-
-            try {
-                const TodoItem& item = state->current;
-                sqlite3* raw = db_ ? db_->raw() : nullptr;
-                ExtractionResult result = extractWatcher_->result();
-                QString extractedText = result.text;
-                QString source = result.source.isEmpty() ? "native" : result.source;
-                bool ok = true;
-
-                DS_INFO("Extract",
-                    QString("DONE  file %1/%2: %3 — %4 chars, source=%5%6")
-                        .arg(state->idx + 1).arg(maxFilesThisSession)
-                        .arg(item.path).arg(extractedText.size()).arg(source)
-                        .arg(result.needsOcr ? " (needs OCR)" : ""));
-
-                if (result.needsOcr && extractedText.isEmpty()) {
-                    if (raw) {
-                        sqlite3_exec(raw,
-                            QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                                .arg(item.fileId).toUtf8().constData(),
-                            nullptr, nullptr, nullptr);
-                    }
-                    ++state->done;
-                    ok = false;
-                }
-
-                if (ok && extractedText.size() > Constants::kMaxExtractTextChars) {
-                    extractedText = extractedText.left(Constants::kMaxExtractTextChars) + "\n\n[... text truncated for memory ...]";
-                }
-
-                if (ok && raw) {
-                    // v1.7.9: write DocumentText EVEN when the extracted text
-                    // is empty — an empty-but-valid document is DONE; leaving
-                    // no row made the integrity pass requeue it on every
-                    // launch. SearchIndex still only gets real content.
-                    QByteArray textBytes = extractedText.toUtf8();
-                    QByteArray srcBytes = source.toUtf8();
-                    qint64 charCount = extractedText.size();
-                    qint64 now = QDateTime::currentSecsSinceEpoch();
-
-                    sqlite3_stmt* upd = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                        "VALUES (?1, ?2, ?3, ?4, ?5) "
-                        "ON CONFLICT(file_id) DO UPDATE SET "
-                        "  extracted_text=excluded.extracted_text, "
-                        "  text_source=excluded.text_source, "
-                        "  char_count=excluded.char_count, "
-                        "  updated_at=excluded.updated_at;",
-                        -1, &upd, nullptr);
-                    if (upd) {
-                        sqlite3_bind_int64(upd, 1, item.fileId);
-                        sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int64(upd, 4, charCount);
-                        sqlite3_bind_int64(upd, 5, now);
-                        sqlite3_step(upd);
-                        sqlite3_finalize(upd);
-                    }
-
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-
-                    sqlite3_stmt* del = nullptr;
-                    sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
-                                       -1, &del, nullptr);
-                    if (del) {
-                        sqlite3_bind_int64(del, 1, item.fileId);
-                        sqlite3_step(del);
-                        sqlite3_finalize(del);
-                    }
-
-                    if (!extractedText.isEmpty()) {
-                    QByteArray fn = state->currentFileName.toUtf8();
-                    QByteArray pth = item.path.toUtf8();
-                    QByteArray ext = item.ext.toUtf8();
-                    sqlite3_stmt* ins = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                        "VALUES (?1, ?2, ?3, ?4, ?5);",
-                        -1, &ins, nullptr);
-                    if (ins) {
-                        sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 4, ext.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int64(ins, 5, item.fileId);
-                        sqlite3_step(ins);
-                        sqlite3_finalize(ins);
-                    }
-                    }
-
-                    // NOTE: BGE embedding generation during extraction is DISABLED.
-                    // (Runs on the dedicated embedPool_ via the AI backfill
-                    // instead — see ensureEmbeddingsBackfill().)
-
-                    ++state->done;
-                } else if (raw) {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-                    ++state->failed;
-                } else {
-                    ++state->failed;
-                }
-            } catch (const std::exception& e) {
-                DS_WARN("Extract", QString("Post-extract error: %1").arg(e.what()));
-                ++state->failed;
-            } catch (...) {
-                ++state->failed;
-            }
-
-            // v1.7.4: refresh the "N indexed" badge after EVERY file so the
-            // counter visibly climbs while extraction runs.
-            updateIndexStats();
-            ++state->idx;
-        });
-    }
-
-    // 200ms between files — gives the UI time to process events between
-    // heavy extractions. The 10ms interval was too aggressive and caused
-    // event starvation on large batches.
-    auto* timer = new QTimer(this);
-    timer->setInterval(200);
-    timer->setSingleShot(false);
-
-    connect(timer, &QTimer::timeout, this, [this, timer, total, maxFilesThisSession, state]() {
-      try {
-        // v1.7.20: session invalidated (Stop Extracting pressed) — the
-        // timer dies with it. A file may still be in flight on the pool;
-        // its continuation sees the stale generation and drops the result.
-        if (state->sessionGen != extractSessionGen_) {
-            timer->stop();
-            timer->deleteLater();
-            return;
-        }
-        // v1.7.20: the previous file is still being extracted on
-        // extractPool_ — this tick is a no-op and simply fires again
-        // 200 ms later. (The old busy-wait version re-entered here for
-        // every file slower than the timer interval.)
-        if (extractFileInFlight_) return;
-        // v1.7.10: the database was removed (Settings → Remove Database)
-        // while this session ran — kill the session instead of writing
-        // into the freshly created database.
-        if (dbResetting_) {
-            timer->stop();
-            timer->deleteLater();
-            return;
-        }
-        // Check cancel flag.
-        if (extractCancelFlag_.load()) {
-            timer->stop();
-            timer->deleteLater();
-            // v1.7.20: invalidate the in-flight continuation BEFORE the
-            // session flags drop — a result landing after this point is
-            // from a dead session and must write nothing.
-            ++extractSessionGen_;
-            if (ocrPool_) ocrPool_->clearQueue();   // v1.7.9: cancel OCR too
-            ocrExpected_ = 0;
-            ocrReceived_ = 0;
-            contentExtractionRunning_ = false;
-            extractCancelFlag_.store(false);
-            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4: button shows "Extract"
-            updateIndexStats();
-            refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("Extraction cancelled (%1/%2 completed).")
-                    .arg(state->done + state->failed).arg(total), 8000);
-            return;
-        }
-
-        sqlite3* raw = db_->raw();
-
-        if (state->idx >= total || state->idx >= maxFilesThisSession) {
-            timer->stop();
-            timer->deleteLater();
-
-            // v1.7.9: OCR work runs in the pool — keep the session open
-            // until it drains; the last taskCompleted tears the session
-            // down and re-arms auto-extraction for any remaining batches.
-            if (ocrWorkOutstanding()) {
-                const int left = ocrExpected_ - ocrReceived_
-                                 + (ocrPool_ ? ocrPool_->queueSize() : 0);
-                statusBar()->showMessage(
-                    QString("Text extraction done — OCR running: %1 file(s) "
-                            "left (click Stop Extracting to cancel).")
-                        .arg(left), 6000);
-                if (extractionProgressBar_) {
-                    extractionProgressBar_->setRange(0, qMax(1, ocrExpected_));
-                    extractionProgressBar_->setValue(ocrReceived_);
-                    extractionProgressBar_->setVisible(true);
-                }
-                return;
-            }
-
-            contentExtractionRunning_ = false;
-            if (searchBar_) searchBar_->setExtracting(false);  // Phase 1.4
-            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
-            updateIndexStats();
-            refreshPreviewForSelectedFile();
-            if (state->idx >= total) {
-                statusBar()->showMessage(
-                    QString("Extraction complete: %1 succeeded, %2 failed (out of %3).")
-                        .arg(state->done).arg(state->failed).arg(total), 8000);
-
-                // v1.7.10: the first FULL drain is done — first run is
-                // over. Persist the flag so later sessions return to the
-                // conservative 30-file/60 s cadence. (OCR tasks may still
-                // be in flight; they complete on the pool independently.)
-                if (extractAllMode_) {
-                    extractAllMode_ = false;
-                    settings_.firstRunDone = true;
-                    saveSettings();
-                    DS_INFO("Extract", "First-run extraction drain complete.");
-                }
-
-                // Auto-queue AI (BGE) embedding generation for all newly-extracted
-                // files. Previously this was commented out during extraction
-                // (ONNX inference on the main thread was crashing). Now we
-                // trigger the BACKGROUND batch path AFTER extraction completes,
-                // which is safe: BgeService::embedDocumentsBatch runs on a
-                // worker thread and emits embeddingProgress/embeddingFinished.
-                if (bgeService_ && bgeService_->isReady() && semanticEnabled_) {
-                    // Re-read the extracted text for every just-indexed file
-                    // from the FTS5 table, then queue the batch on the
-                    // background BGE worker thread. Prepare the statement
-                    // ONCE outside the loop (avoids N prepare/finalize pairs).
-                    QVector<int> fileIds;
-                    QStringList texts;
-                    sqlite3_stmt* sel = nullptr;
-                    if (raw) {
-                        sqlite3_prepare_v2(raw,
-                            "SELECT content FROM SearchIndex WHERE file_id=?1 LIMIT 1;",
-                            -1, &sel, nullptr);
-                    }
-                    if (sel) {
-                        for (const auto& item : state->todo) {
-                            if (item.fileId <= 0) continue;
-                            sqlite3_bind_int64(sel, 1, item.fileId);
-                            if (sqlite3_step(sel) == SQLITE_ROW) {
-                                const unsigned char* c = sqlite3_column_text(sel, 0);
-                                if (c && c[0]) {
-                                    fileIds.append(static_cast<int>(item.fileId));
-                                    texts.append(QString::fromUtf8(
-                                        reinterpret_cast<const char*>(c)));
-                                }
-                            }
-                            sqlite3_reset(sel);
-                            sqlite3_clear_bindings(sel);
-                        }
-                        sqlite3_finalize(sel);
-                    }
-                    if (!fileIds.isEmpty()) {
-                        statusBar()->showMessage(
-                            QString("AI: generating embeddings for %1 files...")
-                                .arg(fileIds.size()), 5000);
-                        bgeService_->embedDocumentsBatch(fileIds, texts);
-                    }
-                }
-            } else {
-                statusBar()->showMessage(
-                    QString("Extracted %1 of %2 — next batch runs automatically "
-                            "%3 (Extract = start now).")
-                        .arg(state->done + state->failed).arg(total)
-                        .arg(extractAllMode_ ? QStringLiteral("in 3 seconds")
-                                             : QStringLiteral("in 1 minute")), 8000);
-                // Auto-continue: drain the queue without the user having to
-                // click Extract after every 30-file batch. The 200ms per-file
-                // pacing keeps UI responsive exactly as before; this only
-                // removes the mandatory click between batches.
-                // v1.7.10: first-run mode re-arms after 3 s so a new index
-                // drains continuously instead of taking minutes per batch.
-                QTimer::singleShot(extractAllMode_ ? 3 * 1000 : 60 * 1000,
-                                   this, [this]() {
-                    // v1.7.4: fresh patience budget for this wake so a scan
-                    // that happens to be running can never starve the queue.
-                    autoExtractRetryLeft_ = 20;
-                    requestAutoExtract();
-                });
-            }
-            return;
-        }
-
-        const auto& item = state->todo[state->idx];
-        QFileInfo fi(item.path);
-        statusBar()->showMessage(
-            QString("Extracting: %1 (%2/%3)...")
-                .arg(fi.fileName()).arg(state->idx + 1).arg(maxFilesThisSession));
-        if (extractionProgressBar_) extractionProgressBar_->setValue(state->idx + 1);
-
-        if (!QFileInfo::exists(item.path)) {
-            if (raw) {
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-            }
-            ++state->failed;
-        } else {
-            // Skip files that are too large (protects low-end systems).
-            if (fi.size() > Constants::kMaxFilesizeToExtract) {
-                if (raw) {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='skipped' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-                }
-                ++state->failed;
-            } else {
-
-                // ── BEFORE log: filename + type + size ──────────────────
-                // If the app crashes during extraction, this is the LAST
-                // line in the log — it tells us exactly which file killed it.
-                DS_INFO("Extract",
-                    QString("START file %1/%2: %3 [%4, %5 bytes]")
-                        .arg(state->idx + 1).arg(maxFilesThisSession)
-                        .arg(item.path).arg(item.ext).arg(fi.size()));
-
-                // v1.7.20: HAND OFF to extractPool_ and RETURN — no
-                // busy-wait on the UI thread. The old code looped
-                // processEvents()+msleep() here for the whole extraction,
-                // which (a) kept the UI thread semantically busy during
-                // every file, and (b) pumped timer events — so any file
-                // slower than the 200 ms interval re-entered this tick and
-                // extracted the SAME file again, nested, on several pool
-                // threads, double-incrementing idx and skipping neighbours.
-                // Now the tick starts ONE file and returns; the
-                // QFutureWatcher continuation (created above) does the
-                // DONE log, DB writes and accounting when the pool thread
-                // delivers. The UI thread is fully free meanwhile — typing
-                // a search during a big extraction stays instant, which is
-                // exactly the user's "bg work must not affect searching".
-                state->current = item;
-                state->currentFileName = fi.fileName();
-                extractFileInFlight_ = true;
-                // The registry is a process-wide singleton; capture the
-                // POINTER (the tick-local reference would dangle once this
-                // lambda returns before the worker finishes).
-                DocumentExtractorRegistry* registry =
-                    &DocumentExtractorRegistry::instance();
-                const TodoItem cur = item;
-                extractWatcher_->setFuture(QtConcurrent::run(
-                    extractPool_, [registry, cur]() -> ExtractionResult {
-                        // SEH translator is PER-THREAD — install it on this
-                        // worker so an access violation inside a parser is
-                        // caught by catch(...) instead of crashing. Runs on
-                        // the dedicated 16 MB-stack extraction thread (deep
-                        // PDF recursion; see extractPool_ above).
-                        installSehTranslator();
-                        return registry->extractByExtension(cur.path, cur.ext);
-                    }));
-                // NOTE: return BEFORE the common tail (updateIndexStats /
-                // ++state->idx) — the file has not finished yet; the
-                // continuation owns that accounting for this file.
-                return;
-            }
-        }
-
-        // The 200ms timer interval already provides CPU relief between
-        // extractions. The previous adaptive CPU throttle (GetSystemTimes +
-        // Sleep(100) on the main thread) was removed — it blocked the UI
-        // for an extra 100ms per file and wasn't necessary with the 30-file
-        // batch limit.
-
-        // v1.7.4: refresh the "N indexed" badge after EVERY file so the
-        // counter visibly climbs while extraction runs (the 20 s poll
-        // alone read as a frozen number).
-        updateIndexStats();
-
-        ++state->idx;
-      } catch (const std::exception& e) {
-          statusBar()->showMessage(QString("Extraction error: %1").arg(e.what()), 5000);
-          ++state->idx;
-      } catch (...) {
-          statusBar()->showMessage("Extraction error — skipping file.", 3000);
-          ++state->idx;
-      }
-    });
-
-    timer->start();
+    // v1.7.21: the session state machine (todo gathering, session cap,
+    // 200 ms driver tick, pool hand-off, watcher continuation, cancel,
+    // OCR accounting) lives in ExtractionController — headless and
+    // wiring-tested in tests/tst_Wiring.cpp. This slot is the Extract
+    // button's entry point (it doubles as "Stop Extracting" inside the
+    // controller).
+    if (extractionController_) extractionController_->startFromDatabase();
 }
 
 void MainWindow::autoScanIndexedFolders() {
@@ -3160,7 +2720,7 @@ void MainWindow::autoScanIndexedFolders() {
     // extraction session or a full re-index was busy - with long runs that
     // made the scan "never happen". Retry shortly after instead of losing
     // the tick.
-    const bool busy = contentExtractionRunning_;
+    const bool busy = extractionController_ && extractionController_->isRunning();
     if (busy) {
         QTimer::singleShot(10 * 60 * 1000, this, [this]{
             autoScanIndexedFolders();
@@ -3582,7 +3142,7 @@ void MainWindow::requestAutoExtract() {
     // auto-wakes called onExtract() directly, and two wakes landing close
     // together meant the second one CANCELLED the run the first had just
     // started).
-    if (contentExtractionRunning_) return;
+    if (extractionController_ && extractionController_->isRunning()) return;
     // The startup/hourly scan walks the very files we would extract and
     // writes to its own DB connection. Rather than racing it, wait; its
     // finished handler wakes extraction when work exists anyway.
@@ -3605,140 +3165,17 @@ void MainWindow::requestAutoExtract() {
 // accounting here ends the extraction session once the last queued
 // task lands, and re-arms auto-extraction for remaining 30-file text
 // batches.
+// v1.7.21: those writes + accounting live in
+// ExtractionController::noteOcrResult (headless, wiring-tested); this
+// slot stays as the OCR pool's delivery target and forwards.
 // ============================================================
 void MainWindow::onOcrTaskCompleted(qint64 fileId, const QString& text, bool ok) {
-    // v1.7.10: the database is being removed/rebuilt — this is a late
-    // result for a row that no longer exists. Drop it instead of writing
-    // stale text into the fresh database.
-    if (dbResetting_) return;
-    if (!db_ || fileId <= 0) return;
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
-
-    QString t = text;
-    if (t.size() > Constants::kMaxExtractTextChars)
-        t = t.left(Constants::kMaxExtractTextChars) +
-            QStringLiteral("\n\n[... text truncated for memory ...]");
-
-    if (ok) {
-        const QByteArray textBytes = t.toUtf8();
-        const QByteArray srcBytes  = QByteArray("ocr");
-        sqlite3_stmt* upd = nullptr;
-        sqlite3_prepare_v2(raw,
-            "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-            "VALUES (?1, ?2, ?3, ?4, ?5) "
-            "ON CONFLICT(file_id) DO UPDATE SET "
-            "  extracted_text=excluded.extracted_text, "
-            "  text_source=excluded.text_source, "
-            "  char_count=excluded.char_count, "
-            "  updated_at=excluded.updated_at;",
-            -1, &upd, nullptr);
-        if (upd) {
-            sqlite3_bind_int64(upd, 1, fileId);
-            sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(upd, 4, t.size());
-            sqlite3_bind_int64(upd, 5, QDateTime::currentSecsSinceEpoch());
-            sqlite3_step(upd);
-            sqlite3_finalize(upd);
-        }
-        sqlite3_exec(raw,
-            QString("UPDATE Files SET indexing_status='content_done', "
-                    "ocr_status='not_needed' WHERE id=%1;")
-                .arg(fileId).toUtf8().constData(),
-            nullptr, nullptr, nullptr);
-
-        sqlite3_stmt* del = nullptr;
-        sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
-                           -1, &del, nullptr);
-        if (del) {
-            sqlite3_bind_int64(del, 1, fileId);
-            sqlite3_step(del);
-            sqlite3_finalize(del);
-        }
-
-        if (!t.isEmpty()) {
-            QString fn, pth, ext;
-            sqlite3_stmt* f = nullptr;
-            if (sqlite3_prepare_v2(raw,
-                    "SELECT filename, path, extension FROM Files WHERE id=?1;",
-                    -1, &f, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int64(f, 1, fileId);
-                if (sqlite3_step(f) == SQLITE_ROW) {
-                    const unsigned char* a = sqlite3_column_text(f, 0);
-                    const unsigned char* b = sqlite3_column_text(f, 1);
-                    const unsigned char* c = sqlite3_column_text(f, 2);
-                    fn  = a ? QString::fromUtf8(reinterpret_cast<const char*>(a)) : QString();
-                    pth = b ? QString::fromUtf8(reinterpret_cast<const char*>(b)) : QString();
-                    ext = c ? QString::fromUtf8(reinterpret_cast<const char*>(c)) : QString();
-                }
-                sqlite3_finalize(f);
-            }
-            sqlite3_stmt* ins = nullptr;
-            sqlite3_prepare_v2(raw,
-                "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                "VALUES (?1, ?2, ?3, ?4, ?5);",
-                -1, &ins, nullptr);
-            if (ins) {
-                const QByteArray fnb  = fn.toUtf8();
-                const QByteArray pthb = pth.toUtf8();
-                const QByteArray extb = ext.toUtf8();
-                sqlite3_bind_text(ins, 1, fnb.constData(),  -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 3, pthb.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 4, extb.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_int64(ins, 5, fileId);
-                sqlite3_step(ins);
-                sqlite3_finalize(ins);
-            }
-        }
-    } else {
-        // OCR failed (no language packs, unreadable image...). 'failed'
-        // is honest; the next content change re-queues the file.
-        sqlite3_exec(raw,
-            QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                .arg(fileId).toUtf8().constData(),
-            nullptr, nullptr, nullptr);
-    }
-
-    updateIndexStats();  // badge climbs while OCR runs (same as text path)
-
-    // Session accounting — a cancel/reset already cleared the counters,
-    // so late results from a cancelled queue land here harmlessly.
-    if (contentExtractionRunning_ && ocrExpected_ > 0 &&
-        ocrReceived_ < ocrExpected_) {
-        ++ocrReceived_;
-        if (extractionProgressBar_) {
-            extractionProgressBar_->setRange(0, qMax(1, ocrExpected_));
-            extractionProgressBar_->setValue(ocrReceived_);
-        }
-        if (ocrReceived_ >= ocrExpected_ &&
-            (!ocrPool_ || ocrPool_->queueSize() == 0)) {
-            const int finished = ocrExpected_;
-            contentExtractionRunning_ = false;
-            extractCancelFlag_.store(false);
-            ocrExpected_ = 0;
-            ocrReceived_ = 0;
-            if (searchBar_) searchBar_->setExtracting(false);
-            if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
-            updateIndexStats();
-            refreshPreviewForSelectedFile();
-            statusBar()->showMessage(
-                QString("OCR complete (%1 file%2) — checking for more work...")
-                    .arg(finished).arg(finished == 1 ? "" : "s"), 6000);
-            // Re-arm extraction: any remaining text batches continue.
-            QTimer::singleShot(1500, this, [this]() {
-                autoExtractRetryLeft_ = 20;
-                requestAutoExtract();
-            });
-        }
-    }
+    if (extractionController_)
+        extractionController_->noteOcrResult(fileId, text, ok);
 }
 
 bool MainWindow::ocrWorkOutstanding() const {
-    return ocrExpected_ > 0 &&
-           (ocrReceived_ < ocrExpected_ ||
-            (ocrPool_ && ocrPool_->queueSize() > 0));
+    return extractionController_ && extractionController_->ocrWorkOutstanding();
 }
 
 // ============================================================
@@ -4152,14 +3589,18 @@ void MainWindow::removeAndRebuildDatabase() {
     if (!db_) return;
 
     // 1) Stop everything that could touch the database.
-    extractCancelFlag_.store(true);
+    //    v1.7.21: the pipelines live in the controllers — invalidate
+    //    their sessions and raise the db-reset flag their late results
+    //    check, then clear the OCR queue here.
+    if (extractionController_) {
+        extractionController_->setDbResetting(true);
+        extractionController_->invalidateSession();
+    }
+    if (embeddingController_) embeddingController_->stopAll();
     if (ocrPool_) ocrPool_->clearQueue();
-    ocrExpected_ = 0;
-    ocrReceived_ = 0;
-    contentExtractionRunning_ = false;
     if (searchBar_) searchBar_->setExtracting(false);
     if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
-    dbResetting_ = true;   // late taskCompleted / timer ticks become no-ops
+    dbResetting_ = true;   // late watcher-driven writes become no-ops
 
     // 2) Close and delete.
     const QString dbPath = Config::instance().dbPath();
@@ -4183,6 +3624,7 @@ void MainWindow::removeAndRebuildDatabase() {
     QString err;
     if (!db_->open(dbPath, &err)) {
         dbResetting_ = false;
+        if (extractionController_) extractionController_->setDbResetting(false);
         DS_ERROR("Database", "Reopen after remove failed: " + err);
         QMessageBox::critical(this, "Remove Database",
             QStringLiteral("The database was removed but reopening "
@@ -4193,6 +3635,13 @@ void MainWindow::removeAndRebuildDatabase() {
     Schema::initialize(*db_);
 
     dbResetting_ = false;
+    // v1.7.21: re-point the controllers at the fresh database before
+    // anything can write again.
+    if (extractionController_) {
+        extractionController_->setDatabase(db_.get());
+        extractionController_->setDbResetting(false);
+    }
+    if (embeddingController_) embeddingController_->setDatabase(db_.get());
 
     // 4) Refresh every cache that mirrors index content.
     updateIndexStats();
@@ -4223,36 +3672,9 @@ void MainWindow::removeAndRebuildDatabase() {
 // OCR status indicator
 // ============================================================
 QString MainWindow::getExtractionStatusString() {
-    if (!db_) return "Database not open.";
-    sqlite3* raw = db_->raw();
-    if (!raw) return "Database not accessible.";
-
-    int total = 0, done = 0, failed = 0, pending = 0, needsOcr = 0, skipped = 0;
-    sqlite3_stmt* s = nullptr;
-    if (sqlite3_prepare_v2(raw,
-        "SELECT indexing_status, COUNT(*) FROM Files GROUP BY indexing_status;",
-        -1, &s, nullptr) == SQLITE_OK) {
-        while (sqlite3_step(s) == SQLITE_ROW) {
-            const char* status = reinterpret_cast<const char*>(sqlite3_column_text(s, 0));
-            const int count = sqlite3_column_int(s, 1);
-            total += count;
-            QString sStr = status ? QString::fromUtf8(status) : "";
-            if (sStr == "content_done") done += count;
-            else if (sStr == "failed") failed += count;
-            else if (sStr == "pending") pending += count;
-            else if (sStr == "metadata_only") pending += count;
-            else if (sStr == "needs_ocr") needsOcr += count;
-            else if (sStr == "skipped") skipped += count;
-        }
-        sqlite3_finalize(s);
-    }
-
-    if (pending == 0 && needsOcr == 0) {
-        return QString("All files extracted: %1 done, %2 failed, %3 skipped (total: %4)")
-            .arg(done).arg(failed).arg(skipped).arg(total);
-    }
-    return QString("Extraction: %1 done, %2 pending, %3 need OCR, %4 failed (total: %5)")
-        .arg(done).arg(pending).arg(needsOcr).arg(failed).arg(total);
+    // v1.7.21: the query lives in ExtractionController (unit-tested).
+    return extractionController_ ? extractionController_->extractionStatusString()
+                                 : QString("Database not open.");
 }
 
 void MainWindow::updateOcrStatusIndicator() {
@@ -4441,31 +3863,40 @@ void MainWindow::initializeSemanticSearch() {
 
         bgeService_ = std::make_unique<BgeService>(this);
 
-        // v1.7.20: dedicated EMBEDDING pool. BgeService ran its batch
-        // worker (and the model init below) on the GLOBAL QtConcurrent
-        // pool — the same pool the folder scan floods, so during a busy
-        // scan the embedding worker sat in the queue behind walk/hash
-        // tasks. One dedicated thread for all BGE work; the semantic
-        // SEARCH scan already has its own pool (searchPool_) and OCR has
-        // OcrWorkerPool, so every background path now owns a thread.
-        if (!embedPool_) {
-            embedPool_ = new QThreadPool(this);
-            embedPool_->setMaxThreadCount(1);
+        // v1.7.20 (carried): dedicated EMBEDDING pool so BGE work is
+        // never starved by (and never starves) search/extraction/OCR.
+        // v1.7.21: the pool lives in EmbeddingController now — attach
+        // the service to the controller and plumb the pool into
+        // BgeService so ALL BGE background work (model init below +
+        // batch embedding) runs on it.
+        if (embeddingController_) {
+            embeddingController_->attachService(bgeService_.get());
+            bgeService_->setWorkerPool(embeddingController_->embeddingPool());
         }
-        bgeService_->setWorkerPool(embedPool_);
 
         connect(bgeService_.get(), &BgeService::ready,
                 this, &MainWindow::onBgeReady);
-        connect(bgeService_.get(), &BgeService::embeddingProgress,
-                this, &MainWindow::onBgeEmbeddingProgress);
-        connect(bgeService_.get(), &BgeService::embeddingFinished,
-                this, &MainWindow::onBgeEmbeddingFinished);
+        // v1.7.21: BGE batch progress/completion feed the controller's
+        // state machine (chip + status flow back through its signals);
+        // readiness wakes the backfill directly.
+        if (embeddingController_) {
+            connect(bgeService_.get(), &BgeService::embeddingProgress,
+                    embeddingController_.get(),
+                    &EmbeddingController::noteEmbeddingProgress);
+            connect(bgeService_.get(), &BgeService::embeddingFinished,
+                    embeddingController_.get(),
+                    &EmbeddingController::noteEmbeddingFinished);
+            connect(bgeService_.get(), &BgeService::ready,
+                    embeddingController_.get(),
+                    &EmbeddingController::ensureBackfill);
+        }
 
         // v1.7.11 lifetime safety: keep the future — the lambda captures
         // `this` and dereferences bgeService_, so ~MainWindow must join
         // it before members are destroyed (exit during model load was a
         // use-after-free window).
-        bgeInitFuture_ = QtConcurrent::run(embedPool_, [this, dbPath, modelPath]() {
+        bgeInitFuture_ = QtConcurrent::run(embeddingController_->embeddingPool(),
+                                           [this, dbPath, modelPath]() {
             const bool ok = bgeService_->initialize(dbPath, modelPath);
             if (!ok) {
                 // initialize() only emits ready() on success — surface the
@@ -4500,15 +3931,16 @@ void MainWindow::onSemanticToggled(bool checked) {
         return;
     }
     semanticEnabled_ = checked;
+    if (embeddingController_) embeddingController_->setAiEnabled(checked);
     if (hybridSearch_) hybridSearch_->setSemanticEnabled(checked);
     setAiChip(checked ? "ON" : "OFF", checked);
 
     if (checked && bgeService_ && bgeService_->isReady()) {
         // Queue any indexed-but-unembedded files on the background BGE
-        // worker (shared with the onBgeReady path; batches chain from
-        // onBgeEmbeddingFinished until the backlog is drained).
-        ensureEmbeddingsBackfill();
-        if (!aiBackfillRunning_) {
+        // worker (shared with the onBgeReady path; batches chain in the
+        // controller until the backlog is drained).
+        if (embeddingController_) embeddingController_->ensureBackfill();
+        if (!embeddingController_ || !embeddingController_->isBackfillRunning()) {
             const auto stats = bgeService_->getStats();
             statusBar()->showMessage(
                 stats.total > 0
@@ -4549,7 +3981,7 @@ void MainWindow::onBgeReady() {
     // Persistent chip: steady state reads "ON"; embedding counts only
     // appear as i/n progress while a backfill batch is running, so an
     // idle number never sits in the status bar confusing anyone.
-    if (!aiBackfillRunning_) {
+    if (!embeddingController_ || !embeddingController_->isBackfillRunning()) {
         setAiChip("ON", true);
     }
     statusBar()->showMessage(
@@ -4557,7 +3989,7 @@ void MainWindow::onBgeReady() {
     // Drain the embedding backlog right away — previously this only ran
     // when the user manually toggled AI on, so files indexed before the
     // service was up stayed invisible to semantic search.
-    ensureEmbeddingsBackfill();
+    if (embeddingController_) embeddingController_->ensureBackfill();
 }
 
 void MainWindow::onBgeFailed() {
@@ -4594,393 +4026,17 @@ void MainWindow::setAiChip(const QString& text, bool active) {
         " min-width:24px;").arg(col));
 }
 
-void MainWindow::ensureEmbeddingsBackfill() {
-    // One batch in flight at a time; onBgeEmbeddingFinished chains the
-    // next batch while unembedded files remain, so a >1000-file backlog
-    // drains progressively instead of being silently truncated.
-    if (aiBackfillRunning_ || embeddingRebuildPurging_
-        || !bgeService_ || !bgeService_->isReady() || !db_)
-        return;
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
-
-    // ── Phase 0 (v1.7.14): stale-embedding invalidation ─────────────
-    // Extraction can rewrite DocumentText for a file that ALREADY has AI
-    // vectors (file edited and re-extracted, OCR re-run, integrity
-    // requeue). The backfill below only ever selected files with NO
-    // embedding row, so vectors computed from the OLD text were searched
-    // forever — semantic results silently drifted away from the file's
-    // real content. Files whose text is newer than their whole-document
-    // embedding get every vector row dropped here; Phase A below then
-    // re-enqueues them in this very pass, so the index heals itself with
-    // no user action. Bounded per tick to keep the tick cheap.
-    {
-        sqlite3_stmt* sel = nullptr;
-        sqlite3_prepare_v2(raw,
-            "SELECT dt.file_id "
-            "FROM DocumentText dt "
-            "JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
-            "WHERE dt.updated_at > e.updated_at "
-            "LIMIT 200;",
-            -1, &sel, nullptr);
-        if (sel) {
-            QList<int> stale;
-            while (sqlite3_step(sel) == SQLITE_ROW) {
-                stale.append(static_cast<int>(sqlite3_column_int64(sel, 0)));
-            }
-            sqlite3_finalize(sel);
-            if (!stale.isEmpty()) {
-                bool ok = true;
-                sqlite3_stmt* delE = nullptr;
-                sqlite3_stmt* delC = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
-                    -1, &delE, nullptr);
-                sqlite3_prepare_v2(raw,
-                    "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
-                    -1, &delC, nullptr);
-                db_->begin();
-                for (const int fid : stale) {
-                    if (delE) {
-                        sqlite3_bind_int64(delE, 1, fid);
-                        if (sqlite3_step(delE) != SQLITE_DONE) ok = false;
-                        sqlite3_reset(delE);
-                    }
-                    if (delC) {
-                        sqlite3_bind_int64(delC, 1, fid);
-                        if (sqlite3_step(delC) != SQLITE_DONE) ok = false;
-                        sqlite3_reset(delC);
-                    }
-                }
-                if (ok) db_->commit(); else db_->rollback();
-                if (delE) sqlite3_finalize(delE);
-                if (delC) sqlite3_finalize(delC);
-                if (ok) {
-                    DS_INFO("BGE", QString(
-                        "Invalidated %1 stale embedding set(s) whose "
-                        "extracted text changed — re-embedding now.")
-                        .arg(stale.size()));
-                }
-            }
-        }
-    }
-
-    QVector<int> fileIds;
-    QStringList texts;
-    bool chunkMode = false;
-
-    // Phase A — documents with extracted text but no CURRENT embedding.
-    // Sourced from DocumentText (the authoritative extraction store);
-    // the old SearchIndex-based query missed most documents because the
-    // FTS table only carries a subset of extracted content.
-    // v1.7.15: rows stamped with an OLDER algo_version (or pre-versioning
-    // rows, which default to 0) count as missing too — that is how the
-    // garbage vectors written by the broken hash-fallback tokenizer
-    // builds get replaced automatically, without the user ever finding
-    // the "Rebuild AI Embeddings" button.
-    {
-        sqlite3_stmt* sel = nullptr;
-        if (sqlite3_prepare_v2(raw,
-            "SELECT dt.file_id, dt.extracted_text "
-            "FROM DocumentText dt "
-            "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
-            "WHERE (e.file_id IS NULL "
-            "       OR COALESCE(e.algo_version, 0) < ?1) "
-            "  AND length(dt.extracted_text) > 0 "
-            "ORDER BY dt.file_id LIMIT 500;",
-            -1, &sel, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
-        }
-        if (sel) {
-            while (sqlite3_step(sel) == SQLITE_ROW) {
-                const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
-                const unsigned char* c = sqlite3_column_text(sel, 1);
-                if (c && c[0]) {
-                    fileIds.append(fileId);
-                    texts.append(QString::fromUtf8(
-                        reinterpret_cast<const char*>(c)));
-                }
-            }
-            sqlite3_finalize(sel);
-        }
-    }
-
-    // Phase B — documents with a CURRENT full-document embedding but no
-    // CURRENT chunk embeddings. They either predate chunked indexing or
-    // their chunks were built by an older algorithm (v1.7.15) — either
-    // way, semantic search is blind to the relevant part of them until
-    // the chunks are regenerated.
-    if (fileIds.isEmpty()) {
-        chunkMode = true;
-        sqlite3_stmt* sel = nullptr;
-        if (sqlite3_prepare_v2(raw,
-            "SELECT dt.file_id, dt.extracted_text "
-            "FROM DocumentText dt "
-            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b "
-            "              WHERE b.file_id = dt.file_id "
-            "                AND COALESCE(b.algo_version, 0) >= ?1) "
-            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c "
-            "                   WHERE c.file_id = dt.file_id "
-            "                     AND COALESCE(c.algo_version, 0) >= ?2) "
-            "  AND length(dt.extracted_text) > 1000 "
-            "ORDER BY dt.file_id LIMIT 300;",
-            -1, &sel, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
-            sqlite3_bind_int(sel, 2, BgeEmbeddingDb::kAlgoVersion);
-        }
-        if (sel) {
-            while (sqlite3_step(sel) == SQLITE_ROW) {
-                const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
-                const unsigned char* c = sqlite3_column_text(sel, 1);
-                if (c && c[0]) {
-                    fileIds.append(fileId);
-                    texts.append(QString::fromUtf8(
-                        reinterpret_cast<const char*>(c)));
-                }
-            }
-            sqlite3_finalize(sel);
-        }
-    }
-    if (fileIds.isEmpty()) return;
-
-    aiBackfillRunning_ = true;
-    aiBackfillChunkMode_ = chunkMode;
-    setAiChip(QString("0/%1").arg(fileIds.size()), true);
-    statusBar()->showMessage(
-        chunkMode
-            ? QString("AI: building chunk index for %1 document%2...")
-                .arg(fileIds.size()).arg(fileIds.size() == 1 ? "" : "s")
-            : QString("AI: generating embeddings for %1 unembedded file%2...")
-                .arg(fileIds.size())
-                .arg(fileIds.size() == 1 ? "" : "s"));
-    bgeService_->embedDocumentsBatch(fileIds, texts);
-}
-
-void MainWindow::startEmbeddingRebuild() {
-    if (!bgeService_ || !bgeService_->isReady() || !db_) {
-        QMessageBox::information(this, "AI Search",
-            "AI search is not ready, so there is nothing to rebuild.\n\n"
-            "Make sure the AI model is installed at:\n"
-            "  models/bge-small-en-v1.5/model.onnx\n"
-            "  models/bge-small-en-v1.5/vocab.txt");
-        return;
-    }
-    if (aiBackfillRunning_ || embeddingRebuildPurging_) {
-        statusBar()->showMessage(
-            "AI is already working — wait for the current batch to "
-            "finish, then rebuild.", 6000);
-        return;
-    }
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
-
-    // Only run when there is something to rebuild; otherwise the user
-    // would watch a silent purge that accomplishes nothing.
-    qint64 existing = 0;
-    sqlite3_stmt* s = nullptr;
-    if (sqlite3_prepare_v2(raw,
-            "SELECT (SELECT COUNT(*) FROM EmbeddingChunks)"
-            "     + (SELECT COUNT(*) FROM BgeEmbeddings);",
-            -1, &s, nullptr) == SQLITE_OK) {
-        if (sqlite3_step(s) == SQLITE_ROW)
-            existing = sqlite3_column_int64(s, 0);
-        sqlite3_finalize(s);
-    }
-    if (existing == 0) {
-        statusBar()->showMessage(
-            "No embeddings stored yet — use 'Generate AI Embeddings for "
-            "All Documents' instead.", 6000);
-        return;
-    }
-
-    embeddingRebuildPurging_ = true;
-    embeddingRebuildRetries_ = 0;
-    statusBar()->showMessage(QString(
-        "AI: rebuilding embeddings — clearing %1 stored row%2 ...")
-        .arg(existing).arg(existing == 1 ? "" : "s"));
-    QTimer::singleShot(25, this, [this]() { purgeEmbeddingsTick(); });
-}
-
-void MainWindow::purgeEmbeddingsTick() {
-    if (!db_ || !embeddingRebuildPurging_) return;
-    sqlite3* raw = db_->raw();
-    if (!raw) {
-        embeddingRebuildPurging_ = false;
-        return;
-    }
-
-    // Chunks first so phase B of the backfill sees a clean slate the
-    // moment doc-level embeddings start refilling. DELETE with LIMIT
-    // is not compiled into every SQLite build, so batch via a subquery
-    // instead — portable and just as fast at these sizes.
-    static const char* const kDeletes[] = {
-        "DELETE FROM EmbeddingChunks WHERE chunk_id IN "
-        "(SELECT chunk_id FROM EmbeddingChunks LIMIT 1000);",
-        "DELETE FROM BgeEmbeddings WHERE file_id IN "
-        "(SELECT file_id FROM BgeEmbeddings LIMIT 500);"
-    };
-    int deleted = 0;
-    bool sqlError = false;
-    for (const char* sql : kDeletes) {
-        sqlite3_stmt* st = nullptr;
-        if (sqlite3_prepare_v2(raw, sql, -1, &st, nullptr) == SQLITE_OK
-            && sqlite3_step(st) == SQLITE_DONE) {
-            deleted += sqlite3_changes(raw);
-        } else {
-            sqlError = true;   // transient lock / I/O hiccup
-        }
-        if (st) sqlite3_finalize(st);
-    }
-
-    if (sqlError) {
-        // busy_timeout (5-10 s) makes this nearly impossible; still,
-        // never abandon the chain on the first hiccup — retry a while,
-        // then give up loudly rather than half-purging in silence.
-        if (++embeddingRebuildRetries_ <= 50) {
-            QTimer::singleShot(100, this,
-                [this]() { purgeEmbeddingsTick(); });
-            return;
-        }
-        embeddingRebuildPurging_ = false;
-        statusBar()->showMessage(
-            "AI rebuild stopped — the database stayed locked. Close other "
-            "DocuSearch windows and try again.", 8000);
-        return;
-    }
-    embeddingRebuildRetries_ = 0;
-
-    if (deleted > 0) {
-        qint64 remaining = 0;
-        sqlite3_stmt* s = nullptr;
-        if (sqlite3_prepare_v2(raw,
-                "SELECT (SELECT COUNT(*) FROM EmbeddingChunks)"
-                "     + (SELECT COUNT(*) FROM BgeEmbeddings);",
-                -1, &s, nullptr) == SQLITE_OK) {
-            if (sqlite3_step(s) == SQLITE_ROW)
-                remaining = sqlite3_column_int64(s, 0);
-            sqlite3_finalize(s);
-        }
-        statusBar()->showMessage(QString(
-            "AI: clearing old embeddings — %1 row%2 left ...")
-            .arg(remaining).arg(remaining == 1 ? "" : "s"));
-        QTimer::singleShot(25, this,
-            [this]() { purgeEmbeddingsTick(); });
-        return;
-    }
-
-    // Purge complete — hand over to the standard two-phase backfill.
-    // Every remaining DocumentText row now lacks an embedding, so the
-    // existing chain (doc-level first, then chunks) rebuilds the whole
-    // library from FULL document text with live status-chip progress.
-    embeddingRebuildPurging_ = false;
-    statusBar()->showMessage(
-        "AI: old embeddings cleared — rebuilding from full document "
-        "text. Progress: 'Embedding documents: X/Y'.", 8000);
-    ensureEmbeddingsBackfill();
-}
-
-qint64 MainWindow::countMissingEmbeddings() {
-    if (!db_) return 0;
-    sqlite3* raw = db_->raw();
-    if (!raw) return 0;
-    sqlite3_stmt* s = nullptr;
-    qint64 n = 0;
-    // v1.7.15: stale-algorithm embeddings count as missing (see
-    // ensureEmbeddingsBackfill) — this is the number the "AI indexing:
-    // N remaining" status line and the backfill chain work from.
-    if (sqlite3_prepare_v2(raw,
-            "SELECT COUNT(*) FROM DocumentText dt "
-            "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
-            "WHERE (e.file_id IS NULL "
-            "       OR COALESCE(e.algo_version, 0) < ?1) "
-            "  AND length(dt.extracted_text) > 0;",
-            -1, &s, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int(s, 1, BgeEmbeddingDb::kAlgoVersion);
-        if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
-        sqlite3_finalize(s);
-    }
-    return n;
-}
-
-qint64 MainWindow::countMissingChunkDocs() {
-    if (!db_) return 0;
-    sqlite3* raw = db_->raw();
-    if (!raw) return 0;
-    sqlite3_stmt* s = nullptr;
-    qint64 n = 0;
-    if (sqlite3_prepare_v2(raw,
-            "SELECT COUNT(*) FROM DocumentText dt "
-            "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b "
-            "              WHERE b.file_id = dt.file_id "
-            "                AND COALESCE(b.algo_version, 0) >= ?1) "
-            "  AND NOT EXISTS (SELECT 1 FROM EmbeddingChunks c "
-            "                   WHERE c.file_id = dt.file_id "
-            "                     AND COALESCE(c.algo_version, 0) >= ?2) "
-            "  AND length(dt.extracted_text) > 1000;",
-            -1, &s, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int(s, 1, BgeEmbeddingDb::kAlgoVersion);
-        sqlite3_bind_int(s, 2, BgeEmbeddingDb::kAlgoVersion);
-        if (sqlite3_step(s) == SQLITE_ROW) n = sqlite3_column_int64(s, 0);
-        sqlite3_finalize(s);
-    }
-    return n;
-}
-
-void MainWindow::onBgeEmbeddingProgress(int current, int total) {
-    // Chip stays live during backfill so the user can SEE the AI working.
-    setAiChip(QString("%1/%2").arg(current).arg(total), true);
-    statusBar()->showMessage(
-        QString("Embedding documents: %1/%2").arg(current).arg(total));
-}
-
-void MainWindow::onBgeEmbeddingFinished(int success, int fail) {
-    aiBackfillRunning_ = false;
-    // Deadlock guard: a batch where EVERY file failed would be re-selected
-    // verbatim by the next query and retried forever. Two consecutive
-    // all-fail batches means something is systematically wrong — stop and
-    // say so instead of spinning.
-    if (success == 0 && fail > 0) ++aiBackfillDeadlock_;
-    else                           aiBackfillDeadlock_ = 0;
-
-    const qint64 remaining = countMissingEmbeddings() + countMissingChunkDocs();
-    if (aiBackfillDeadlock_ >= 2 && remaining > 0) {
-        aiBackfillDeadlock_ = 0;
-        statusBar()->showMessage(
-            QString("AI indexing paused — %1 document%2 could not be "
-                    "embedded (see log). Keyword search is unaffected.")
-                .arg(remaining)
-                .arg(remaining == 1 ? "" : "s"), 10000);
-        setAiChip(semanticEnabled_ ? "ON" : "OFF", false);
-        return;
-    }
-    if (remaining > 0) {
-        // Mid-drain: say exactly how much work is left instead of claiming
-        // completion after every batch (the old message fired per batch,
-        // which read as "done" while thousands were still queued).
-        statusBar()->showMessage(
-            QString("AI indexing: %1 processed this pass, %2 remaining...")
-                .arg(success).arg(remaining));
-        setAiChip(QString("%1 left").arg(remaining), true);
-    } else {
-        statusBar()->showMessage(
-            QString("AI indexing complete — %1 document%2 embedded%3")
-                .arg(success)
-                .arg(success == 1 ? "" : "s")
-                .arg(fail > 0 ? QString(", %1 failed").arg(fail) : QString()),
-            8000);
-        setAiChip(semanticEnabled_ ? "ON" : "OFF", false);
-    }
-    // Chain unconditionally while work remains. The old gate stopped the
-    // drain whenever the AI toggle was off, freezing the queue forever —
-    // embeddings are cheap, async, and useful the moment AI is re-enabled.
-    if (remaining > 0 && bgeService_ && bgeService_->isReady()) {
-        // 25 ms gap: just enough for the event loop to breathe between
-        // batches. The old 250 ms delay added up over dozens of batches
-        // and stretched the backlog out for no benefit — inference runs
-        // on the worker pool either way, so the UI stays responsive.
-        QTimer::singleShot(25, this, [this]() { ensureEmbeddingsBackfill(); });
-    }
-}
+// ============================================================
+// v1.7.21: the AI-embedding backfill + rebuild state machine moved to
+// EmbeddingController (headless, wiring-tested in tests/tst_Wiring.cpp):
+// ensureBackfill (stale invalidation + phase A/B + chaining),
+// startRebuild + the purge chain, the backlog counters, and the batch
+// progress/completion handling with its deadlock guard. The window
+// wires BgeService's signals into the controller in
+// initializeSemanticSearch() and the controller's
+// chipChanged/statusMessage/rebuildBlocked back into the UI — every
+// wire in that loop is visible in one place.
+// ============================================================
 
 void MainWindow::updateIndexStats() {
     if (!repo_ || !db_) return;
@@ -5057,7 +4113,8 @@ void MainWindow::updateIndexStats() {
             // or extraction is actively running — a permanent partial bar
             // read as "my index is incomplete" (it was also the #1 support
             // question). At idle the badge is just "N indexed".
-            const bool busy = contentExtractionRunning_;
+            const bool busy = extractionController_ &&
+                              extractionController_->isRunning();
             int pct = total > 0 ? int((contentDone * 100) / total) : 0;
             indexedBar_->setValue(qMin(100, pct));
             indexedBar_->setVisible(busy);
@@ -5167,150 +4224,15 @@ void MainWindow::onFileAdded(const QString& path) {
 // backfill queue (ONNX never runs on the main thread — the old inline
 // embedDocument call crashed with SEH exceptions that bypass catch(...)).
 bool MainWindow::extractAndIndexFile(const QString& path) {
-    if (!repo_ || !db_) return false;
-
-    // SAFETY: only files under one of the user's indexed folders. The
-    // file watcher should only fire for these, but this is a defensive
-    // check in case a watch was added for a folder the user later
-    // removed from Settings.
-    bool underIndexed = false;
-    for (const QString& drive : settings_.indexedDrives) {
-        if (path.startsWith(drive, Qt::CaseInsensitive)) {
-            underIndexed = true;
-            break;
-        }
-    }
-    if (!underIndexed) return false;
-
-    if (FileUtils::isUnderAny(path, settings_.excludedFolders)) return false;
-
-    // Check if extension is supported.
-    // v1.7.7: the old private list here still allowed md/txt/csv/rtf
-    // — a Markdown note saved into an indexed folder was indexed AND
-    // extracted immediately, which is exactly how .md kept showing up
-    // in results. One central allowlist now rules every ingest path.
-    const QString ext = FileUtils::extensionOf(path).toLower();
-    if (!Constants::isIndexableExtension(ext)) return false;
-    // v1.7.11: honor the user's Excluded Extensions list here too, so a
-    // live file event can't sneak an excluded type past the scan gates.
-    if (normalizedExtSet(settings_.excludedExtensions).contains(ext))
-        return false;
-
-    const QFileInfo fi(path);
-    if (!fi.exists()) return false;
-
-    FileRecord r;
-    r.path         = FileUtils::toNative(path);
-    r.filename     = fi.fileName();
-    r.extension    = FileUtils::extensionOf(path);
-    r.size         = fi.size();
-    r.createdDate  = fi.birthTime();
-    r.modifiedDate = fi.lastModified();
-    r.indexingStatus = Constants::IndexingStatus::kPending;
-    r.ocrStatus      = Constants::OcrStatus::kPending;
-    repo_->upsertFile(r);
-
-    // Extract text immediately for the new/changed file (single-file
-    // extraction — fast and non-blocking enough for the main thread).
-    if (fi.size() <= Constants::kMaxFilesizeToExtract) {
-        auto& registry = DocumentExtractorRegistry::instance();
-        try {
-            auto result = registry.extractByExtension(path, ext);
-            QString extractedText = result.text;
-            if (extractedText.size() > Constants::kMaxExtractTextChars) {
-                extractedText = extractedText.left(Constants::kMaxExtractTextChars);
-            }
-
-            sqlite3* raw = db_->raw();
-            if (!raw) return true;
-
-            FileRecord rec;
-            if (!repo_->getByPath(r.path, rec)) return true;  // row vanished
-            const qint64 fileId = rec.id;
-
-            if (!extractedText.isEmpty()) {
-                const qint64 now = QDateTime::currentSecsSinceEpoch();
-                sqlite3_stmt* upd = nullptr;
-                sqlite3_prepare_v2(raw,
-                    "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                    "VALUES (?1, ?2, ?3, ?4, ?5) "
-                    "ON CONFLICT(file_id) DO UPDATE SET "
-                    "  extracted_text=excluded.extracted_text, "
-                    "  text_source=excluded.text_source, "
-                    "  char_count=excluded.char_count, "
-                    "  updated_at=excluded.updated_at;",
-                    -1, &upd, nullptr);
-                if (upd) {
-                    QByteArray textBytes = extractedText.toUtf8();
-                    QByteArray srcBytes = (result.source.isEmpty() ? "native" : result.source).toUtf8();
-                    sqlite3_bind_int64(upd, 1, fileId);
-                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_text(upd, 3, srcBytes.constData(), -1, SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(upd, 4, extractedText.size());
-                    sqlite3_bind_int64(upd, 5, now);
-                    sqlite3_step(upd);
-                    sqlite3_finalize(upd);
-
-                    // Update Files status.
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='content_done' WHERE id=%1;")
-                            .arg(fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
-
-                    // Update SearchIndex (delete + insert = clean FTS row).
-                    sqlite3_stmt* del = nullptr;
-                    sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;", -1, &del, nullptr);
-                    if (del) { sqlite3_bind_int64(del, 1, fileId); sqlite3_step(del); sqlite3_finalize(del); }
-
-                    QByteArray fn = fi.fileName().toUtf8();
-                    QByteArray pth = r.path.toUtf8();
-                    QByteArray extB = ext.toUtf8();
-                    sqlite3_stmt* ins = nullptr;
-                    sqlite3_prepare_v2(raw,
-                        "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                        "VALUES (?1, ?2, ?3, ?4, ?5);",
-                        -1, &ins, nullptr);
-                    if (ins) {
-                        sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_text(ins, 4, extB.constData(), -1, SQLITE_TRANSIENT);
-                        sqlite3_bind_int64(ins, 5, fileId);
-                        sqlite3_step(ins);
-                        sqlite3_finalize(ins);
-                    }
-                }
-            } else if (result.needsOcr) {
-                // Scanned PDF / image — mark as needs_ocr.
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                        .arg(fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-            }
-
-            // v1.7.5: the file's content just changed — any stored AI
-            // embedding was computed from the OLD text and must not
-            // survive. Drop both embedding tables for this file; the
-            // background backfill queue re-embeds it from the new text
-            // (ensureEmbeddingsBackfill runs ONNX off the main thread).
-            for (const char* delSql : {
-                     "DELETE FROM BgeEmbeddings WHERE file_id=?1;",
-                     "DELETE FROM EmbeddingChunks WHERE file_id=?1;" }) {
-                sqlite3_stmt* delE = nullptr;
-                if (sqlite3_prepare_v2(raw, delSql, -1, &delE, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_int64(delE, 1, fileId);
-                    sqlite3_step(delE);
-                    sqlite3_finalize(delE);
-                }
-            }
-            ensureEmbeddingsBackfill();
-        } catch (...) {
-            // Extraction failed — file stays as 'pending', user can retry.
-            DS_INFO("Watcher", "Extraction failed for: " + path);
-        }
-    }
-    return true;
+    // v1.7.21: the single-file pipeline (gate -> upsert -> extract ->
+    // FTS refresh -> stale-embedding drop -> backfill wake) moved to
+    // ExtractionController::extractAndIndexFile. The settings-driven
+    // admissibility gate is injected there (ctor); the controller adds
+    // the constant allowlist + existence checks itself.
+    return extractionController_ &&
+           extractionController_->extractAndIndexFile(path);
 }
+
 void MainWindow::onFileModified(const QString& path) {
     if (!repo_ || !db_) return;
     try {
@@ -5739,14 +4661,17 @@ void MainWindow::onOpenSettings() {
                         "And that onnxruntime.dll is present.");
                     return;
                 }
-                const qint64 pending = countMissingEmbeddings()
-                                     + countMissingChunkDocs();
+                const qint64 pending =
+                    (embeddingController_
+                         ? embeddingController_->countMissingEmbeddings() : 0)
+                    + (embeddingController_
+                         ? embeddingController_->countMissingChunkDocs() : 0);
                 if (pending == 0) {
                     statusBar()->showMessage(
                         "All documents already have embeddings.", 5000);
                     return;
                 }
-                ensureEmbeddingsBackfill();
+                if (embeddingController_) embeddingController_->ensureBackfill();
                 statusBar()->showMessage(
                     QString("AI indexing started — %1 document%2 in queue; "
                             "progress shows in the status bar.")
@@ -5756,8 +4681,13 @@ void MainWindow::onOpenSettings() {
         // "Rebuild All AI Embeddings" — purge every stored embedding in
         // small batches, then re-run the shared two-phase backfill so
         // the whole library is recomputed from full document text.
+        // v1.7.21: the purge chain lives in EmbeddingController; a
+        // blocked rebuild (AI not ready) comes back as a signal and the
+        // ctor's forwarder shows the dialog.
         QObject::connect(&dlg, &SettingsDialog::rebuildEmbeddingsRequested,
-            this, &MainWindow::startEmbeddingRebuild);
+            this, [this]() {
+                if (embeddingController_) embeddingController_->startRebuild();
+            });
 
         const int rc = dlg.exec();
         refreshSavedSearches();
