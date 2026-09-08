@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.19
+    VERSION 1.7.20
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -316,6 +316,7 @@ set(APP_HEADERS
     src/ui/IconUtils.h
     src/ui/DropDownCombo.h
     src/ui/SplashOverlay.h
+    src/ui/NativeSplash.h
     src/ui/ModernTooltip.h
     src/ui/SearchBar.h
     src/ui/ResultsPane.h

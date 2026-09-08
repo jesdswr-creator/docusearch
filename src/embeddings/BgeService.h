@@ -22,6 +22,8 @@
 #include <memory>
 #include <atomic>
 
+class QThreadPool;   // v1.7.20: dedicated embedding worker pool
+
 namespace DocuSearch {
 
 class BgeService : public QObject {
@@ -91,6 +93,14 @@ public:
     // embeddingProgress and embeddingFinished signals.
     void embedDocumentsBatch(const QVector<int>& fileIds, const QStringList& texts);
 
+    // v1.7.20: run ALL background work (batch embedding worker) on a
+    // DEDICATED thread pool owned by MainWindow instead of the global
+    // QtConcurrent pool. The global pool is shared with the folder-scan
+    // walk, so during a busy scan the embedding worker queued behind
+    // walk/hash tasks and batches stalled for seconds. Pass nullptr
+    // (the default) to keep the old global-pool behavior.
+    void setWorkerPool(QThreadPool* pool) { m_pool = pool; }
+
     // Database stats (total/completed/failed embedding counts).
     BgeEmbeddingDb::Stats getStats() const;
 
@@ -136,6 +146,11 @@ private:
     // m_batchFuture before members are torn down.
     QFuture<void>     m_batchFuture;
     std::atomic<bool> m_stopRequested{false};
+
+    // v1.7.20: dedicated worker pool (owned by MainWindow; may be null =
+    // use the global pool). Not accessed by the worker itself — only used
+    // when LAUNCHING a batch, so no synchronization is needed.
+    QThreadPool*      m_pool = nullptr;
 };
 
 } // namespace DocuSearch

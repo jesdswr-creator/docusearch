@@ -8,6 +8,7 @@
 
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <QThreadPool>   // v1.7.20: dedicated embedding pool (complete type for QtConcurrent::run(pool, ...))
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -313,10 +314,14 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
         return;
     }
 
-    // Run on Qt's global thread pool.
+    // v1.7.20: run on the DEDICATED embedding pool when MainWindow
+    // provided one (setWorkerPool); the global QtConcurrent pool remains
+    // the fallback for standalone use. Sharing the global pool with the
+    // folder scan made batches queue behind walk/hash tasks.
     auto* watcher = new QFutureWatcher<void>(this);
-    auto future = QtConcurrent::run([this, watcher, engine, database,
-                                     fileIds, texts, total]() {
+    auto future = QtConcurrent::run(
+        m_pool ? m_pool : QThreadPool::globalInstance(),
+        [this, watcher, engine, database, fileIds, texts, total]() {
         // CRITICAL: install the SEH translator ON THIS THREAD.
         // _set_se_translator() is per-thread; without this, an access
         // violation inside ONNX Runtime would crash the process instead

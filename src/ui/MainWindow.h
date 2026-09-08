@@ -54,6 +54,7 @@ class Database;
 class FileRepository;
 class SearchEngine;
 class OcrWorkerPool;
+struct ExtractionResult;   // v1.7.20: documents/IDocumentExtractor.h
 class FileWatcher;
 
 class SearchBar;
@@ -74,7 +75,13 @@ class HybridSearchEngine;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    // v1.7.20: the caller PRE-OPENS the database on a background thread
+    // (main.cpp) and hands the finished Database over — the ctor no longer
+    // blocks the UI thread on sqlite open + schema migrate, so the splash
+    // animation never freezes during startup. `preopened` may be null/unclean
+    // (defensive path): the ctor then opens inline exactly as before.
+    explicit MainWindow(std::unique_ptr<Database> preopened,
+                        QWidget* parent = nullptr);
     ~MainWindow() override;
 
 protected:
@@ -321,6 +328,18 @@ public:
     // report. One dedicated thread + the mutex keeps scans serialized
     // (as before) while making them immune to global-pool starvation.
     QThreadPool*    searchPool_          = nullptr;
+    // v1.7.20: DEDICATED pools so search / extraction / embedding each own
+    // a thread and background work can never starve or freeze another
+    // path (the user-facing ask: "search, extraction and embedding all
+    // are separate threads so that bg work will not affect or freeze
+    // searching").
+    //   extractPool_ — per-file text extraction (16 MB stacks; see the
+    //     SEH note in onExtract — Poppler recursion overflows 1 MB).
+    //   embedPool_   — BGE model init + batch embedding (ONNX inference).
+    // The semantic scan keeps its dedicated searchPool_ (v1.7.19); OCR
+    // already runs on its own OcrWorkerPool QThreads.
+    QThreadPool*    extractPool_         = nullptr;
+    QThreadPool*    embedPool_           = nullptr;
     bool            aiBackfillRunning_   = false;  // batch embed in flight
     bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
     int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
@@ -385,6 +404,20 @@ public:
     int             pastelTheme_          = 0;
     bool            contentExtractionRunning_ = false;
     std::atomic<bool> extractCancelFlag_{false};
+    // v1.7.20: extraction is now fully asynchronous — the 200 ms driver
+    // tick STARTS one file on extractPool_ and returns immediately; the
+    // QFutureWatcher continuation does the accounting. extractFileInFlight_
+    // makes the tick a no-op while a file is being extracted (also kills a
+    // LATENT RE-ENTRANCY BUG: the old UI-thread busy-wait pumped
+    // processEvents() for the whole extraction, so for any file slower
+    // than 200 ms the repeating timer re-entered the tick and extracted
+    // the SAME file again — nested, on several pool threads, skipping
+    // neighbours via double ++idx). extractSessionGen_ invalidates the
+    // continuation of a cancelled/reset session so a late result can
+    // never write into a newer session.
+    QFutureWatcher<ExtractionResult>* extractWatcher_ = nullptr;
+    bool            extractFileInFlight_  = false;
+    int             extractSessionGen_    = 0;
     // v1.7.9: OCR pool session accounting — how many OCR tasks the
     // current extraction session enqueued / how many results arrived.
     int             ocrExpected_          = 0;

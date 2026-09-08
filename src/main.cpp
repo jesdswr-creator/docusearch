@@ -11,8 +11,10 @@
 #include "core/Logger.h"
 #include "core/SehTranslator.h"
 #include "core/CrashHandler.h"
+#include "database/Database.h"
+#include "database/Schema.h"
 #include "ui/MainWindow.h"
-#include "ui/SplashOverlay.h"
+#include "ui/NativeSplash.h"
 
 #include <QApplication>
 #include <QStyleFactory>
@@ -25,6 +27,9 @@
 #include <QElapsedTimer>
 #include <QSharedMemory>
 #include <QMessageBox>
+#include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 #include <memory>
 
 using namespace DocuSearch;
@@ -124,9 +129,9 @@ int main(int argc, char* argv[]) {
     // gray first-paint flash behind the (dark) splash — part of the
     // "splash is still buggy" report.
     const AppSettings saved = DocuSearch::Config::instance().load();
-    DocuSearch::SplashOverlay splash;
+    DocuSearch::NativeSplash splash;
     {
-        SplashOverlay::ThemeColors c;
+        DocuSearch::SplashThemeColors c;
         if (saved.darkMode) {
             // Midnight palette — buttons are #4d8df6.
             c.cardTop    = QColor("#1b212b");
@@ -194,9 +199,8 @@ int main(int argc, char* argv[]) {
     QApplication::setPalette(pal);
 
     // ── Construct MainWindow once the event loop is running ──
-    // The window must outlive app.exec(), so it lives here in main()
-    // and is created from a 0 ms single-shot. The splash stays visible
-    // (and animating) until the window is shown.
+    // The window must outlive app.exec(), so it lives here in main().
+    // The splash stays visible (and animating) until the window shows.
     std::unique_ptr<DocuSearch::MainWindow> w;
     QElapsedTimer splashClock;
     splashClock.start();
@@ -219,6 +223,90 @@ int main(int argc, char* argv[]) {
         });
     };
 
+    // ── v1.7.20: PRE-OPEN THE DATABASE ON A BACKGROUND THREAD ──
+    // sqlite open + Schema::initialize/migrate used to run INSIDE the
+    // MainWindow constructor, blocking the UI thread (and with it, the
+    // splash animation) for hundreds of milliseconds to seconds on big
+    // libraries. Now the worker starts immediately (before the splash
+    // even paints its first frame — the two overlap), and MainWindow is
+    // constructed the moment the future delivers, from the event loop:
+    // the UI thread never waits on the database at all. On a healthy
+    // launch the DB is usually open by the time the splash minimum
+    // display time has elapsed, so the window actually shows SOONER
+    // than before; on a slow/locked database the splash keeps animating
+    // smoothly instead of freezing.
+    //
+    // Safety preserved: an open failure surfaces as a message box (then
+    // the splash fades and the app quits), and the MainWindow ctor still
+    // contains the old inline-open path as a defensive fallback.
+    struct StartupDb {
+        std::unique_ptr<DocuSearch::Database> db;
+        QString error;
+    };
+    auto startup = std::make_shared<StartupDb>();
+    // v1.7.20: create the Database OBJECT on the UI thread (QObject thread
+    // affinity follows the creating thread; later adoption as a child of
+    // MainWindow must be same-thread). Only the open()/migrate() CALLS run
+    // on the worker — they touch no Qt events/signals, so that is safe;
+    // the UI thread does not touch the object again until finished().
+    startup->db = std::make_unique<DocuSearch::Database>();
+    const QString dbPath = DocuSearch::Config::instance().dbPath();
+
+    auto* dbWatch = new QFutureWatcher<void>(&app);
+    QObject::connect(dbWatch, &QFutureWatcher<void>::finished, &app,
+        [&w, &splash, &splashClock, &showWindowAndDropSplash, startup, dbWatch]() {
+            dbWatch->deleteLater();
+            if (!startup->db || !startup->db->isOpen()) {
+                const QString err = startup->error.isEmpty()
+                                        ? QStringLiteral("unknown error")
+                                        : startup->error;
+                QMessageBox::critical(nullptr, QStringLiteral("Database Error"),
+                    QStringLiteral("Failed to open database:\n") + err);
+                splash.fadeOutAndClose([]() {
+                    QTimer::singleShot(0, qApp,
+                                       []() { QApplication::quit(); });
+                });
+                return;
+            }
+            try {
+                w = std::make_unique<DocuSearch::MainWindow>(
+                        std::move(startup->db));
+            } catch (...) {
+                // Constructor failure (e.g. DB locked) — the ctor shows
+                // its own message box; fade the splash out, then quit
+                // cleanly (the callback keeps app.exec() alive until the
+                // fade ends).
+                splash.fadeOutAndClose([]() {
+                    QTimer::singleShot(0, qApp,
+                                       []() { QApplication::quit(); });
+                });
+                return;
+            }
+            const int remain =
+                kMinSplashMs - static_cast<int>(splashClock.elapsed());
+            if (remain > 0) {
+                QTimer::singleShot(remain, &app, showWindowAndDropSplash);
+            } else {
+                showWindowAndDropSplash();
+            }
+        });
+    dbWatch->setFuture(QtConcurrent::run([startup, dbPath]() {
+        QString err;
+        if (!startup->db->open(dbPath, &err)) {
+            startup->error = err;
+            DS_ERROR("App", QString("Background database open failed: %1")
+                                .arg(startup->error));
+            return;
+        }
+        if (!DocuSearch::Schema::initialize(*startup->db) ||
+            !DocuSearch::Schema::migrate(*startup->db)) {
+            startup->error = QStringLiteral("schema initialization failed");
+            DS_ERROR("App", "Background schema initialize/migrate failed.");
+            return;
+        }
+        DS_INFO("App", "Database pre-opened on the background thread.");
+    }));
+
     // ── v1.7.8: SPLASH SAFETY NET ──
     // The splash is an always-on-top window; if anything ever blocks the
     // constructor (a modal error dialog opened behind it, a slow one-time
@@ -232,26 +320,6 @@ int main(int argc, char* argv[]) {
             DS_WARN("App", "Main window not visible 30 s after launch — "
                            "dropping the splash so nothing hides behind it.");
             splash.fadeOutAndClose();
-        }
-    });
-
-    QTimer::singleShot(0, &app, [&]() {
-        try {
-            w = std::make_unique<DocuSearch::MainWindow>();
-        } catch (...) {
-            // Constructor failure (e.g. DB locked) — the ctor shows its
-            // own message box; fade the splash out, then quit cleanly
-            // (the callback keeps app.exec() alive until the fade ends).
-            splash.fadeOutAndClose([]() {
-                QTimer::singleShot(0, qApp, []() { QApplication::quit(); });
-            });
-            return;
-        }
-        const int remain = kMinSplashMs - static_cast<int>(splashClock.elapsed());
-        if (remain > 0) {
-            QTimer::singleShot(remain, &app, showWindowAndDropSplash);
-        } else {
-            showWindowAndDropSplash();
         }
     });
 
