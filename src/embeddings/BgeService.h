@@ -17,6 +17,8 @@
 #include <QVector>
 #include <QStringList>
 #include <QFuture>
+#include <QHash>
+#include <QMutex>
 #include <memory>
 #include <atomic>
 
@@ -38,10 +40,15 @@ public:
     // Search for documents semantically similar to the query.
     // Returns up to topK results with similarity >= threshold.
     // Never throws — returns empty vector on any error.
+    // v1.7.19: `cancel` aborts cooperatively (checks passed down to the
+    // vector scans) so a superseded search stops early. The QUERY
+    // EMBEDDING is LRU-cached — repeat/refined queries skip ONNX
+    // inference entirely.
     std::vector<SemanticHit> search(
         const QString& query,
         int topK = 20,
-        float threshold = 0.40f);
+        float threshold = 0.40f,
+        const std::atomic<bool>* cancel = nullptr);
 
     // Search ONLY within the given file IDs — much faster than scanning
     // all embeddings. Use this in hybrid search: first get top BM25 results,
@@ -51,7 +58,8 @@ public:
         const QString& query,
         const std::vector<int>& fileIds,
         int topK = 20,
-        float threshold = 0.40f);
+        float threshold = 0.40f,
+        const std::atomic<bool>* cancel = nullptr);
 
     // Phase 2: Search chunks — finds best matching chunk per file.
     // More precise than document-level search for long documents.
@@ -59,14 +67,16 @@ public:
         const QString& query,
         const std::vector<int>& fileIds,
         int topK = 20,
-        float threshold = 0.40f);
+        float threshold = 0.40f,
+        const std::atomic<bool>* cancel = nullptr);
 
     // Phase 3: Search ALL chunks (not filtered by keyword results).
     // Used for RRF fusion — semantic search runs independently.
     std::vector<SemanticHit> searchChunksAll(
         const QString& query,
         int topK = 50,
-        float threshold = 0.40f);
+        float threshold = 0.40f,
+        const std::atomic<bool>* cancel = nullptr);
 
     // Embed a single document. Returns true on success.
     // If the document is already embedded, returns true immediately.
@@ -98,6 +108,21 @@ signals:
     void embeddingFinished(int successCount, int failCount);
 
 private:
+    // v1.7.19: QUERY-embedding LRU cache. The ONNX inference for a query
+    // costs tens of milliseconds (or more under CPU contention); the
+    // same query text always produces the same vector, so repeat and
+    // refined searches (the user typing one more word) reuse the cached
+    // embedding and skip inference entirely. Keyed by the PREFIXED query
+    // text (the same string embed() would see). 32 entries × 384 floats
+    // ≈ 50 KB — bounded and trivial.
+    std::vector<float> cachedQueryEmbedding(const QString& prefixedKey, bool* hit);
+    void rememberQueryEmbedding(const QString& prefixedKey,
+                                const std::vector<float>& emb);
+    static constexpr int kQueryCacheCap = 32;
+    QMutex                             m_queryCacheMutex;
+    QHash<QString, std::vector<float>> m_queryCache;
+    QStringList                        m_queryCacheOrder;  // front = LRU
+
     std::unique_ptr<BgeEmbeddingEngine> m_engine;
     std::unique_ptr<BgeEmbeddingDb>     m_database;
     bool        m_initialized   = false;

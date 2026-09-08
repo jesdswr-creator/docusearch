@@ -63,6 +63,7 @@
 #include <QTextStream>
 #include <QProgressDialog>
 #include <QThread>
+#include <QThreadPool>   // v1.7.19: dedicated single-thread semantic-search pool
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QStyle>
@@ -622,8 +623,15 @@ MainWindow::~MainWindow() {
     // v1.7.18: stop + join the background SEMANTIC SEARCH worker before
     // hybridSearch_/bgeService_ die — the worker captures `this` and uses
     // both. Mirrors the bgeInitFuture_ contract below.
+    // v1.7.19: also cancel + drain the dedicated search pool — clear()
+    // drops queued (not-yet-started) scans, then the join below waits
+    // out the one in-flight scan (bounded: cooperative cancel is raised
+    // first via searchWorkersStop_ checks in the worker entry).
     searchWorkersStop_.store(true);
+    if (activeSemanticCancel_) activeSemanticCancel_->store(true);
+    if (searchPool_) searchPool_->clear();
     if (semanticSearchFuture_.isValid()) semanticSearchFuture_.waitForFinished();
+    if (searchPool_) searchPool_->waitForDone();
     // v1.7.11: join the BGE init worker — it captures `this` and uses
     // bgeService_, which is about to be destroyed with the window.
     if (bgeInitFuture_.isValid()) bgeInitFuture_.waitForFinished();
@@ -1737,6 +1745,28 @@ void MainWindow::onSearch(const QString& query) {
             // first); searchWorkersStop_ + the dtor join make sure a
             // worker can never touch a dying engine — the same lifetime
             // contract as bgeInitFuture_.
+            //
+            // v1.7.19 latency work, three layers:
+            //   1. DEDICATED POOL — the scan runs on a private single-
+            //      thread pool, NOT the global QtConcurrent pool it used
+            //      to share with extraction/backfill workers (a busy
+            //      folder scan used to delay the AI result by seconds
+            //      before the scan even started).
+            //   2. CANCEL-ON-NEW-QUERY — the previous search's flag is
+            //      raised here, so the running/queued superseded scan
+            //      aborts within one batch instead of the new query
+            //      waiting behind the mutex for the whole old scan.
+            //   3. The scans themselves are 10-100x faster (rowid
+            //      cursor + dot-only kernel in BgeEmbeddingDb) and the
+            //      query embedding is LRU-cached in BgeService.
+            if (!searchPool_) {
+                searchPool_ = new QThreadPool(this);
+                searchPool_->setMaxThreadCount(1);
+            }
+            if (activeSemanticCancel_) activeSemanticCancel_->store(true);
+            activeSemanticCancel_ = std::make_shared<std::atomic<bool>>(false);
+            auto cancelFlag = activeSemanticCancel_;
+
             auto* watcher =
                 new QFutureWatcher<std::vector<HybridResult>>(this);
             connect(watcher,
@@ -1751,15 +1781,17 @@ void MainWindow::onSearch(const QString& query) {
             });
             const QString typeFilter = parsed.typeFilter;
             semanticSearchFuture_ = QtConcurrent::run(
-                [this, semanticQuery, keywordResults, typeFilter]()
+                searchPool_,
+                [this, semanticQuery, keywordResults, typeFilter, cancelFlag]()
                     -> std::vector<HybridResult> {
-                if (searchWorkersStop_.load()) return {};
+                if (cancelFlag->load() || searchWorkersStop_.load()) return {};
                 QMutexLocker lock(&semanticSearchMutex_);
-                if (searchWorkersStop_.load()) return {};
+                if (cancelFlag->load() || searchWorkersStop_.load()) return {};
                 hybridSearch_->setTypeFilter(typeFilter);
                 // The AI embeds the CLEAN semantic query text — never
                 // the raw search-bar string (see the v1.7.15 note).
-                return hybridSearch_->search(semanticQuery, keywordResults);
+                return hybridSearch_->search(semanticQuery, keywordResults,
+                                             cancelFlag.get());
             });
             watcher->setFuture(semanticSearchFuture_);
         }

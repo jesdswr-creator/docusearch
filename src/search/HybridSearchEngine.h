@@ -7,6 +7,7 @@
 #include <QString>
 #include <vector>
 #include <map>
+#include <atomic>
 
 namespace DocuSearch {
 
@@ -68,9 +69,14 @@ public:
     //     see m_additionsThreshold), the type filter, and a count budget
     //     of min(topK, max(1, round(semanticWeight * topK))).
     // Never throws — on any error, returns keyword results as-is.
+    // v1.7.19: `cancel` is checked before/after each semantic stage and
+    // passed down to the vector scans — a superseded search aborts its
+    // scan within one batch instead of running to completion while the
+    // next query waits behind the mutex.
     std::vector<HybridResult> search(
         const QString& queryText,
-        const std::vector<ExistingSearchResult>& keywordResults);
+        const std::vector<ExistingSearchResult>& keywordResults,
+        const std::atomic<bool>* cancel = nullptr);
 
 private:
     static float normalizeScore(float bm25Score);

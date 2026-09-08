@@ -65,7 +65,8 @@ bool BgeService::initialize(const QString& dbPath, const QString& modelPath) {
 }
 
 std::vector<SemanticHit> BgeService::search(
-    const QString& query, int topK, float threshold) {
+    const QString& query, int topK, float threshold,
+    const std::atomic<bool>* cancel) {
     if (!m_initialized) return {};
     try {
         std::vector<float> queryEmbed;
@@ -73,8 +74,13 @@ std::vector<SemanticHit> BgeService::search(
         // (NOT for document embedding — BGE uses asymmetric design).
         // See Task 3 Fix A in review report.
         const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
-        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
-        return m_database->searchSimilar(queryEmbed, topK, threshold);
+        bool cacheHit = false;
+        queryEmbed = cachedQueryEmbedding(prefixedQuery, &cacheHit);
+        if (!cacheHit) {
+            if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+            rememberQueryEmbedding(prefixedQuery, queryEmbed);
+        }
+        return m_database->searchSimilar(queryEmbed, topK, threshold, cancel);
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Exception during search: %1").arg(e.what()));
     } catch (...) {
@@ -85,13 +91,18 @@ std::vector<SemanticHit> BgeService::search(
 
 std::vector<SemanticHit> BgeService::searchFiltered(
     const QString& query, const std::vector<int>& fileIds,
-    int topK, float threshold) {
+    int topK, float threshold, const std::atomic<bool>* cancel) {
     if (!m_initialized) return {};
     try {
         std::vector<float> queryEmbed;
         const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
-        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
-        return m_database->searchSimilarFiltered(queryEmbed, fileIds, topK, threshold);
+        bool cacheHit = false;
+        queryEmbed = cachedQueryEmbedding(prefixedQuery, &cacheHit);
+        if (!cacheHit) {
+            if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+            rememberQueryEmbedding(prefixedQuery, queryEmbed);
+        }
+        return m_database->searchSimilarFiltered(queryEmbed, fileIds, topK, threshold, cancel);
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Exception during filtered search: %1").arg(e.what()));
     } catch (...) {
@@ -102,13 +113,18 @@ std::vector<SemanticHit> BgeService::searchFiltered(
 
 std::vector<SemanticHit> BgeService::searchChunksFiltered(
     const QString& query, const std::vector<int>& fileIds,
-    int topK, float threshold) {
+    int topK, float threshold, const std::atomic<bool>* cancel) {
     if (!m_initialized) return {};
     try {
         std::vector<float> queryEmbed;
         const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
-        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
-        return m_database->searchSimilarChunks(queryEmbed, fileIds, topK, threshold);
+        bool cacheHit = false;
+        queryEmbed = cachedQueryEmbedding(prefixedQuery, &cacheHit);
+        if (!cacheHit) {
+            if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+            rememberQueryEmbedding(prefixedQuery, queryEmbed);
+        }
+        return m_database->searchSimilarChunks(queryEmbed, fileIds, topK, threshold, cancel);
     } catch (const std::exception& e) {
         DS_WARN("BGE", QString("Exception during chunk search: %1").arg(e.what()));
     } catch (...) {
@@ -118,15 +134,24 @@ std::vector<SemanticHit> BgeService::searchChunksFiltered(
 }
 
 std::vector<SemanticHit> BgeService::searchChunksAll(
-    const QString& query, int topK, float threshold) {
+    const QString& query, int topK, float threshold,
+    const std::atomic<bool>* cancel) {
     if (!m_initialized) return {};
     try {
         std::vector<float> queryEmbed;
         const QString prefixedQuery = BgeEmbeddingEngine::queryPrefix() + query;
-        if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+        bool cacheHit = false;
+        queryEmbed = cachedQueryEmbedding(prefixedQuery, &cacheHit);
+        if (!cacheHit) {
+            if (!m_engine->embed(prefixedQuery, queryEmbed)) return {};
+            rememberQueryEmbedding(prefixedQuery, queryEmbed);
+        }
 
-        // Precision path: best chunk per file.
-        auto chunkHits = m_database->searchSimilarChunksAll(queryEmbed, topK, threshold);
+        // Precision path: best chunk per file. (v1.7.19: the scan runs a
+        // single rowid cursor with the dot-only kernel — see
+        // BgeEmbeddingDb::searchSimilarChunksAll — and honors `cancel`.)
+        auto chunkHits = m_database->searchSimilarChunksAll(queryEmbed, topK, threshold, cancel);
+        if (cancel && cancel->load()) return {};
         const float bestChunk = m_database->lastBestSimilarity();
 
         // Full-document path. CRITICAL for indexes built before chunked
@@ -135,7 +160,8 @@ std::vector<SemanticHit> BgeService::searchChunksAll(
         // ("no embeddings to compare yet" forever, despite thousands of
         // embedded documents). Scanning document embeddings as well keeps
         // them searchable while the chunk backfill drains.
-        auto docHits = m_database->searchSimilar(queryEmbed, topK, threshold);
+        auto docHits = m_database->searchSimilar(queryEmbed, topK, threshold, cancel);
+        if (cancel && cancel->load()) return {};
         const float bestDoc = m_database->lastBestSimilarity();
 
         if (chunkHits.empty()) return docHits;    // document-level only
@@ -393,6 +419,41 @@ void BgeService::embedDocumentsBatch(const QVector<int>& fileIds,
 BgeEmbeddingDb::Stats BgeService::getStats() const {
     if (!m_database) return {};
     return m_database->getStats();
+}
+
+// ── v1.7.19: query-embedding LRU cache ────────────────────────────
+
+std::vector<float> BgeService::cachedQueryEmbedding(const QString& prefixedKey,
+                                                     bool* hit) {
+    QMutexLocker lock(&m_queryCacheMutex);
+    auto it = m_queryCache.constFind(prefixedKey);
+    if (it == m_queryCache.constEnd()) {
+        *hit = false;
+        return {};
+    }
+    // Refresh LRU position — this key is now the most recently used.
+    m_queryCacheOrder.removeAll(prefixedKey);
+    m_queryCacheOrder.append(prefixedKey);
+    *hit = true;
+    return it.value();
+}
+
+void BgeService::rememberQueryEmbedding(const QString& prefixedKey,
+                                        const std::vector<float>& emb) {
+    if (emb.size() != static_cast<size_t>(BgeEmbeddingEngine::EMBEDDING_DIM)) {
+        // Defensive: never cache a malformed vector (dimension is fixed
+        // at 384 by the model; this branch should be unreachable).
+        return;
+    }
+    QMutexLocker lock(&m_queryCacheMutex);
+    if (m_queryCache.contains(prefixedKey)) return;
+    if (m_queryCache.size() >= kQueryCacheCap) {
+        // Evict the least-recently-used entry.
+        const QString oldest = m_queryCacheOrder.takeFirst();
+        m_queryCache.remove(oldest);
+    }
+    m_queryCache.insert(prefixedKey, emb);
+    m_queryCacheOrder.append(prefixedKey);
 }
 
 } // namespace DocuSearch

@@ -51,7 +51,8 @@ float HybridSearchEngine::normalizeScore(float bm25Score) {
 
 std::vector<HybridResult> HybridSearchEngine::search(
     const QString& queryText,
-    const std::vector<ExistingSearchResult>& keywordResults) {
+    const std::vector<ExistingSearchResult>& keywordResults,
+    const std::atomic<bool>* cancel) {
 
     try {
         // ── Phase 4: Keyword-first, AI-additive fusion ──────────────
@@ -112,13 +113,21 @@ std::vector<HybridResult> HybridSearchEngine::search(
 
         // 3. Run the semantic scan INDEPENDENTLY over all chunks (this
         //    finds documents the keyword search missed entirely).
+        //    v1.7.19: `cancel` flows down — a superseded query's scan
+        //    aborts within one batch instead of hogging the pipeline.
         const int semanticBudget = std::max(40, m_topK * 2);
         std::vector<SemanticHit> semanticHits =
-            m_bgeService->searchChunksAll(queryText, semanticBudget, m_threshold);
+            m_bgeService->searchChunksAll(queryText, semanticBudget, m_threshold, cancel);
+        if (cancel && cancel->load()) {
+            return out;  // keyword list is complete — caller drops it by generation
+        }
 
         // No chunk hits → fall back to document-level search (all docs).
         if (semanticHits.empty()) {
-            semanticHits = m_bgeService->search(queryText, semanticBudget, m_threshold);
+            semanticHits = m_bgeService->search(queryText, semanticBudget, m_threshold, cancel);
+            if (cancel && cancel->load()) {
+                return out;
+            }
         }
 
         // Map fileId → semantic similarity for annotation + additions.

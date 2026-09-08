@@ -38,6 +38,7 @@
 class QSplitter;
 class QMenu;
 class QAction;
+class QThreadPool;
 class QStatusBar;
 class QTimer;
 class QToolBar;
@@ -302,6 +303,24 @@ public:
     QFuture<std::vector<HybridResult>> semanticSearchFuture_;
     QMutex          semanticSearchMutex_;
     std::atomic<bool> searchWorkersStop_{false};
+    // v1.7.19: cooperative cancellation of the semantic scan. Every
+    // onSearch() invalidates the PREVIOUS search's flag (the running
+    // scan notices within one batch and exits; a queued-but-unstarted
+    // worker sees it at entry) and installs a fresh one. The worker
+    // keeps the shared_ptr alive even after the member moves on, so
+    // there is no dangling-pointer race. Without this, the NEW query
+    // waited behind semanticSearchMutex_ for the ENTIRE superseded scan
+    // to finish — typing three queries meant waiting three scan-times.
+    std::shared_ptr<std::atomic<bool>> activeSemanticCancel_;
+    // v1.7.19: DEDICATED single-thread pool for the semantic scan. The
+    // global QtConcurrent pool is shared with per-file extraction tasks
+    // and the batch-embedding worker; when a big folder is being
+    // extracted, every pool thread is busy and the semantic worker
+    // waited in the queue for SECONDS before its scan even started —
+    // a major hidden contributor to the "AI result takes too long"
+    // report. One dedicated thread + the mutex keeps scans serialized
+    // (as before) while making them immune to global-pool starvation.
+    QThreadPool*    searchPool_          = nullptr;
     bool            aiBackfillRunning_   = false;  // batch embed in flight
     bool            embeddingRebuildPurging_ = false;  // rebuild purge chain in flight
     int             embeddingRebuildRetries_ = 0;      // consecutive purge SQL failures
