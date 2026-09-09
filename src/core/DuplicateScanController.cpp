@@ -26,6 +26,11 @@
 #include <QSet>
 #include <QtConcurrent>
 
+// The worker bodies drive sqlite directly (own connections) — the C
+// header is needed in this TU (v1.7.24 CI lesson, same as
+// ScanPipelineController.cpp).
+#include <sqlite3.h>
+
 #include <algorithm>
 
 namespace DocuSearch {

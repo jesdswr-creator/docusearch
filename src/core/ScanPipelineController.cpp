@@ -21,6 +21,12 @@
 #include <QDateTime>
 #include <QtConcurrent>
 
+// The header only exposes the controller API; the WORKER bodies here
+// drive sqlite directly (own connections), so the C header is needed
+// in this TU. (v1.7.24 CI: C3861/C2065 - sqlite3.h was transitively
+// expected from Database.h, which only fwd-declares.)
+#include <sqlite3.h>
+
 namespace DocuSearch {
 
 // ============================================================

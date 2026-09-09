@@ -16,6 +16,8 @@
 
 #include "../core/Types.h"
 #include "../search/HybridSearchEngine.h"
+#include "../core/ScanPipelineController.h"
+#include "../core/DuplicateScanController.h"
 #include "SystemHealthDashboard.h"
 
 class QSplitter;
@@ -56,8 +58,6 @@ class BgeService;
 class HybridSearchEngine;
 class ExtractionController;
 class EmbeddingController;
-class ScanPipelineController;
-class DuplicateScanController;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
