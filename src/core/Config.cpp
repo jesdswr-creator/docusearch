@@ -4,11 +4,16 @@
 
 #include "Config.h"
 #include "Constants.h"
+#include "TierConfig.h"
+#include "MemoryMonitor.h"
+#include "Logger.h"
 
 #include <QSettings>
 #include <QStandardPaths>
 #include <QDir>
 #include <QVariant>
+#include <QThread>
+#include <QThreadPool>
 
 namespace DocuSearch {
 
@@ -21,6 +26,10 @@ Config::Config() : QObject(nullptr) {
     settings_ = std::make_unique<QSettings>(
         QSettings::IniFormat, QSettings::UserScope,
         Constants::kOrgName, Constants::kAppName);
+    
+    // PHASE 1: Detect system profile on startup
+    m_systemProfile = SystemProfiler::detect();
+    DS_INFO("Config", QString("Initialized for tier: %1").arg(SystemProfiler::tierName(m_systemProfile.tier)));
 }
 
 Config::~Config() = default;
@@ -80,6 +89,31 @@ void Config::save(const AppSettings& s) {
     settings_->setValue("closeConfirmAsk",      s.closeConfirmAsk);
     settings_->sync();
     emit settingsChanged(s);
+}
+
+void Config::initThreadPoolsForTier() {
+    TierConfig tierCfg = TierConfigManager::getConfig(m_systemProfile.tier);
+    
+    // Global thread pool stack size
+    QThreadPool::globalInstance()->setStackSize(tierCfg.threadStackSize * 1024);
+    
+    DS_INFO("Config/ThreadPool",
+        QString("Extraction: %1w | OCR: %2w | Search: %3w | Stack: %4KB")
+            .arg(tierCfg.extractionWorkers)
+            .arg(tierCfg.ocrWorkers)
+            .arg(tierCfg.searchWorkers)
+            .arg(tierCfg.threadStackSize));
+}
+
+void Config::applyDatabasePragmasForTier(const QString& path) {
+    TierConfig tierCfg = TierConfigManager::getConfig(m_systemProfile.tier);
+    
+    DS_INFO("Config/Database",
+        QString("Tier pragmas: %1 | Cache: %2MB | Mmap: %3MB | Timeout: %4ms")
+            .arg(tierCfg.journalMode)
+            .arg(tierCfg.databaseCacheSize / (1024 * 1024))
+            .arg(tierCfg.mmapSize / (1024 * 1024))
+            .arg(tierCfg.busyTimeout));
 }
 
 } // namespace DocuSearch

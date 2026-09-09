@@ -14,6 +14,8 @@ struct sqlite3_stmt;
 
 namespace DocuSearch {
 
+class DatabaseMutexGuard;
+
 class Database : public QObject {
     Q_OBJECT
 public:
@@ -32,13 +34,14 @@ public:
     // Execute raw SQL (no result). Returns true on success.
     bool exec(const QString& sql, QString* err = nullptr);
 
-    // Begin/commit/rollback transaction. Nested transactions flatten.
+    // Begin/commit/rollback transaction with SAVEPOINT support for nesting
     bool begin();
     bool commit();
     bool rollback();
 
-    // Returns the raw sqlite3* - use sparingly.
+    // Thread-safe access to raw pointer (DO NOT use directly)
     sqlite3* raw() { return db_; }
+    QMutex& getMutex() { return dbMutex_; }
 
     // Path of currently open DB
     QString path() const { return path_; }
@@ -47,9 +50,12 @@ signals:
     void logMessage(const QString& msg);
 
 private:
+    QMutex dbMutex_;  // PHASE 1: Mutex for thread-safe access
     sqlite3* db_  = nullptr;
     QString  path_;
     int      txnDepth_ = 0;
+    
+    QString getSavepointName(int depth) const;
 };
 
 // Convenience RAII transaction guard.

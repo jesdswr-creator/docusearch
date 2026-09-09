@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 #include "../core/Types.h"
+#include "SystemProfile.h"
 
 class QSettings;
 
@@ -28,6 +29,11 @@ public:
     QString dbPath() const;           // dataDir + "/docusearch.db"
     QString thumbnailCacheDir() const;
     QString backupDir() const;
+    
+    // PHASE 1: Tier-aware configuration
+    void initThreadPoolsForTier();
+    void applyDatabasePragmasForTier(const QString& path);
+    SystemProfile getSystemProfile() const { return m_systemProfile; }
 
 signals:
     void settingsChanged(const AppSettings& s);
@@ -39,6 +45,7 @@ private:
     Config& operator=(const Config&) = delete;
 
     std::unique_ptr<QSettings> settings_;
+    SystemProfile m_systemProfile;
 };
 
 } // namespace DocuSearch

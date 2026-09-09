@@ -4,9 +4,12 @@
 
 #include "Database.h"
 #include "../core/Logger.h"
+#include "../core/TierConfig.h"
+#include "../core/SystemProfile.h"
 
 #include <sqlite3.h>
 #include <QFileInfo>
+#include <QMutexLocker>
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -52,6 +55,7 @@ static bool isNetworkPath(const QString& path) {
 }
 
 bool Database::open(const QString& path, QString* err) {
+    QMutexLocker lock(&dbMutex_);
     close();
     path_ = path;
     const int rc = sqlite3_open_v2(
@@ -66,11 +70,16 @@ bool Database::open(const QString& path, QString* err) {
         return false;
     }
 
+    // PHASE 1: Apply tier-specific pragmas
+    SystemProfile profile = SystemProfiler::instance()->profile();
+    TierConfig tierCfg = TierConfigManager::getConfig(profile.tier);
+    
     // Pragmas for performance on low-end systems (4GB RAM).
     // For NETWORK drives (SMB/CIFS), use conservative settings — WAL
     // mode and mmap can corrupt over network filesystems. See HIGH-3.
     const bool network = isNetworkPath(path);
     QStringList pragmas;
+    
     if (network) {
         DS_WARN("Database", "Database is on a network drive — using conservative "
                             "pragmas (no WAL, no mmap, FULL synchronous).");
@@ -86,33 +95,38 @@ bool Database::open(const QString& path, QString* err) {
             "PRAGMA automatic_index = OFF;",
         };
     } else {
-        // Local disk: aggressive performance pragmas.
-        // cache_size 32MB, mmap 128MB (reduced from 256MB for 4GB RAM systems).
+        // PHASE 1: Use tier-specific pragmas from TierConfig
         pragmas = {
-            "PRAGMA journal_mode = WAL;",
+            QString("PRAGMA journal_mode = %1;").arg(tierCfg.journalMode),
             "PRAGMA synchronous  = NORMAL;",
             "PRAGMA temp_store   = MEMORY;",
-            "PRAGMA cache_size   = -32768;",   // ~32MB
-            "PRAGMA mmap_size    = 134217728;", // 128MB
+            QString("PRAGMA cache_size = -%1;").arg(tierCfg.databaseCacheSize / 1024),
+            QString("PRAGMA mmap_size = %1;").arg(tierCfg.mmapSize),
             "PRAGMA foreign_keys = ON;",
-            "PRAGMA busy_timeout = 5000;",
+            QString("PRAGMA busy_timeout = %1;").arg(tierCfg.busyTimeout),
             "PRAGMA encoding     = 'UTF-8';",
             "PRAGMA automatic_index = OFF;",
-            "PRAGMA wal_autocheckpoint = 500;",
         };
+        
+        if (tierCfg.journalMode == "WAL") {
+            pragmas.append("PRAGMA wal_autocheckpoint = 500;");
+        }
     }
+    
     for (const auto& p : pragmas) {
         if (sqlite3_exec(db_, p.toUtf8().constData(), nullptr, nullptr, nullptr) != SQLITE_OK) {
             DS_WARN("Database", QString("Pragma failed: %1 -> %2").arg(p, sqlite3_errmsg(db_)));
         }
     }
-    DS_INFO("Database", QString("Opened: %1 (SQLite %2, %3)")
+    DS_INFO("Database", QString("Opened: %1 (SQLite %2, %3, %4)")
                 .arg(path, sqlite3_libversion(),
-                     network ? "network" : "local"));
+                     network ? "network" : "local",
+                     SystemProfiler::tierName(profile.tier)));
     return true;
 }
 
 void Database::close() {
+    QMutexLocker lock(&dbMutex_);
     if (!db_) return;
     while (txnDepth_ > 0) {
         sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
@@ -124,6 +138,7 @@ void Database::close() {
 }
 
 bool Database::exec(const QString& sql, QString* err) {
+    QMutexLocker lock(&dbMutex_);
     if (!db_) {
         if (err) *err = "Database not open";
         return false;
@@ -140,31 +155,66 @@ bool Database::exec(const QString& sql, QString* err) {
     return true;
 }
 
+QString Database::getSavepointName(int depth) const {
+    return QString("sp_level_%1").arg(depth);
+}
+
 bool Database::begin() {
+    QMutexLocker lock(&dbMutex_);
     if (!db_) return false;
+    
     if (txnDepth_ == 0) {
+        // PHASE 1: Begin outermost transaction
         if (sqlite3_exec(db_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
             return false;
+        DS_DEBUG("Transaction", "BEGIN transaction");
+    } else {
+        // PHASE 1: Create SAVEPOINT for nested transaction (fix for nested txn bug)
+        QString savepoint = getSavepointName(txnDepth_);
+        QString sql = QString("SAVEPOINT %1;").arg(savepoint);
+        if (sqlite3_exec(db_, sql.toUtf8().constData(), nullptr, nullptr, nullptr) != SQLITE_OK)
+            return false;
+        DS_DEBUG("Transaction", QString("SAVEPOINT %1").arg(savepoint));
     }
     ++txnDepth_;
     return true;
 }
 
 bool Database::commit() {
+    QMutexLocker lock(&dbMutex_);
     if (!db_ || txnDepth_ == 0) return false;
     --txnDepth_;
     if (txnDepth_ == 0) {
-        return sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+        // PHASE 1: Commit outermost transaction
+        bool ok = sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+        if (ok) DS_DEBUG("Transaction", "COMMIT transaction");
+        return ok;
+    } else {
+        // PHASE 1: Release SAVEPOINT
+        QString savepoint = getSavepointName(txnDepth_);
+        QString sql = QString("RELEASE SAVEPOINT %1;").arg(savepoint);
+        bool ok = sqlite3_exec(db_, sql.toUtf8().constData(), nullptr, nullptr, nullptr) == SQLITE_OK;
+        if (ok) DS_DEBUG("Transaction", QString("RELEASE SAVEPOINT %1").arg(savepoint));
+        return ok;
     }
-    return true;
 }
 
 bool Database::rollback() {
+    QMutexLocker lock(&dbMutex_);
     if (!db_ || txnDepth_ == 0) return false;
+    
     if (txnDepth_ == 1) {
+        // PHASE 1: Rollback entire transaction
         sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+        DS_DEBUG("Transaction", "ROLLBACK transaction");
+    } else {
+        // PHASE 1: Rollback to SAVEPOINT
+        QString savepoint = getSavepointName(txnDepth_ - 1);
+        QString sql = QString("ROLLBACK TO SAVEPOINT %1;").arg(savepoint);
+        sqlite3_exec(db_, sql.toUtf8().constData(), nullptr, nullptr, nullptr);
+        DS_DEBUG("Transaction", QString("ROLLBACK TO SAVEPOINT %1").arg(savepoint));
     }
-    txnDepth_ = 0;
+    --txnDepth_;
     return true;
 }
 
