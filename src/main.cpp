@@ -7,8 +7,8 @@
 #include "core/Logger.h"
 #include "core/SehTranslator.h"
 #include "core/CrashHandler.h"
-#include "core/SystemProfile.h"      // PHASE 1: Auto-detect system
-#include "core/MemoryMonitor.h"      // PHASE 1: Memory monitoring
+#include "core/SystemProfile.h"
+#include "core/TierConfig.h"
 #include "database/Database.h"
 #include "database/Schema.h"
 #include "ui/MainWindow.h"
@@ -37,12 +37,13 @@ int main(int argc, char* argv[]) {
     DocuSearch::installCrashHandler();
     DocuSearch::installSehTranslator();
 
-    // PHASE 1: Detect system profile and apply tier-specific settings
-    SystemProfile profile = SystemProfiler::detect();
+    // Detect system profile (constructs the process-wide singleton on
+    // this thread so Database::open on the splash worker can read it
+    // without a first-call race).
+    const SystemProfile profile = SystemProfiler::instance()->profile();
     DS_INFO("App", QString("Detected system: %1").arg(SystemProfiler::tierName(profile.tier)));
 
-    // PHASE 1: Initialize thread pools based on system tier
-    TierConfig tierCfg = TierConfigManager::getConfig(profile.tier);
+    const TierConfig tierCfg = TierConfigManager::getConfig(profile.tier);
     const int maxThreads = tierCfg.extractionWorkers + 2;
     QThreadPool::globalInstance()->setMaxThreadCount(maxThreads);
     QThreadPool::globalInstance()->setStackSize(tierCfg.threadStackSize * 1024);
@@ -84,6 +85,13 @@ int main(int argc, char* argv[]) {
         DocuSearch::LogLevel::Debug,
 #endif
         /*mirrorToStderr=*/false);
+
+    DS_INFO("App", QString("Detected system: %1 | %2 GB RAM | %3 cores%4")
+                      .arg(SystemProfiler::tierName(profile.tier))
+                      .arg(profile.totalRAM / (1LL << 30))
+                      .arg(profile.cpuCores)
+                      .arg(profile.hasSSD ? QStringLiteral(" | SSD")
+                                          : QStringLiteral(" | HDD")));
 
     app.setWindowIcon(QIcon(":/icons/DocuSearch-256.png"));
     QApplication::setStyle(QStyleFactory::create("Fusion"));

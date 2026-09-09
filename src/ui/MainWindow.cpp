@@ -35,9 +35,15 @@
 #include "../preview/FilePreviewPane.h"
 #include "../embeddings/BgeService.h"
 #include "../core/ExtractionController.h"
+#include "../core/MemoryMonitor.h"
+#include "../core/GracefulDegradation.h"
+#include "../core/SystemProfile.h"
+#include "../core/TierConfig.h"
 #include "../embeddings/EmbeddingController.h"
 #include "../search/HybridSearchEngine.h"
 #include "../settings/SettingsManager.h"
+#include "FirstLaunchTierDetection.h"
+#include "SystemHealthDashboard.h"
 
 #ifdef DOCUSEARCH_HAS_PDFIUM
 #  include "../pdf/PdfiumDocument.h"
@@ -346,15 +352,16 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     // pool runs its own per-worker WindowsOcrEngine, renders PDF pages
     // via PDFium (v1.7.2 pool support + v1.7.6 auto-orientation) and
     // emits taskCompleted; onOcrTaskCompleted() writes the results.
-    // v1.7.11: pool size comes from Settings → Performance → "Worker
-    // threads" (was hardcoded 2, making the spinbox a placebo). Clamped
-    // to 1..4: each worker spawns its own ocr helper process + PDFium
-    // rasterizer, and >4 gives no throughput win on consumer disks.
-    // Changing it takes effect on the next launch (the pool's thread
-    // count is fixed at construction; throttle settings stay live via
-    // setAppSettings).
+    // v1.7.22: pool size is the MIN of Settings → Performance →
+    // "Worker threads" and the detected tier's ocrWorkers (LowEnd=1,
+    // Mid=2, HighEnd=4). Clamped to 1..4: each worker spawns its own
+    // ocr helper process + PDFium rasterizer. Changing it takes effect
+    // on the next launch (the pool's thread count is fixed at
+    // construction; throttle settings stay live via setAppSettings).
+    const int tierOcr = qMax(1, TierConfigManager::getConfig(
+        SystemProfiler::instance()->tier()).ocrWorkers);
     ocrPool_ = std::make_unique<OcrWorkerPool>(
-        std::clamp(settings_.maxWorkerThreads, 1, 4), this);
+        std::clamp(qMin(settings_.maxWorkerThreads, tierOcr), 1, 4), this);
     ocrPool_->setAppSettings(settings_);
     connect(ocrPool_.get(), &OcrWorkerPool::taskCompleted,
             this, &MainWindow::onOcrTaskCompleted);
@@ -403,6 +410,33 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 
     embeddingController_ = std::make_unique<EmbeddingController>(this);
     embeddingController_->setDatabase(db_.get());
+
+    // v1.7.22: live RAM/CPU monitor + graceful degradation. Semantic
+    // search stays on; OCR/extraction slow or pause under pressure.
+    memoryMonitor_ = std::make_unique<MemoryMonitor>(this);
+    connect(memoryMonitor_.get(), &MemoryMonitor::pressureWarning,
+            this, &MainWindow::onMemoryPressureWarning);
+    connect(memoryMonitor_.get(), &MemoryMonitor::pressureCritical,
+            this, &MainWindow::onMemoryPressureCritical);
+    connect(memoryMonitor_.get(), &MemoryMonitor::pressureRecovered,
+            this, &MainWindow::onMemoryPressureRecovered);
+    memoryMonitor_->startMonitoring();
+
+    degradation_ = std::make_unique<GracefulDegradation>(this);
+    degradation_->setOcrPool(ocrPool_.get());
+    degradation_->setExtractionController(extractionController_.get());
+    degradation_->setEmbeddingController(embeddingController_.get());
+    connect(degradation_.get(), &GracefulDegradation::degradationLevelChanged,
+            this, [this](DegradationLevel lvl) {
+        if (memoryStatusLbl_) {
+            memoryStatusLbl_->setText(
+                QStringLiteral("RAM: %1").arg(GracefulDegradation::levelName(lvl)));
+        }
+        statusBar()->showMessage(
+            QStringLiteral("System pressure: %1")
+                .arg(GracefulDegradation::levelName(lvl)), 4000);
+    });
+    degradation_->startMonitoring();
 
     // v1.7.10 FIRST-RUN EXTRACT-ALL: until the very first full extraction
     // drain completes (firstRunDone), extraction sessions run 200 files
@@ -718,7 +752,8 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
         const bool wiringOk =
             db_ && repo_ && search_ && ocrPool_ && watcher_ &&
             extractionController_ && extractionController_->verifyWiring() &&
-            embeddingController_ && embeddingController_->verifyWiring();
+            embeddingController_ && embeddingController_->verifyWiring() &&
+            memoryMonitor_ && degradation_;
         if (!wiringOk)
             DS_WARN("Startup", "WIRING AUDIT FAILED — a declared subsystem "
                                "was never constructed (see warnings above).");
@@ -748,6 +783,11 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 }
 
 MainWindow::~MainWindow() {
+    // Stop monitors first so they cannot call into controllers that
+    // we are about to shut down. Member dtor order already kills
+    // degradation_ before the controllers; this just makes it explicit.
+    if (degradation_) degradation_->stopMonitoring();
+    if (memoryMonitor_) memoryMonitor_->stopMonitoring();
     if (autoScanTimer_) autoScanTimer_->stop();
     // v1.7.21: the pipelines live in the controllers — invalidate the
     // extraction session FIRST (a result landing during teardown must
@@ -1362,6 +1402,12 @@ void MainWindow::buildStatusBar() {
         "Setup required — no Windows OCR language pack installed; click for steps.");
     sb->addPermanentWidget(ocrStatusWidget_);
 
+    memoryStatusLbl_ = new QLabel(QStringLiteral("RAM: Healthy"), sb);
+    memoryStatusLbl_->setObjectName(QStringLiteral("memoryStatus"));
+    memoryStatusLbl_->setToolTip(
+        QStringLiteral("Live memory-pressure state. Click Stats for the full health dashboard."));
+    sb->addPermanentWidget(memoryStatusLbl_);
+
     // Semantic search toggle — custom slider pill (matches Pastel Pop design).
     // Layout:  [sparkles-icon] AI  [====switch====]  ON/OFF
     // Disabled by default — enabled after BGE service becomes ready.
@@ -1790,6 +1836,7 @@ void MainWindow::onSearch(const QString& query) {
         // discards results of superseded queries.
         const quint64 gen = ++searchGen_;
         QElapsedTimer t; t.start();
+        lastSearchLatencyMs_ = 0;
 
         // ---- Stage 1: keyword (FTS5 BM25) results, RIGHT NOW ----
         auto hits = search_->search(query, 50);  // limit to top 50 results
@@ -1842,13 +1889,14 @@ void MainWindow::onSearch(const QString& query) {
         }
 
         if (!wantSemantic) {
+            lastSearchLatencyMs_ = t.elapsed();
             // Keyword-only search (existing behavior).
             resultsPane_->setAiSummary(QString());
             statusBar()->showMessage(
                 QString("%1 result%2 in %3 ms")
                     .arg(hits.size())
                     .arg(hits.size() == 1 ? "" : "s")
-                    .arg(t.elapsed()));
+                    .arg(lastSearchLatencyMs_));
         } else {
             // ---- Stage 2: semantic scan on the global thread pool. The
             // user is already looking at keyword results; the AI merge
@@ -1962,6 +2010,7 @@ void MainWindow::applySemanticResults(const QString& query,
     // result. (Stage 1 of onSearch clears dupKeys_; only a duplicates run
     // started AFTER that can have re-populated it.)
     if (!dupKeys_.isEmpty()) return;
+    lastSearchLatencyMs_ = totalMs;
     QList<SearchHit> merged;
     merged.reserve(static_cast<int>(hybridResults.size()));
     for (const auto& hr : hybridResults) {
@@ -2388,6 +2437,17 @@ void MainWindow::showWelcomeDialog() {
     v->setContentsMargins(24, 22, 24, 18);
     v->setSpacing(8);
 
+    const SystemProfile profile = SystemProfiler::instance()->profile();
+    auto* tierLine = new QLabel(
+        QStringLiteral("Detected: %1 · %2 GB RAM · %3 cores%4")
+            .arg(SystemProfiler::tierName(profile.tier))
+            .arg(profile.totalRAM / (1LL << 30))
+            .arg(profile.cpuCores)
+            .arg(profile.hasSSD ? QStringLiteral(" · SSD") : QStringLiteral(" · HDD")),
+        &dlg);
+    tierLine->setWordWrap(true);
+    v->addWidget(tierLine);
+
     auto* head = new QLabel(QStringLiteral("Welcome to DocuSearch"), &dlg);
     head->setStyleSheet(QStringLiteral(
         "font-size:19px; font-weight:800; background:transparent; color:%1;")
@@ -2479,6 +2539,97 @@ void MainWindow::showWelcomeDialog() {
     Config::instance().save(settings_);
 
     if (addChosen) onAddFolder();   // straight into the folder picker
+}
+
+void MainWindow::onMemoryPressureWarning() {
+    if (memoryStatusLbl_)
+        memoryStatusLbl_->setText(QStringLiteral("RAM: Warning"));
+    statusBar()->showMessage(
+        QStringLiteral("Memory is tight — extraction slowed. Search stays live."), 5000);
+}
+
+void MainWindow::onMemoryPressureCritical() {
+    if (memoryStatusLbl_)
+        memoryStatusLbl_->setText(QStringLiteral("RAM: Critical"));
+    statusBar()->showMessage(
+        QStringLiteral("Low memory — OCR paused. Keyword + AI search still work."), 6000);
+}
+
+void MainWindow::onMemoryPressureRecovered() {
+    if (memoryStatusLbl_)
+        memoryStatusLbl_->setText(QStringLiteral("RAM: Healthy"));
+    statusBar()->showMessage(QStringLiteral("Memory recovered — background work resumed."), 4000);
+    if (embeddingController_) embeddingController_->ensureBackfill();
+}
+
+HealthMetrics MainWindow::collectHealthMetrics() const {
+    HealthMetrics m;
+    if (memoryMonitor_) {
+        m.ramFreePercent = memoryMonitor_->percentageFree();
+        m.cpuUsagePercent = memoryMonitor_->cpuPercent();
+    }
+    if (extractionController_)
+        m.indexingSpeedFilesPerMin = extractionController_->filesPerMinute();
+    m.searchLatencyMs = static_cast<int>(lastSearchLatencyMs_);
+    if (repo_) {
+        qint64 extracted = -1, embedded = -1;
+        repo_->countExtractedAndEmbedded(extracted, embedded);
+        if (extracted > 0 && embedded >= 0)
+            m.semanticCoveragePercent = static_cast<int>((embedded * 100) / extracted);
+    }
+    if (degradation_)
+        m.currentDegradationLevel = GracefulDegradation::levelName(degradation_->level());
+    else
+        m.currentDegradationLevel = QStringLiteral("Healthy");
+    m.tierName = SystemProfiler::tierName(SystemProfiler::instance()->tier());
+    return m;
+}
+
+void MainWindow::showStatsAndHealth() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Index statistics & system health"));
+    dlg.setMinimumWidth(480);
+    auto* v = new QVBoxLayout(&dlg);
+
+    qint64 dbBytes = 0;
+    {
+        const QString base = Config::instance().dbPath();
+        for (const QString& p : { base, base + QStringLiteral("-wal"),
+                                  base + QStringLiteral("-shm") }) {
+            QFile f(p);
+            if (f.exists()) dbBytes += f.size();
+        }
+    }
+    auto* summary = new QLabel(
+        QStringLiteral("Total files: %1\nDatabase size: %2")
+            .arg(repo_ ? repo_->totalFiles() : 0)
+            .arg(Utils::formatFileSize(dbBytes)),
+        &dlg);
+    summary->setWordWrap(true);
+    v->addWidget(summary);
+
+    auto* dash = new SystemHealthDashboard(&dlg);
+    dash->setMetricsProvider([this]() { return collectHealthMetrics(); });
+    dash->updateMetrics(collectHealthMetrics());
+    dash->startMonitoring();
+    v->addWidget(dash);
+
+    auto* row = new QHBoxLayout();
+    row->addStretch();
+    auto* profileBtn = new QPushButton(QStringLiteral("System profile…"), &dlg);
+    auto* closeBtn = new QPushButton(QStringLiteral("Close"), &dlg);
+    closeBtn->setDefault(true);
+    row->addWidget(profileBtn);
+    row->addWidget(closeBtn);
+    v->addLayout(row);
+
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    connect(profileBtn, &QPushButton::clicked, &dlg, [this, &dlg]() {
+        FirstLaunchTierDetection wizard(SystemProfiler::instance()->profile(), &dlg);
+        wizard.exec();
+    });
+
+    dlg.exec();
 }
 
 void MainWindow::onAddFolder() {
@@ -2643,25 +2794,7 @@ void MainWindow::onSidebarClicked(int row) {
         // slot through currentRowChanged and row 0 is "Duplicates", so
         // every Help click also launched the duplicate finder.
     } else if (page == "Stats") {
-        QMessageBox::information(this, "Index Statistics",
-            QString("Total files: %1\nDatabase size: %2")
-                .arg(repo_ ? repo_->totalFiles() : 0)
-                .arg([&]{
-                    // v1.7.11: include the -wal/-shm sidecars — mid-scan
-                    // the WAL can be hundreds of MB, and reporting only
-                    // the main .db badly under-stated real disk usage.
-                    const QString base = Config::instance().dbPath();
-                    qint64 total = 0;
-                    const QStringList parts{
-                        base,
-                        base + QStringLiteral("-wal"),
-                        base + QStringLiteral("-shm") };
-                    for (const QString& p : parts) {
-                        QFile f(p);
-                        if (f.exists()) total += f.size();
-                    }
-                    return Utils::formatFileSize(total);
-                }()));
+        showStatsAndHealth();
     } else if (page == "Duplicates") {
         onDetectDuplicates();
     }
@@ -5666,3 +5799,10 @@ void MainWindow::onDeleteDuplicateCopies() {
 }
 
 } // namespace DocuSearch
+amespace DocuSearch
+/ so the reuse path makes this fast.
+    onDetectDuplicates();
+}
+
+} // namespace DocuSearch
+amespace DocuSearch

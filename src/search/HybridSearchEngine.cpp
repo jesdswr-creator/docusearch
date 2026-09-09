@@ -3,8 +3,11 @@
 // ============================================================
 
 #include "HybridSearchEngine.h"
+#include "SemanticSearchThrottle.h"
 #include "../embeddings/BgeService.h"
 #include "../core/Logger.h"
+#include "../core/SystemProfile.h"
+#include "../core/MemoryMonitor.h"
 
 #include <QFileInfo>
 #include <algorithm>
@@ -115,7 +118,19 @@ std::vector<HybridResult> HybridSearchEngine::search(
         //    finds documents the keyword search missed entirely).
         //    v1.7.19: `cancel` flows down — a superseded query's scan
         //    aborts within one batch instead of hogging the pipeline.
-        const int semanticBudget = std::max(40, m_topK * 2);
+        //    v1.7.22: budget is tier- and RAM-aware. Semantic search
+        //    stays ON on low-end machines; we just scan fewer chunks.
+        int percentFree = 100;
+        if (auto* mon = MemoryMonitor::instance())
+            percentFree = mon->percentageFree();
+        const SystemTier tier = SystemProfiler::instance()
+            ? SystemProfiler::instance()->tier()
+            : SystemTier::MidRange;
+        const SemanticConfig throttle =
+            SemanticSearchThrottle::getAdaptiveConfig(tier, percentFree);
+        const int semanticBudget = std::max(20,
+            std::min(std::max(40, m_topK * 2), throttle.chunkBatchSize));
+        lastSemanticBudget_ = semanticBudget;
         std::vector<SemanticHit> semanticHits =
             m_bgeService->searchChunksAll(queryText, semanticBudget, m_threshold, cancel);
         if (cancel && cancel->load()) {

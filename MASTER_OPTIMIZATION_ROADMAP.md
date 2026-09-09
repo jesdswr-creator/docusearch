@@ -1,5 +1,11 @@
 # DocuSearch Master Optimization Roadmap: 10/10 Across All System Tiers
 
+> **v1.7.22 status:** the runtime pieces of this document are compiled,
+> linked, and wired. Semantic search is always-on (throttled, never
+> disabled). `SystemProfiler::detect()` no longer recurses on startup.
+> Graceful degradation actually pauses OCR / extraction. Stats hosts the
+> health dashboard. Tests cover the new modules and fail the CI build.
+
 ## Goal
 **Perfect performance, stability, and integrity across the entire spectrum**:
 - 2GB–4GB RAM (Low-End): Responsive, efficient, no crashes

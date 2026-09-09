@@ -20,6 +20,10 @@ set(TEST_SOURCES
     ../src/core/StringUtils.cpp
     ../src/core/TextQuality.cpp
     ../src/core/FileUtils.cpp
+    ../src/core/SystemProfile.cpp
+    ../src/core/TierConfig.cpp
+    ../src/core/DuplicateExtractionGuard.cpp
+    ../src/search/SemanticSearchThrottle.cpp
     ../src/database/Database.cpp
     ../src/database/Schema.cpp
     ../src/database/FileRepository.cpp
@@ -93,6 +97,8 @@ target_sources(tst_Wiring PRIVATE
     ../src/core/ExtractionController.cpp
     ../src/embeddings/EmbeddingController.cpp
 )
+
+docusearch_add_test(tst_TierRuntime)
 target_link_libraries(tst_Wiring PRIVATE Qt6::Concurrent)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
@@ -127,13 +133,16 @@ endif()
 # ---- Extractor fuzz test (verifies SEH protection) --------------------
 # Generates random/malformed PDFs/DOCXs and verifies the extractor
 # catches every failure rather than crashing.
-if(MSVC AND DOCUSEARCH_ENABLE_POPPLER)
+if(MSVC AND DOCUSEARCH_HAS_PDFIUM)
     add_executable(tst_ExtractorFuzz tst_ExtractorFuzz.cpp
         ${CMAKE_SOURCE_DIR}/src/core/SehTranslator.cpp
         ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
         ${CMAKE_SOURCE_DIR}/src/core/Config.cpp
         ${CMAKE_SOURCE_DIR}/src/core/StringUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/core/FileUtils.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/SystemProfile.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/TierConfig.cpp
+        ${CMAKE_SOURCE_DIR}/src/pdf/PdfiumDocument.cpp
         ${CMAKE_SOURCE_DIR}/src/documents/TextExtractor.cpp
         ${CMAKE_SOURCE_DIR}/src/documents/PdfExtractor.cpp
         ${CMAKE_SOURCE_DIR}/src/documents/DocxExtractor.cpp
@@ -149,7 +158,8 @@ if(MSVC AND DOCUSEARCH_ENABLE_POPPLER)
     target_link_libraries(tst_ExtractorFuzz PRIVATE
         Qt6::Test
         Qt6::Core
-        Poppler::Lib
+        Qt6::Gui
+        Pdfium::Lib
         ZLIB::ZLIB
     )
     target_compile_definitions(tst_ExtractorFuzz PRIVATE
@@ -159,7 +169,7 @@ if(MSVC AND DOCUSEARCH_ENABLE_POPPLER)
         UNICODE
         _UNICODE
         _CRT_SECURE_NO_WARNINGS
-        DOCUSEARCH_HAS_POPPLER=1
+        DOCUSEARCH_HAS_PDFIUM=1
     )
     set_target_properties(tst_ExtractorFuzz PROPERTIES
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

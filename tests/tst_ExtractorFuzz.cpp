@@ -5,11 +5,11 @@
 // Generates random / malformed files and verifies that the
 // extractors DON'T CRASH. With the SEH translator installed
 // (see src/core/SehTranslator.h), even access violations inside
-// Poppler / zlib / minizip should be caught and reported as
+// PDFium / zlib / minizip should be caught and reported as
 // extraction failures rather than aborting the test process.
 //
 // This test is the regression guard for the "extract text crashes
-// the app" bug — if Poppler ever regresses on a malformed PDF,
+// the app" bug — if PDFium ever regresses on a malformed PDF,
 // this test will catch it.
 // ============================================================
 

@@ -53,8 +53,10 @@ ExtractionController::ExtractionController(QObject* parent)
     connect(m_watcher, &QFutureWatcher<ExtractionResult>::finished,
             this, [this]() {
         m_inFlight = false;
-        if (m_dbResetting) return;
         const auto state = m_session;
+        const qint64 fid = state ? state->current.fileId : 0;
+        if (fid > 0) m_dupGuard.dequeue(fid);
+        if (m_dbResetting) return;
         // Session cancelled or replaced while this file was in
         // flight — drop the result, touch nothing.
         if (!state || state->sessionGen != m_sessionGen) return;
@@ -178,6 +180,7 @@ ExtractionController::ExtractionController(QObject* parent)
         // v1.7.4: refresh the "N indexed" badge after EVERY file so the
         // counter visibly climbs while extraction runs.
         emit statsDirty();
+        m_filesCompleted.fetch_add(1);
         if (m_session) ++m_session->idx;
     });
 }
@@ -222,6 +225,20 @@ void ExtractionController::shutdownForTeardown()
 // Session control
 // ============================================================
 
+void ExtractionController::setTickIntervalMs(int ms)
+{
+    m_tickIntervalMs = qMax(20, ms);
+    if (m_timer) m_timer->setInterval(m_tickIntervalMs);
+}
+
+int ExtractionController::filesPerMinute() const
+{
+    if (m_sessionStartedMs <= 0) return 0;
+    const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_sessionStartedMs;
+    if (elapsed < 1000) return 0;
+    return static_cast<int>((static_cast<qint64>(m_filesCompleted.load()) * 60000) / elapsed);
+}
+
 void ExtractionController::invalidateSession()
 {
     ++m_sessionGen;
@@ -230,6 +247,7 @@ void ExtractionController::invalidateSession()
     m_inFlight = false;
     m_ocrExpected = 0;
     m_ocrReceived = 0;
+    m_dupGuard.clear();
     if (m_timer) {
         m_timer->stop();
         m_timer->deleteLater();
@@ -280,6 +298,8 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
     m_running.store(true);
     m_cancelFlag.store(false);
     m_dbResetting = false;
+    m_sessionStartedMs = QDateTime::currentMSecsSinceEpoch();
+    m_filesCompleted.store(0);
     emit extractingChanged(true);
 
     const int total = todo.size();
@@ -347,6 +367,8 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
             if (m_timer) { m_timer->stop(); m_timer->deleteLater(); m_timer = nullptr; }
             return;
         }
+        // Memory-pressure pause: leave in-flight work alone, start nothing new.
+        if (m_paused.load()) return;
         // The previous file is still being extracted on the pool —
         // this tick is a no-op and simply fires again one interval
         // later. (The old busy-wait version re-entered here for every
@@ -508,6 +530,12 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
                             nullptr, nullptr, nullptr);
                     }
                     ++state->failed;
+                    ++state->idx;
+                    emit statsDirty();
+                    return;
+                }
+                if (!m_dupGuard.tryEnqueue(item.fileId)) {
+                    // Watcher (or a nested tick) already owns this file.
                     ++state->idx;
                     emit statsDirty();
                     return;
@@ -782,6 +810,7 @@ ExtractionController::gatherTodoItems(sqlite3* raw)
 bool ExtractionController::extractAndIndexFile(const QString& path)
 {
     if (!m_repo || !m_db) return false;
+    if (m_paused.load()) return false;
 
     // SAFETY: only files the injected settings gate admits (indexed
     // folders, excluded folders, excluded extensions). The file
@@ -809,11 +838,16 @@ bool ExtractionController::extractAndIndexFile(const QString& path)
     r.ocrStatus      = Constants::OcrStatus::kPending;
     m_repo->upsertFile(r);
 
+    FileRecord recForGuard;
+    if (!m_repo->getByPath(r.path, recForGuard)) return true;
+    if (!m_dupGuard.tryEnqueue(recForGuard.id)) return true;  // session already owns it
+
     // Extract text immediately for the new/changed file (single-file
     // extraction — fast and non-blocking enough for the main thread).
     if (fi.size() <= Constants::kMaxFilesizeToExtract) {
         try {
             if (!m_workerFn) {
+                m_dupGuard.dequeue(recForGuard.id);
                 DS_WARN("Watcher",
                     "No worker function wired — single-file extraction "
                     "pipeline was never connected (wiring bug).");
@@ -826,10 +860,16 @@ bool ExtractionController::extractAndIndexFile(const QString& path)
             }
 
             sqlite3* raw = m_db->raw();
-            if (!raw) return true;
+            if (!raw) {
+                m_dupGuard.dequeue(recForGuard.id);
+                return true;
+            }
 
             FileRecord rec;
-            if (!m_repo->getByPath(r.path, rec)) return true;  // row vanished
+            if (!m_repo->getByPath(r.path, rec)) {
+                m_dupGuard.dequeue(recForGuard.id);
+                return true;  // row vanished
+            }
             const qint64 fileId = rec.id;
 
             if (!extractedText.isEmpty()) {
@@ -914,6 +954,7 @@ bool ExtractionController::extractAndIndexFile(const QString& path)
             DS_INFO("Watcher", "Extraction failed for: " + path);
         }
     }
+    m_dupGuard.dequeue(recForGuard.id);
     return true;
 }
 

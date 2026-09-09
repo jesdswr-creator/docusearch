@@ -5,7 +5,6 @@
 #include "Config.h"
 #include "Constants.h"
 #include "TierConfig.h"
-#include "MemoryMonitor.h"
 #include "Logger.h"
 
 #include <QSettings>
@@ -28,7 +27,7 @@ Config::Config() : QObject(nullptr) {
         Constants::kOrgName, Constants::kAppName);
     
     // PHASE 1: Detect system profile on startup
-    m_systemProfile = SystemProfiler::detect();
+    m_systemProfile = SystemProfiler::instance()->profile();
     DS_INFO("Config", QString("Initialized for tier: %1").arg(SystemProfiler::tierName(m_systemProfile.tier)));
 }
 

@@ -4,7 +4,9 @@
 
 #include "GracefulDegradation.h"
 #include "Logger.h"
-#include <QTimer>
+#include "ExtractionController.h"
+#include "ocr/OcrWorkerPool.h"
+#include "embeddings/EmbeddingController.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>
@@ -16,6 +18,7 @@ GracefulDegradation::GracefulDegradation(QObject* parent)
     : QObject(parent)
 {
     checkTimer_ = new QTimer(this);
+    checkTimer_->setTimerType(Qt::CoarseTimer);
     connect(checkTimer_, &QTimer::timeout, this, &GracefulDegradation::onMemoryCheck);
 }
 
@@ -23,9 +26,19 @@ GracefulDegradation::~GracefulDegradation() {
     stopMonitoring();
 }
 
+QString GracefulDegradation::levelName(DegradationLevel level) {
+    switch (level) {
+        case DegradationLevel::Healthy:   return QStringLiteral("Healthy");
+        case DegradationLevel::Warning:   return QStringLiteral("Warning");
+        case DegradationLevel::Critical:  return QStringLiteral("Critical");
+        case DegradationLevel::Emergency: return QStringLiteral("Emergency");
+    }
+    return QStringLiteral("Unknown");
+}
+
 void GracefulDegradation::startMonitoring() {
-    checkTimer_->start(10000);  // Check every 10 seconds
-    onMemoryCheck();  // Initial check
+    checkTimer_->start(10000);
+    onMemoryCheck();
 }
 
 void GracefulDegradation::stopMonitoring() {
@@ -33,17 +46,16 @@ void GracefulDegradation::stopMonitoring() {
 }
 
 void GracefulDegradation::onMemoryCheck() {
+    int percentFree = 100;
 #ifdef Q_OS_WIN
     MEMORYSTATUSEX mem = {};
     mem.dwLength = sizeof(mem);
-    GlobalMemoryStatusEx(&mem);
-
-    qint64 free = mem.ullAvailPhys;
-    qint64 total = mem.ullTotalPhys;
-    int percentFree = (free * 100) / total;
+    if (GlobalMemoryStatusEx(&mem) && mem.ullTotalPhys > 0) {
+        percentFree = static_cast<int>((mem.ullAvailPhys * 100) / mem.ullTotalPhys);
+    }
+#endif
 
     DegradationLevel newLevel = DegradationLevel::Healthy;
-
     if (percentFree < 10) {
         newLevel = DegradationLevel::Emergency;
     } else if (percentFree < 25) {
@@ -52,62 +64,83 @@ void GracefulDegradation::onMemoryCheck() {
         newLevel = DegradationLevel::Warning;
     }
 
-    if (newLevel != currentLevel_) {
-        previousLevel_ = currentLevel_;
-        currentLevel_ = newLevel;
-        DS_WARN("Degradation",
-            QString("Memory pressure: %1% free → %2").arg(percentFree)
-                .arg(newLevel == DegradationLevel::Healthy ? "Healthy" :
-                     newLevel == DegradationLevel::Warning ? "Warning" :
-                     newLevel == DegradationLevel::Critical ? "Critical" : "Emergency"));
-        applyDegradation(newLevel);
-        emit degradationLevelChanged(newLevel);
-    }
-#endif
+    // Leave emergency only above 15%, critical only above 35%, so we
+    // don't flap on a noisy 24/26 reading.
+    if (currentLevel_ == DegradationLevel::Emergency && percentFree < 15)
+        newLevel = DegradationLevel::Emergency;
+    else if (currentLevel_ == DegradationLevel::Critical && percentFree < 35
+             && newLevel == DegradationLevel::Healthy)
+        newLevel = DegradationLevel::Warning;
+
+    if (newLevel == currentLevel_) return;
+
+    currentLevel_ = newLevel;
+    DS_WARN("Degradation",
+        QString("Memory pressure: %1% free → %2")
+            .arg(percentFree)
+            .arg(levelName(newLevel)));
+    applyDegradation(newLevel);
+    emit degradationLevelChanged(newLevel);
 }
 
 void GracefulDegradation::applyDegradation(DegradationLevel level) {
     switch (level) {
         case DegradationLevel::Healthy:
+            if (extractionCtrl_) {
+                extractionCtrl_->setPaused(false);
+                extractionCtrl_->setTickIntervalMs(healthyTickMs_);
+            }
+            if (ocrPool_ && ocrPausedByPressure_) {
+                ocrPool_->resume();
+            }
+            if (embeddingCtrl_) embeddingCtrl_->setPaused(false);
             if (indexingPausedByPressure_) {
                 indexingPausedByPressure_ = false;
                 emit indexingResumed();
-                DS_INFO("Degradation", "Resuming indexing — memory recovered");
             }
             if (ocrPausedByPressure_) {
                 ocrPausedByPressure_ = false;
                 emit ocrResumed();
-                DS_INFO("Degradation", "Resuming OCR — memory recovered");
             }
+            DS_INFO("Degradation", "Resumed background work — memory recovered");
             break;
 
         case DegradationLevel::Warning:
-            // Slow down indexing (increase pause between batches)
-            // But keep semantic search and OCR running
-            DS_WARN("Degradation", "Warning: Slowing down indexing");
+            // Slow the extraction tick; keep OCR + semantic search running.
+            if (extractionCtrl_) extractionCtrl_->setTickIntervalMs(500);
+            if (embeddingCtrl_) embeddingCtrl_->setPaused(false);
+            DS_WARN("Degradation", "Warning: slowing extraction (500 ms/file)");
             break;
 
         case DegradationLevel::Critical:
-            // Pause OCR, reduce thread count, but keep semantic search
-            if (!ocrPausedByPressure_) {
+            if (extractionCtrl_) {
+                extractionCtrl_->setPaused(false);
+                extractionCtrl_->setTickIntervalMs(1000);
+            }
+            if (ocrPool_ && !ocrPausedByPressure_) {
+                ocrPool_->pause();
                 ocrPausedByPressure_ = true;
                 emit ocrPaused();
-                DS_WARN("Degradation", "CRITICAL: Pausing OCR to free memory");
             }
+            // Semantic search stays on. Embedding backfill pauses so
+            // ONNX doesn't fight the user for RAM.
+            if (embeddingCtrl_) embeddingCtrl_->setPaused(true);
+            DS_WARN("Degradation", "CRITICAL: OCR paused, extraction slowed, embeddings paused");
             break;
 
         case DegradationLevel::Emergency:
-            // Pause everything except semantic search
-            if (!indexingPausedByPressure_) {
+            if (extractionCtrl_ && !indexingPausedByPressure_) {
+                extractionCtrl_->setPaused(true);
                 indexingPausedByPressure_ = true;
                 emit indexingPaused();
-                DS_WARN("Degradation", "EMERGENCY: Pausing indexing");
             }
-            if (!ocrPausedByPressure_) {
+            if (ocrPool_ && !ocrPausedByPressure_) {
+                ocrPool_->pause();
                 ocrPausedByPressure_ = true;
                 emit ocrPaused();
-                DS_WARN("Degradation", "EMERGENCY: Pausing OCR");
             }
+            if (embeddingCtrl_) embeddingCtrl_->setPaused(true);
+            DS_WARN("Degradation", "EMERGENCY: extraction + OCR paused (search still live)");
             break;
     }
 }

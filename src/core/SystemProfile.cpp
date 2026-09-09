@@ -3,58 +3,50 @@
 // ============================================================
 
 #include "SystemProfile.h"
-#include "Logger.h"
+
 #include <QThread>
 #include <QSysInfo>
 #include <QStorageInfo>
 
 #ifdef Q_OS_WIN
 #  include <windows.h>
-#  include <wmi.h>
-#  pragma comment(lib, "wbemuuid.lib")
+#  include <winioctl.h>
 #endif
 
 namespace DocuSearch {
-
-std::unique_ptr<SystemProfiler> SystemProfiler::m_instance;
 
 SystemProfiler::SystemProfiler() {
     m_profile = detect();
 }
 
 SystemProfiler* SystemProfiler::instance() {
-    if (!m_instance) {
-        m_instance = std::make_unique<SystemProfiler>();
-    }
-    return m_instance.get();
+    static SystemProfiler inst;
+    return &inst;
 }
 
 SystemProfile SystemProfiler::detect() {
     SystemProfile p;
-    
-    // ── RAM Detection ──
+
 #ifdef Q_OS_WIN
     MEMORYSTATUSEX memStatus = {};
     memStatus.dwLength = sizeof(memStatus);
-    GlobalMemoryStatusEx(&memStatus);
-    p.totalRAM = memStatus.ullTotalPhys;
-    p.freeRAM = memStatus.ullAvailPhys;
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        p.totalRAM = static_cast<qint64>(memStatus.ullTotalPhys);
+        p.freeRAM  = static_cast<qint64>(memStatus.ullAvailPhys);
+    }
 #else
-    // Fallback for non-Windows
-    p.totalRAM = 8 * (1LL << 30);  // 8GB default
-    p.freeRAM = 4 * (1LL << 30);   // 4GB default
+    p.totalRAM = 8LL * (1LL << 30);
+    p.freeRAM  = 4LL * (1LL << 30);
 #endif
-    
-    // ── Tier Classification ──
-    if (p.totalRAM < 6LL * (1LL << 30)) {  // < 6GB
+
+    if (p.totalRAM > 0 && p.totalRAM < 6LL * (1LL << 30)) {
         p.tier = SystemTier::LowEnd;
-    } else if (p.totalRAM < 32LL * (1LL << 30)) {  // < 32GB
+    } else if (p.totalRAM < 32LL * (1LL << 30)) {
         p.tier = SystemTier::MidRange;
     } else {
         p.tier = SystemTier::HighEnd;
     }
-    
-    // ── CPU Detection ──
+
     p.cpuCores = QThread::idealThreadCount();
     if (p.cpuCores <= 1) {
         p.cpu = CPUProfile::SingleCore;
@@ -65,83 +57,98 @@ SystemProfile SystemProfiler::detect() {
     } else {
         p.cpu = CPUProfile::OctoCore;
     }
-    
-    // ── SSD Detection ──
-    p.hasSSD = instance()->detectSSD();
-    
-    // ── CPU Frequency ──
-    p.cpuFreq = instance()->detectCPUFrequency();
-    
-    // ── OS Version ──
+
+    p.hasSSD  = detectSSD();
+    p.cpuFreq = detectCPUFrequency();
     p.osVersion = QSysInfo::prettyProductName();
-    
-    // ── Network Path Check ──
-    p.isNetworkPath = false;  // Set in Database::open() per path
-    
-    DS_INFO("SystemProfiler",
-        QString("Detected: %1 | %2 GB RAM (free: %3 GB) | %4 cores @ %5 GHz | %6 | %7")
-            .arg(tierName(p.tier))
-            .arg(p.totalRAM / (1LL << 30))
-            .arg(p.freeRAM / (1LL << 30))
-            .arg(p.cpuCores)
-            .arg(p.cpuFreq, 0, 'f', 1)
-            .arg(p.hasSSD ? "SSD" : "HDD")
-            .arg(p.osVersion));
-    
+    p.isNetworkPath = false;
+
+    // detect() is a pure snapshot and is called before QApplication /
+    // Logger::init (main.cpp). Do not log here.
+
     return p;
+}
+
+void SystemProfiler::refreshFreeRAM() {
+#ifdef Q_OS_WIN
+    MEMORYSTATUSEX memStatus = {};
+    memStatus.dwLength = sizeof(memStatus);
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        m_profile.freeRAM = static_cast<qint64>(memStatus.ullAvailPhys);
+        m_profile.totalRAM = static_cast<qint64>(memStatus.ullTotalPhys);
+    }
+#endif
 }
 
 bool SystemProfiler::detectSSD() {
 #ifdef Q_OS_WIN
-    // Simple heuristic: check Windows registry for disk type
-    // HKLM\SYSTEM\CurrentControlSet\Services\Disk\Enum -> presence of SSD indicators
-    // For now, return true if C: is not a network path
-    QStorageInfo storage("C:/");
-    return storage.isValid() && storage.device() != "";
+    // Prefer the seek-penalty property on the system volume. FILE_READ_ATTRIBUTES
+    // is enough on most consumer installs; if it fails we fall back to "assume SSD"
+    // (the safer default for cache/thread sizing — over-throttling an SSD is worse
+    // than slightly over-provisioning an HDD).
+    HANDLE h = CreateFileW(L"\\\\.\\C:", FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        STORAGE_PROPERTY_QUERY query = {};
+        query.PropertyId = StorageDeviceSeekPenaltyProperty;
+        query.QueryType  = PropertyStandardQuery;
+        DEVICE_SEEK_PENALTY_DESCRIPTOR desc = {};
+        DWORD returned = 0;
+        const BOOL ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY,
+                                        &query, sizeof(query),
+                                        &desc, sizeof(desc),
+                                        &returned, nullptr);
+        CloseHandle(h);
+        if (ok && returned >= sizeof(desc)) {
+            return desc.IncursSeekPenalty == FALSE;
+        }
+    }
+
+    WCHAR root[] = L"C:\\";
+    const UINT type = GetDriveTypeW(root);
+    if (type == DRIVE_REMOTE || type == DRIVE_CDROM) return false;
+    return true;
 #else
-    return false;  // Assume HDD on non-Windows
+    return true;
 #endif
 }
 
 float SystemProfiler::detectCPUFrequency() {
 #ifdef Q_OS_WIN
-    // Read from registry: HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0
-    // ~MHz value
-    HKEY hKey;
+    HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-        L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
-        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        
+                      L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                      0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         DWORD mhz = 0;
         DWORD size = sizeof(mhz);
-        if (RegQueryValueExW(hKey, L"~MHz", nullptr, nullptr,
-            (LPBYTE)&mhz, &size) == ERROR_SUCCESS) {
-            RegCloseKey(hKey);
-            return mhz / 1000.0f;
-        }
+        const LONG rc = RegQueryValueExW(hKey, L"~MHz", nullptr, nullptr,
+                                         reinterpret_cast<LPBYTE>(&mhz), &size);
         RegCloseKey(hKey);
+        if (rc == ERROR_SUCCESS && mhz > 0)
+            return mhz / 1000.0f;
     }
 #endif
-    return 2.0f;  // Default fallback
+    return 0.0f;
 }
 
 QString SystemProfiler::tierName(SystemTier t) {
     switch (t) {
-        case SystemTier::LowEnd: return "LowEnd (2–4 GB)";
-        case SystemTier::MidRange: return "MidRange (8–16 GB)";
-        case SystemTier::HighEnd: return "HighEnd (32GB+)";
+        case SystemTier::LowEnd:   return QStringLiteral("LowEnd (2–4 GB)");
+        case SystemTier::MidRange: return QStringLiteral("MidRange (8–16 GB)");
+        case SystemTier::HighEnd:  return QStringLiteral("HighEnd (32GB+)");
     }
-    return "Unknown";
+    return QStringLiteral("Unknown");
 }
 
 QString SystemProfiler::cpuProfileName(CPUProfile c) {
     switch (c) {
-        case CPUProfile::SingleCore: return "Single-Core";
-        case CPUProfile::DualCore: return "Dual-Core";
-        case CPUProfile::QuadCore: return "Quad-Core";
-        case CPUProfile::OctoCore: return "8+ Core";
+        case CPUProfile::SingleCore: return QStringLiteral("Single-Core");
+        case CPUProfile::DualCore:   return QStringLiteral("Dual-Core");
+        case CPUProfile::QuadCore:   return QStringLiteral("Quad-Core");
+        case CPUProfile::OctoCore:   return QStringLiteral("8+ Core");
     }
-    return "Unknown";
+    return QStringLiteral("Unknown");
 }
 
 } // namespace DocuSearch

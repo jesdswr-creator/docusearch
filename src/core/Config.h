@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <memory>
 #include "../core/Types.h"
 #include "SystemProfile.h"
 

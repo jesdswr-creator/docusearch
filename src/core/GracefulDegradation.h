@@ -1,12 +1,11 @@
 #pragma once
 
 // ============================================================
-// GracefulDegradation.h - Smooth degradation under memory pressure
+// GracefulDegradation.h - Slow down under memory pressure
 // ============================================================
-// When RAM < 50%: Slow indexing, reduce thread count
-// When RAM < 25%: Pause OCR, disable thumbnails, clear caches
-// When RAM < 10%: Pause all background work
-// Always: Semantic search continues (throttled, not disabled)
+// Semantic search is NEVER disabled — only throttled (smaller
+// batches, serial queries). OCR / extraction pause only at
+// Critical / Emergency so the UI and keyword search stay alive.
 // ============================================================
 
 #include <QObject>
@@ -31,19 +30,22 @@ class GracefulDegradation : public QObject {
 
 public:
     explicit GracefulDegradation(QObject* parent = nullptr);
-    ~GracefulDegradation();
+    ~GracefulDegradation() override;
 
-    // Set the subsystems to control
     void setOcrPool(OcrWorkerPool* pool) { ocrPool_ = pool; }
     void setExtractionController(ExtractionController* ctrl) { extractionCtrl_ = ctrl; }
     void setEmbeddingController(EmbeddingController* ctrl) { embeddingCtrl_ = ctrl; }
 
-    // Get current degradation level
     DegradationLevel level() const { return currentLevel_; }
     bool isPaused() const { return currentLevel_ == DegradationLevel::Emergency; }
-    bool isWarning() const { return currentLevel_ >= DegradationLevel::Warning; }
+    bool isWarning() const {
+        // enum class has no operator>= on MSVC; compare the underlying values.
+        return static_cast<int>(currentLevel_)
+            >= static_cast<int>(DegradationLevel::Warning);
+    }
 
-    // Start/stop monitoring
+    static QString levelName(DegradationLevel level);
+
     void startMonitoring();
     void stopMonitoring();
 
@@ -56,12 +58,14 @@ signals:
 
 private slots:
     void onMemoryCheck();
-    void applyDegradation(DegradationLevel level);
 
 private:
+    void applyDegradation(DegradationLevel level);
+
     QTimer* checkTimer_ = nullptr;
     DegradationLevel currentLevel_ = DegradationLevel::Healthy;
-    DegradationLevel previousLevel_ = DegradationLevel::Healthy;
+    int healthyTickMs_ = 200;
+
     std::atomic<bool> indexingPausedByPressure_{false};
     std::atomic<bool> ocrPausedByPressure_{false};
 

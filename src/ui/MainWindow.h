@@ -16,6 +16,7 @@
 
 #include "../core/Types.h"
 #include "../search/HybridSearchEngine.h"
+#include "SystemHealthDashboard.h"
 
 class QSplitter;
 class QMenu;
@@ -38,7 +39,8 @@ class SearchEngine;
 class OcrWorkerPool;
 struct ExtractionResult;
 class FileWatcher;
-class MemoryMonitor;  // PHASE 1: Memory pressure monitoring
+class MemoryMonitor;
+class GracefulDegradation;
 
 class SearchBar;
 class ResultsPane;
@@ -120,6 +122,8 @@ private slots:
     int purgeNonIndexableRows();
     void removeAndRebuildDatabase();
     void showWelcomeDialog();
+    void showStatsAndHealth();
+    HealthMetrics collectHealthMetrics() const;
 
 private:
     void buildTitleBar();
@@ -154,7 +158,9 @@ public:
     std::unique_ptr<FileWatcher>    watcher_;
     std::unique_ptr<ExtractionController> extractionController_;
     std::unique_ptr<EmbeddingController>  embeddingController_;
-    std::unique_ptr<MemoryMonitor>  memoryMonitor_;  // PHASE 1: Monitor RAM pressure
+    std::unique_ptr<MemoryMonitor>  memoryMonitor_;
+    std::unique_ptr<GracefulDegradation> degradation_;
+    qint64 lastSearchLatencyMs_ = 0;
     
     QHash<QString, qint64> fileEventDebounce_;
     QTimer* fileEventDebounceTimer_ = nullptr;

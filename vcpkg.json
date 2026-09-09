@@ -1,6 +1,6 @@
 {
   "name": "docusearch",
-  "version-string": "1.0.0",
+  "version-string": "1.7.22",
   "description": "Offline Intelligent Document Search & OCR System for Windows",
   "dependencies": [
     {

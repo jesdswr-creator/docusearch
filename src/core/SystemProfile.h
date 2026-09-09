@@ -1,23 +1,21 @@
 #pragma once
 
 // ============================================================
-// SystemProfile.h - Auto-detect system tier and optimize accordingly
+// SystemProfile.h - Auto-detect system tier and optimize
 // ============================================================
-// Detects: RAM, CPU cores, disk type (SSD/HDD), network storage
-// Assigns: Tier (LowEnd/MidRange/HighEnd)
-// Applied: Thread pools, cache sizes, feature flags
+// detect() is a pure snapshot: it never constructs the singleton.
+// instance() lazily caches one snapshot for the process lifetime.
 // ============================================================
 
 #include <QString>
 #include <cstdint>
-#include <memory>
 
 namespace DocuSearch {
 
 enum class SystemTier {
-    LowEnd,      // 2–4GB RAM
-    MidRange,    // 8–16GB RAM
-    HighEnd      // 32GB+ RAM
+    LowEnd,      // < 6 GB RAM
+    MidRange,    // 6–32 GB RAM
+    HighEnd      // 32 GB+ RAM
 };
 
 enum class CPUProfile {
@@ -28,39 +26,41 @@ enum class CPUProfile {
 };
 
 struct SystemProfile {
-    SystemTier tier;
-    CPUProfile cpu;
-    qint64 totalRAM;      // bytes
-    qint64 freeRAM;       // bytes
-    int cpuCores;
-    bool hasSSD;
-    bool isNetworkPath;
-    float cpuFreq;        // GHz
+    SystemTier tier = SystemTier::MidRange;
+    CPUProfile cpu  = CPUProfile::QuadCore;
+    qint64 totalRAM = 0;      // bytes
+    qint64 freeRAM  = 0;      // bytes
+    int cpuCores    = 1;
+    bool hasSSD     = true;
+    bool isNetworkPath = false;
+    float cpuFreq   = 0.0f;   // GHz
     QString osVersion;
 };
 
 class SystemProfiler {
 public:
-    // Detect system on startup
+    // Pure snapshot. Safe to call before QApplication / Logger::init.
+    // NEVER constructs the singleton (that used to recurse on startup).
     static SystemProfile detect();
-    
-    // Convert to string for logging
+
     static QString tierName(SystemTier t);
     static QString cpuProfileName(CPUProfile c);
-    
-    // Singleton access
+
+    // Process-wide cached profile. First call runs detect() once.
     static SystemProfiler* instance();
-    
+
     SystemProfile profile() const { return m_profile; }
     SystemTier tier() const { return m_profile.tier; }
-    
+
+    // Refresh free-RAM (cheap). Leaves the rest of the snapshot alone.
+    void refreshFreeRAM();
+
 private:
     SystemProfiler();
-    static std::unique_ptr<SystemProfiler> m_instance;
     SystemProfile m_profile;
-    
-    bool detectSSD();
-    float detectCPUFrequency();
+
+    static bool detectSSD();
+    static float detectCPUFrequency();
 };
 
 } // namespace DocuSearch

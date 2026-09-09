@@ -46,6 +46,7 @@
 
 #include "documents/IDocumentExtractor.h"   // ExtractionResult
 #include "database/Database.h"
+#include "DuplicateExtractionGuard.h"
 
 class QTimer;
 class QFutureWatcherBase;
@@ -111,7 +112,16 @@ public:
         m_ocrSize    = std::move(size);
     }
     // Test seam: the 200 ms pacing between files (20 ms in tests).
-    void setTickIntervalMs(int ms)              { m_tickIntervalMs = ms; }
+    // Also updates a live session timer so degradation can slow/restore mid-run.
+    void setTickIntervalMs(int ms);
+    int  tickIntervalMs() const                 { return m_tickIntervalMs; }
+
+    // Memory-pressure pause: in-flight file finishes, no new files start.
+    void setPaused(bool paused)                 { m_paused.store(paused); }
+    bool isPaused() const                       { return m_paused.load(); }
+
+    // Throughput for the health dashboard (0 if no session has run).
+    int filesPerMinute() const;
 
     // v1.7.10 first-run extract-all: 200-file sessions, 3 s re-arm,
     // until the first full drain completes (then firstRunDrainComplete()).
@@ -244,6 +254,11 @@ private:
 
     bool        m_firstRunMode = false;
     bool        m_dbResetting = false;        // database swap in progress
+    std::atomic<bool> m_paused{false};
+
+    DuplicateExtractionGuard m_dupGuard;
+    qint64      m_sessionStartedMs = 0;
+    std::atomic<int> m_filesCompleted{0};
 
     // OCR accounting for the current session.
     int         m_ocrExpected = 0;

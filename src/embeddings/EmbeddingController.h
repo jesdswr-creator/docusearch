@@ -29,6 +29,7 @@
 #include <QStringList>
 #include <QVector>
 #include <QThreadPool>
+#include <atomic>
 
 #include "embeddings/IEmbeddingService.h"
 
@@ -56,6 +57,11 @@ public:
     // Whether the AI toggle is currently ON (the end-of-drain chip
     // reads it: "ON" vs "OFF").
     void setAiEnabled(bool on)                  { m_aiEnabled = on; }
+
+    // Memory-pressure pause: skip new backfill batches. In-flight batch
+    // still finishes. Semantic SEARCH is unaffected (different pool).
+    void setPaused(bool paused)                 { m_paused.store(paused); }
+    bool isPaused() const                       { return m_paused.load(); }
 
     // Runtime audit: pool eagerly constructed and configured.
     bool verifyWiring() const;
@@ -122,6 +128,7 @@ private:
     bool m_rebuildPurging       = false;  // rebuild purge chain in flight
     int  m_rebuildRetries       = 0;      // consecutive purge SQL failures
     bool m_aiEnabled            = false;  // AI switch state (chip only)
+    std::atomic<bool> m_paused{false};    // memory-pressure pause
 };
 
 } // namespace DocuSearch

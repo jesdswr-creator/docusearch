@@ -8,34 +8,38 @@
 
 namespace DocuSearch {
 
-bool DuplicateExtractionGuard::tryEnqueue(int fileId, int sessionId) {
+bool DuplicateExtractionGuard::tryEnqueue(qint64 fileId) {
+    if (fileId <= 0) return false;
     QMutexLocker lock(&m_mutex);
-    
-    QPair<int, int> key(fileId, sessionId);
-    
-    if (m_activeExtractions.contains(key)) {
+    if (m_active.contains(fileId)) {
         DS_WARN("Extraction",
-            QString("File %1 (session %2) already queued, skipping duplicate").arg(fileId).arg(sessionId));
+            QString("File %1 already in flight — skipping duplicate extract")
+                .arg(fileId));
         return false;
     }
-    
-    m_activeExtractions.insert(key);
+    m_active.insert(fileId);
     return true;
 }
 
-void DuplicateExtractionGuard::dequeue(int fileId, int sessionId) {
+void DuplicateExtractionGuard::dequeue(qint64 fileId) {
+    if (fileId <= 0) return;
     QMutexLocker lock(&m_mutex);
-    m_activeExtractions.remove(QPair<int, int>(fileId, sessionId));
+    m_active.remove(fileId);
 }
 
-bool DuplicateExtractionGuard::isQueued(int fileId, int sessionId) const {
+bool DuplicateExtractionGuard::isQueued(qint64 fileId) const {
     QMutexLocker lock(&m_mutex);
-    return m_activeExtractions.contains(QPair<int, int>(fileId, sessionId));
+    return m_active.contains(fileId);
 }
 
 void DuplicateExtractionGuard::clear() {
     QMutexLocker lock(&m_mutex);
-    m_activeExtractions.clear();
+    m_active.clear();
+}
+
+int DuplicateExtractionGuard::size() const {
+    QMutexLocker lock(&m_mutex);
+    return m_active.size();
 }
 
 } // namespace DocuSearch
