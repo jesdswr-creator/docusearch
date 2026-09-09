@@ -127,6 +127,12 @@ public:
     // until the first full drain completes (then firstRunDrainComplete()).
     void setFirstRunMode(bool on)               { m_firstRunMode = on; }
     bool firstRunMode() const                   { return m_firstRunMode; }
+    // v1.7.23: the first-run session cap is tier-tuned (TierConfig
+    // indexingBatchSize - LowEnd 25, Mid 100, HighEnd 200; audit C2
+    // wired the field that used to be dead config). Default keeps the
+    // historical 200.
+    void setFirstRunSessionCap(int files)       { m_firstRunSessionCap = qMax(10, files); }
+    int  firstRunSessionCap() const             { return m_firstRunSessionCap; }
     // Database reset in progress (Settings -> Remove Database): every
     // late continuation / OCR result becomes a no-op.
     void setDbResetting(bool on)                { m_dbResetting = on; }
@@ -253,6 +259,7 @@ private:
     int         m_tickIntervalMs = 200;
 
     bool        m_firstRunMode = false;
+    int         m_firstRunSessionCap = 200;
     bool        m_dbResetting = false;        // database swap in progress
     std::atomic<bool> m_paused{false};
 

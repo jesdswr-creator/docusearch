@@ -107,6 +107,12 @@ bool OfficePreview::loadFile(const QString& filePath) {
             sqlite3* db = nullptr;
             if (sqlite3_open_v2(dbPath.toUtf8().constData(), &db,
                 SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr) == SQLITE_OK) {
+                // A3 (audit 2026-09-09): a reader with no busy timeout
+                // fails instantly if a writer holds the EXCLUSIVE lock
+                // (non-WAL tiers) - 5 s of patience costs nothing and
+                // avoids the pointless live re-extraction fallback.
+                sqlite3_exec(db, "PRAGMA busy_timeout=5000;",
+                             nullptr, nullptr, nullptr);
                 sqlite3_stmt* stmt = nullptr;
                 // Find file_id by path, then get extracted_text.
                 const char* sql =

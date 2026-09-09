@@ -112,6 +112,7 @@ private slots:
     void onSidebarClicked(int row);
     void onOpenLocation();
     void autoScanIndexedFolders();
+    void maybeRunAutomaticBackup();
     void onOcrTaskCompleted(qint64 fileId, const QString& text, bool ok);
     void runStartupIntegrityPass();
     bool ocrWorkOutstanding() const;
@@ -240,6 +241,15 @@ public:
 
     bool            autoScanRunning_      = false;
     qint64          autoScanStartedMs_    = 0;
+    // v1.7.23 tier gates (audit C2/B3): read once from TierConfig at
+    // construction and actually consumed by the matching code paths.
+    bool            liveIndexingEnabled_       = true;
+    bool            autoScanEnabled_           = true;
+    bool            duplicateDetectionEnabled_ = true;
+    bool            autoBackupEnabled_         = false;
+    bool            autoBackupInFlight_        = false;
+    QTimer*         statsCoalesceTimer_        = nullptr;
+    QFutureWatcher<bool> autoBackupWatcher_;
     int             autoExtractRetryLeft_ = 0;
     qint64          lastWatcherRescanMs_  = 0;
     bool            maximized_            = false;

@@ -31,51 +31,95 @@ namespace {
 FileRepository::FileRepository(Database& db, QObject* parent)
     : QObject(parent), db_(db) {}
 
+// The cached statements hold a reference into the sqlite handle. Safe
+// in both destruction orders: if Database dies first, close() uses
+// sqlite3_close_v2 (deferred free), so finalizing afterwards is still
+// valid; if we die first, the statements are finalized before the
+// handle goes away.
+FileRepository::~FileRepository() {
+    if (upsertStmt_)   { sqlite3_finalize(upsertStmt_);   upsertStmt_ = nullptr; }
+    if (idLookupStmt_) { sqlite3_finalize(idLookupStmt_); idLookupStmt_ = nullptr; }
+}
+
 qint64 FileRepository::upsertFile(const FileRecord& r) {
     sqlite3* raw = db_.raw();
     if (!raw) return 0;
-    constexpr const char* kSql =
-        "INSERT INTO Files (path, filename, extension, size, created_date, modified_date, "
-        "                    hash, indexing_status, ocr_status, indexed_at) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) "
-        "ON CONFLICT(path) DO UPDATE SET "
-        "  filename=excluded.filename, "
-        "  extension=excluded.extension, "
-        "  size=excluded.size, "
-        "  created_date=excluded.created_date, "
-        "  modified_date=excluded.modified_date, "
-        "  hash=excluded.hash "
-        "WHERE modified_date < excluded.modified_date OR size != excluded.size;";
-    sqlite3_stmt* s = nullptr;
-    if (sqlite3_prepare_v2(raw, kSql, -1, &s, nullptr) != SQLITE_OK) {
-        DS_ERROR("Repo", "upsertFile prepare failed");
-        return 0;
-    }
-    bindText(s, 1, r.path);
-    bindText(s, 2, r.filename);
-    bindText(s, 3, r.extension);
-    sqlite3_bind_int64(s, 4, r.size);
-    sqlite3_bind_int64(s, 5, r.createdDate.toSecsSinceEpoch());
-    sqlite3_bind_int64(s, 6, r.modifiedDate.toSecsSinceEpoch());
-    bindText(s, 7, r.hash);
-    bindText(s, 8, r.indexingStatus.isEmpty() ? Constants::IndexingStatus::kPending : r.indexingStatus);
-    bindText(s, 9, r.ocrStatus.isEmpty() ? Constants::OcrStatus::kPending : r.ocrStatus);
-    sqlite3_bind_int64(s, 10, QDateTime::currentSecsSinceEpoch());
 
-    const int rc = sqlite3_step(s);
-    sqlite3_finalize(s);
-    if (rc != SQLITE_DONE) {
-        DS_ERROR("Repo", QString("upsertFile step failed: %1").arg(sqlite3_errmsg(raw)));
-        return 0;
+    // C4 (audit 2026-09-09): prepare once per handle, reuse across
+    // files. SQLite >= 3.35 (bundled: 3.53) lets RETURNING collapse
+    // the insert/update and id resolution into one statement; the
+    // cached id-lookup only runs for the no-op conflict case (same
+    // size and modified_date - the DO UPDATE ... WHERE guards), which
+    // still has to answer with the existing row id.
+    if (upsertStmt_ && stmtDb_ != raw) {
+        sqlite3_finalize(upsertStmt_);
+        upsertStmt_ = nullptr;
+        sqlite3_finalize(idLookupStmt_);
+        idLookupStmt_ = nullptr;
     }
-    // For ON CONFLICT DO UPDATE, sqlite3_last_insert_rowid may return existing id.
-    // Resolve explicitly by path.
-    sqlite3_stmt* s2 = nullptr;
+    if (!upsertStmt_) {
+        constexpr const char* kSql =
+            "INSERT INTO Files (path, filename, extension, size, created_date, "
+            "                    modified_date, hash, indexing_status, ocr_status, "
+            "                    indexed_at) "
+            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) "
+            "ON CONFLICT(path) DO UPDATE SET "
+            "  filename=excluded.filename, "
+            "  extension=excluded.extension, "
+            "  size=excluded.size, "
+            "  created_date=excluded.created_date, "
+            "  modified_date=excluded.modified_date, "
+            "  hash=excluded.hash "
+            "WHERE modified_date < excluded.modified_date OR size != excluded.size "
+            "RETURNING id;";
+        if (sqlite3_prepare_v2(raw, kSql, -1, &upsertStmt_, nullptr) != SQLITE_OK) {
+            DS_ERROR("Repo", "upsertFile prepare failed");
+            upsertStmt_ = nullptr;
+            return 0;
+        }
+        constexpr const char* kIdSql = "SELECT id FROM Files WHERE path = ?1;";
+        if (sqlite3_prepare_v2(raw, kIdSql, -1, &idLookupStmt_, nullptr)
+                != SQLITE_OK) {
+            DS_ERROR("Repo", "upsertFile id-lookup prepare failed");
+            sqlite3_finalize(upsertStmt_);
+            upsertStmt_ = nullptr;
+            return 0;
+        }
+        stmtDb_ = raw;
+    }
+
+    sqlite3_reset(upsertStmt_);
+    sqlite3_clear_bindings(upsertStmt_);
+    bindText(upsertStmt_, 1, r.path);
+    bindText(upsertStmt_, 2, r.filename);
+    bindText(upsertStmt_, 3, r.extension);
+    sqlite3_bind_int64(upsertStmt_, 4, r.size);
+    sqlite3_bind_int64(upsertStmt_, 5, r.createdDate.toSecsSinceEpoch());
+    sqlite3_bind_int64(upsertStmt_, 6, r.modifiedDate.toSecsSinceEpoch());
+    bindText(upsertStmt_, 7, r.hash);
+    bindText(upsertStmt_, 8, r.indexingStatus.isEmpty()
+                                 ? Constants::IndexingStatus::kPending
+                                 : r.indexingStatus);
+    bindText(upsertStmt_, 9, r.ocrStatus.isEmpty()
+                                 ? Constants::OcrStatus::kPending
+                                 : r.ocrStatus);
+    sqlite3_bind_int64(upsertStmt_, 10, QDateTime::currentSecsSinceEpoch());
+
     qint64 id = 0;
-    if (sqlite3_prepare_v2(raw, "SELECT id FROM Files WHERE path = ?1;", -1, &s2, nullptr) == SQLITE_OK) {
-        bindText(s2, 1, r.path);
-        if (sqlite3_step(s2) == SQLITE_ROW) id = sqlite3_column_int64(s2, 0);
-        sqlite3_finalize(s2);
+    const int rc = sqlite3_step(upsertStmt_);
+    if (rc == SQLITE_ROW) {
+        id = sqlite3_column_int64(upsertStmt_, 0);
+    } else if (rc == SQLITE_DONE) {
+        // Conflict with an unchanged row (no update happened) - resolve
+        // the existing id through the cached lookup.
+        sqlite3_reset(idLookupStmt_);
+        sqlite3_clear_bindings(idLookupStmt_);
+        bindText(idLookupStmt_, 1, r.path);
+        if (sqlite3_step(idLookupStmt_) == SQLITE_ROW)
+            id = sqlite3_column_int64(idLookupStmt_, 0);
+    } else {
+        DS_ERROR("Repo", QString("upsertFile step failed: %1")
+                             .arg(sqlite3_errmsg(raw)));
     }
     return id;
 }

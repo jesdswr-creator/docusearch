@@ -4,6 +4,7 @@
 
 #include "GracefulDegradation.h"
 #include "Logger.h"
+#include "MemoryMonitor.h"
 #include "ExtractionController.h"
 #include "ocr/OcrWorkerPool.h"
 #include "embeddings/EmbeddingController.h"
@@ -46,14 +47,24 @@ void GracefulDegradation::stopMonitoring() {
 }
 
 void GracefulDegradation::onMemoryCheck() {
+    // C5 (audit 2026-09-09): this 10 s poll used to call
+    // GlobalMemoryStatusEx itself, overlapping MemoryMonitor's 5 s
+    // sampler. MemoryMonitor already publishes everything needed as
+    // atomics - read its (at most 5 s old) sample instead, keeping a
+    // direct-sampling fallback only for the window before the monitor
+    // exists (construction order).
     int percentFree = 100;
+    if (MemoryMonitor* mm = MemoryMonitor::instance()) {
+        percentFree = mm->percentageFree();
+    } else {
 #ifdef Q_OS_WIN
-    MEMORYSTATUSEX mem = {};
-    mem.dwLength = sizeof(mem);
-    if (GlobalMemoryStatusEx(&mem) && mem.ullTotalPhys > 0) {
-        percentFree = static_cast<int>((mem.ullAvailPhys * 100) / mem.ullTotalPhys);
-    }
+        MEMORYSTATUSEX mem = {};
+        mem.dwLength = sizeof(mem);
+        if (GlobalMemoryStatusEx(&mem) && mem.ullTotalPhys > 0) {
+            percentFree = static_cast<int>((mem.ullAvailPhys * 100) / mem.ullTotalPhys);
+        }
 #endif
+    }
 
     DegradationLevel newLevel = DegradationLevel::Healthy;
     if (percentFree < 10) {

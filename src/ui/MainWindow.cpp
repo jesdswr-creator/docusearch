@@ -358,8 +358,16 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     // ocr helper process + PDFium rasterizer. Changing it takes effect
     // on the next launch (the pool's thread count is fixed at
     // construction; throttle settings stay live via setAppSettings).
-    const int tierOcr = qMax(1, TierConfigManager::getConfig(
-        SystemProfiler::instance()->tier()).ocrWorkers);
+    // v1.7.23 (audit C2/B3): the tier table is read ONCE here and its
+    // feature gates actually take effect — the fields existed since the
+    // tier system landed but nothing consumed them.
+    const TierConfig tierCfg =
+        TierConfigManager::getConfig(SystemProfiler::instance()->tier());
+    const int tierOcr = qMax(1, tierCfg.ocrWorkers);
+    liveIndexingEnabled_       = tierCfg.enableLiveIndexing;
+    autoScanEnabled_           = tierCfg.enableAutoScan;
+    duplicateDetectionEnabled_ = tierCfg.enableDuplicateDetection;
+    autoBackupEnabled_         = tierCfg.enableBackupAutomatic;
     ocrPool_ = std::make_unique<OcrWorkerPool>(
         std::clamp(qMin(settings_.maxWorkerThreads, tierOcr), 1, 4), this);
     ocrPool_->setAppSettings(settings_);
@@ -407,6 +415,14 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
         [this]() { if (ocrPool_) ocrPool_->clearQueue(); },
         [this]() -> int { return ocrPool_ ? ocrPool_->queueSize() : 0; });
     extractionController_->setFirstRunMode(!settings_.firstRunDone);
+    // v1.7.23 (audit C2): tier pacing reaches the pipeline now. The
+    // first-run session cap is the tier's indexingBatchSize (LowEnd 25 /
+    // Mid 100 / HighEnd 200) and the per-file tick gains the tier's
+    // indexingPauseMs (LowEnd: 700 ms/file instead of 200). Degradation
+    // must restore the SAME base tick after pressure clears, not a
+    // hardcoded 200.
+    extractionController_->setFirstRunSessionCap(tierCfg.indexingBatchSize);
+    extractionController_->setTickIntervalMs(200 + tierCfg.indexingPauseMs);
 
     embeddingController_ = std::make_unique<EmbeddingController>(this);
     embeddingController_->setDatabase(db_.get());
@@ -426,6 +442,7 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     degradation_->setOcrPool(ocrPool_.get());
     degradation_->setExtractionController(extractionController_.get());
     degradation_->setEmbeddingController(embeddingController_.get());
+    degradation_->setHealthyTickMs(200 + tierCfg.indexingPauseMs);
     connect(degradation_.get(), &GracefulDegradation::degradationLevelChanged,
             this, [this](DegradationLevel lvl) {
         if (memoryStatusLbl_) {
@@ -529,12 +546,18 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
     // Auto-scan timer: 1 hour interval, runs on MAIN THREAD.
     // v1.7.3: no tick-level busy guard here — the function itself retries
     // 10 min later when the pipeline is busy instead of losing the tick.
+    // v1.7.23 (audit C2): gated by the tier's enableAutoScan (every tier
+    // ships with it on; the gate makes the config honest).
     autoScanTimer_ = new QTimer(this);
     autoScanTimer_->setInterval(3600 * 1000);  // 1 hour
     connect(autoScanTimer_, &QTimer::timeout, this, [this]{
         autoScanIndexedFolders();
     });
-    autoScanTimer_->start();
+    if (autoScanEnabled_) {
+        autoScanTimer_->start();
+    } else {
+        DS_INFO("MainWindow", "Auto-scan disabled by system tier config");
+    }
 
     // Live index stats: refresh the "N indexed" badge every 20 s so the
     // number always reflects the database — it used to change only when a
@@ -546,14 +569,41 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
             this, &MainWindow::updateIndexStats);
     statsRefreshTimer->start();
 
+    // v1.7.23 B3 (audit): enableBackupAutomatic was dead tier config —
+    // no automatic backup existed anywhere. Mid/HighEnd tiers now
+    // checkpoint + zip the database into <data>/backups at most once
+    // per 24 h (first chance at t+3 min, then every 6 h), keeping the
+    // newest 7 zips. The UI thread only runs the fast WAL checkpoint;
+    // the archive job runs on QtConcurrent and captures NO `this`, so
+    // closing the window mid-backup is safe (the watcher dies with the
+    // window, the worker only touches local strings + BackupManager).
+    autoBackupWatcher_.setParent(this);
+    connect(&autoBackupWatcher_, &QFutureWatcher<bool>::finished, this,
+            [this]() {
+                autoBackupInFlight_ = false;
+                if (autoBackupWatcher_.result())
+                    statusBar()->showMessage(
+                        "Automatic database backup saved.", 4000);
+            });
+    if (autoBackupEnabled_) {
+        auto* autoBackupTimer = new QTimer(this);
+        connect(autoBackupTimer, &QTimer::timeout,
+                this, &MainWindow::maybeRunAutomaticBackup);
+        autoBackupTimer->start(6 * 3600 * 1000);
+        QTimer::singleShot(3 * 60 * 1000, this,
+                           &MainWindow::maybeRunAutomaticBackup);
+    }
+
     // Startup diff: check for files that changed while app was closed.
-    QTimer::singleShot(2000, this, [this]() {
-        if (extractionController_ && extractionController_->isRunning()) {
-            return;  // extraction busy — the hourly scan will catch up
-        }
-        statusBar()->showMessage("Checking for file changes...", 3000);
-        autoScanIndexedFolders();
-    });
+    if (autoScanEnabled_) {
+        QTimer::singleShot(2000, this, [this]() {
+            if (extractionController_ && extractionController_->isRunning()) {
+                return;  // extraction busy — the hourly scan will catch up
+            }
+            statusBar()->showMessage("Checking for file changes...", 3000);
+            autoScanIndexedFolders();
+        });
+    }
 
     // v1.7.8: one-time non-document purge, scheduled AFTER the window is
     // visible — never inside the constructor (see the v1.7.8 note at the
@@ -646,8 +696,12 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 
     // Start watching indexed folders — but ONLY if the user left
     // "Monitor indexed drives for live changes" enabled (v1.7.11: the
-    // checkbox was never consulted anywhere; the watcher always ran).
-    if (settings_.monitorFileChanges && !settings_.indexedDrives.isEmpty()) {
+    // checkbox was never consulted anywhere; the watcher always ran)
+    // AND the tier allows live indexing (v1.7.23 audit C2: LowEnd
+    // declares enableLiveIndexing=false — its changes are caught by the
+    // hourly/auto scans instead of the watcher).
+    if (settings_.monitorFileChanges && liveIndexingEnabled_
+        && !settings_.indexedDrives.isEmpty()) {
         watcher_->addWatches(settings_.indexedDrives);
     }
 
@@ -711,8 +765,17 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
                 extractionProgressBar_->setValue(value);
                 extractionProgressBar_->setVisible(visible);
             });
-    connect(extractionController_.get(), &ExtractionController::statsDirty,
+    // v1.7.23 C3 (audit): statsDirty fires per extracted file; each
+    // tick used to run 3-5 COUNT queries on the UI thread. Coalesce to
+    // one refresh at most every 1.5 s — the badges are progress
+    // feedback, not telemetry.
+    statsCoalesceTimer_ = new QTimer(this);
+    statsCoalesceTimer_->setSingleShot(true);
+    statsCoalesceTimer_->setInterval(1500);
+    connect(statsCoalesceTimer_, &QTimer::timeout,
             this, &MainWindow::updateIndexStats);
+    connect(extractionController_.get(), &ExtractionController::statsDirty,
+            statsCoalesceTimer_, qOverload<>(&QTimer::start));
     connect(extractionController_.get(), &ExtractionController::previewDirty, this,
             [this]() { refreshPreviewForSelectedFile(); });
     connect(extractionController_.get(), &ExtractionController::firstRunDrainComplete, this,
@@ -789,6 +852,21 @@ MainWindow::~MainWindow() {
     if (degradation_) degradation_->stopMonitoring();
     if (memoryMonitor_) memoryMonitor_->stopMonitoring();
     if (autoScanTimer_) autoScanTimer_->stop();
+    // v1.7.23 B3: an in-flight automatic backup must not outlive the
+    // application (its QProcess would race the QCoreApplication
+    // teardown). The worker captures no `this`, so a bounded wait is
+    // all that is needed; if it truly cannot finish, the worst case is
+    // a partial zip that the restore path's header check rejects.
+    // (QFutureWatcher::waitForFinished() has no timeout overload, so
+    // poll with a deadline instead.)
+    if (autoBackupInFlight_ && autoBackupWatcher_.isRunning()) {
+        DS_INFO("Backup", "Waiting for the automatic backup to finish...");
+        const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 15000;
+        while (autoBackupWatcher_.isRunning()
+               && QDateTime::currentMSecsSinceEpoch() < deadline) {
+            QThread::msleep(100);
+        }
+    }
     // v1.7.21: the pipelines live in the controllers — invalidate the
     // extraction session FIRST (a result landing during teardown must
     // write nothing; the generation check drops it) and drain its pool
@@ -2562,6 +2640,59 @@ void MainWindow::onMemoryPressureRecovered() {
     if (embeddingController_) embeddingController_->ensureBackfill();
 }
 
+// v1.7.23 B3 (audit): automatic daily database backup for tiers that
+// declare enableBackupAutomatic (Mid/HighEnd). At most one backup per
+// 24 h; skipped while a scan or extraction session is running (the
+// next 6 h tick retries). The archive job runs off the UI thread -
+// BackupManager touches no database handle, keeping the main
+// connection UI-thread-only per the audit's threading rules.
+void MainWindow::maybeRunAutomaticBackup() {
+    if (!autoBackupEnabled_ || autoBackupInFlight_) return;
+    if (!db_ || !db_->isOpen()) return;
+    if (autoScanRunning_
+        || (extractionController_ && extractionController_->isRunning())) {
+        return;  // busy pipeline - the next tick retries
+    }
+    QSettings qs(QSettings::IniFormat, QSettings::UserScope,
+                 "DocuSearch", "DocuSearch");
+    const qint64 last = qs.value("lastAutoBackupMs").toLongLong();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (last > 0 && now - last < 24LL * 3600 * 1000) return;
+
+    const QString dbPath = Config::instance().dbPath();
+    if (QFileInfo(dbPath).size() <= 0) return;   // nothing to back up yet
+
+    // Flush the WAL into the main file first (fast, UI thread) so the
+    // zipped database carries the most recent writes.
+    db_->exec("PRAGMA wal_checkpoint(TRUNCATE);");
+
+    const QString dir = Config::instance().dataDir()
+                        + QStringLiteral("/backups");
+    autoBackupInFlight_ = true;
+    autoBackupWatcher_.setFuture(QtConcurrent::run(
+        [dbPath, dir]() -> bool {
+            BackupManager bm;
+            const QString out = bm.backup(dbPath, dir);
+            if (out.isEmpty()) {
+                DS_WARN("Backup", "Automatic backup failed");
+                return false;
+            }
+            // Keep only the newest 7 zips so automatic backups can
+            // never fill the disk.
+            const QStringList all = bm.listBackups(dir);
+            for (int i = 7; i < all.size(); ++i)
+                QFile::remove(all.at(i));
+            // QSettings is reentrant; this instance lives only inside
+            // this worker thread.
+            QSettings qs(QSettings::IniFormat, QSettings::UserScope,
+                         "DocuSearch", "DocuSearch");
+            qs.setValue("lastAutoBackupMs",
+                        QDateTime::currentMSecsSinceEpoch());
+            DS_INFO("Backup", "Automatic backup: " + out);
+            return true;
+        }));
+}
+
 HealthMetrics MainWindow::collectHealthMetrics() const {
     HealthMetrics m;
     if (memoryMonitor_) {
@@ -2651,7 +2782,8 @@ void MainWindow::onAddFolder() {
         // only, so folders added through this button were scanned but not
         // monitored — later changes in them went unseen until the next
         // hourly scan (another "deleted files still show up" contributor).
-        if (watcher_ && !watcher_->isWatched(folder)) {
+        // v1.7.23: tier gate — LowEnd scans hourly instead (audit C2).
+        if (watcher_ && liveIndexingEnabled_ && !watcher_->isWatched(folder)) {
             watcher_->addWatch(folder);
         }
 
@@ -4734,25 +4866,58 @@ void MainWindow::onOpenSettings() {
 
         QObject::connect(&dlg, &SettingsDialog::restoreRequested,
             this, [this](const QString& zipPath){
+                // v1.7.23 B2 (audit): the old flow removed the live
+                // database BEFORE expanding the zip, so a failed expand
+                // left db_->open() to create a blank, schema-less file.
+                // BackupManager::restore now expands into a temp dir,
+                // validates the SQLite header and only then swaps - on
+                // failure the original file is untouched. Pipelines are
+                // parked the same way removeAndRebuildDatabase() parks
+                // them, and Schema::initialize runs after reopen so a
+                // backup taken by an older build migrates forward.
                 statusBar()->showMessage("Restoring database...", 0);
+                if (extractionController_) {
+                    extractionController_->setDbResetting(true);
+                    extractionController_->invalidateSession();
+                }
+                if (embeddingController_) embeddingController_->stopAll();
+                dbResetting_ = true;
                 db_->close();
+
                 BackupManager bm;
-                const bool ok = bm.restore(zipPath, Config::instance().dbPath());
+                QString restoreErr;
+                const bool ok = bm.restore(zipPath,
+                                           Config::instance().dbPath(),
+                                           &restoreErr);
+                QString openErr;
+                if (db_->open(Config::instance().dbPath(), &openErr)) {
+                    Schema::initialize(*db_);
+                } else if (!openErr.isEmpty()) {
+                    DS_ERROR("Database",
+                             "Reopen after restore failed: " + openErr);
+                }
+                dbResetting_ = false;
+                if (extractionController_) {
+                    extractionController_->setDatabase(db_.get());
+                    extractionController_->setDbResetting(false);
+                }
+                if (embeddingController_)
+                    embeddingController_->setDatabase(db_.get());
+
                 if (ok) {
-                    QString err;
-                    if (db_->open(Config::instance().dbPath(), &err)) {
-                        statusBar()->showMessage(
-                            "Database restored. Please restart DocuSearch.", 8000);
-                        updateIndexStats();
-                        refreshSavedSearches();
-                    } else {
-                        statusBar()->showMessage(
-                            "Restore succeeded but reopen failed: " + err, 0);
-                    }
+                    statusBar()->showMessage(
+                        "Database restored. Please restart DocuSearch.",
+                        8000);
+                    updateIndexStats();
+                    refreshSavedSearches();
                 } else {
-                    QString err;
-                    db_->open(Config::instance().dbPath(), &err);
-                    statusBar()->showMessage("Restore failed.", 5000);
+                    statusBar()->showMessage(
+                        QStringLiteral("Restore failed%1. The previous "
+                                       "database is unchanged.")
+                            .arg(restoreErr.isEmpty()
+                                     ? QStringLiteral(".")
+                                     : QStringLiteral(": ") + restoreErr),
+                        10000);
                 }
             });
 
@@ -4867,7 +5032,7 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
             DS_INFO("Watcher", "Live monitoring disabled in Settings.");
         } else if (settings_.monitorFileChanges &&
                    !oldSettings.monitorFileChanges) {
-            if (!settings_.indexedDrives.isEmpty())
+            if (!settings_.indexedDrives.isEmpty() && liveIndexingEnabled_)
                 watcher_->addWatches(settings_.indexedDrives);
             DS_INFO("Watcher", "Live monitoring re-enabled in Settings.");
         }
@@ -4930,7 +5095,7 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
     for (const QString& drive : settings_.indexedDrives) {
         if (oldFolded.contains(FileUtils::toNative(drive).toLower()))
             continue;  // unchanged
-        if (settings_.monitorFileChanges &&
+        if (settings_.monitorFileChanges && liveIndexingEnabled_ &&
             watcher_ && !watcher_->isWatched(drive))
             watcher_->addWatch(drive);
         statusBar()->showMessage("Scanning " + drive + " ...");
@@ -5102,6 +5267,13 @@ static QString pathIdentityKey(const QString& p) {
 
 void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
+    // v1.7.23 (audit C2): the tier gate is real now. Every tier ships
+    // with detection enabled; this keeps the config honest.
+    if (!duplicateDetectionEnabled_) {
+        statusBar()->showMessage(
+            "Duplicate detection is disabled on this system tier.", 4000);
+        return;
+    }
     // The hashing loop below pumps the event loop, so the user can
     // click Duplicates again (or the sidebar can re-enter this slot)
     // while it is still running. Two concurrent runs would fight over

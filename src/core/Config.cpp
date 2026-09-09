@@ -97,10 +97,9 @@ void Config::initThreadPoolsForTier() {
     QThreadPool::globalInstance()->setStackSize(tierCfg.threadStackSize * 1024);
     
     DS_INFO("Config/ThreadPool",
-        QString("Extraction: %1w | OCR: %2w | Search: %3w | Stack: %4KB")
+        QString("Extraction: %1w | OCR: %2w | Stack: %3KB")
             .arg(tierCfg.extractionWorkers)
             .arg(tierCfg.ocrWorkers)
-            .arg(tierCfg.searchWorkers)
             .arg(tierCfg.threadStackSize));
 }
 

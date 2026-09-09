@@ -58,6 +58,14 @@ bool BgeEmbeddingDb::open() {
     // Performance pragmas.
     sqlite3_exec(m_db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
+    // A2 (audit 2026-09-09): this connection shares the database file
+    // with the main connection, which writes continuously during
+    // extraction (per-file accounting, backfill stale-DELETEs). WAL
+    // allows one writer at a time - without a busy timeout every
+    // collision failed immediately, and two busy batches in a row
+    // tripped the AI backfill deadlock guard ("AI indexing paused"
+    // with nothing actually wrong).
+    sqlite3_exec(m_db, "PRAGMA busy_timeout=5000;", nullptr, nullptr, nullptr);
     return true;
 }
 

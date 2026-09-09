@@ -18,6 +18,28 @@
 
 namespace DocuSearch {
 
+namespace {
+
+// Read a scalar PRAGMA text value back from the connection (used to
+// verify that the journal_mode we asked for is the one actually in
+// effect - see the B1 note in open()).
+QString pragmaText(sqlite3* db, const char* pragma) {
+    sqlite3_stmt* st = nullptr;
+    QString out;
+    if (sqlite3_prepare_v2(db, pragma, -1, &st, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW) {
+            const unsigned char* t = sqlite3_column_text(st, 0);
+            if (t)
+                out = QString::fromUtf8(reinterpret_cast<const char*>(t))
+                          .toLower();
+        }
+        sqlite3_finalize(st);
+    }
+    return out;
+}
+
+} // namespace
+
 Database::Database(QObject* parent) : QObject(parent) {}
 
 Database::~Database() { close(); }
@@ -95,10 +117,39 @@ bool Database::open(const QString& path, QString* err) {
             "PRAGMA automatic_index = OFF;",
         };
     } else {
-        // PHASE 1: Use tier-specific pragmas from TierConfig
+        // PHASE 1: Use tier-specific pragmas from TierConfig.
+        //
+        // B1 (audit 2026-09-09): synchronous=NORMAL is only crash-safe
+        // in WAL mode. In rollback-journal modes (DELETE/TRUNCATE/
+        // PERSIST) a power loss at the wrong moment has a real chance
+        // of corrupting the database, so a non-WAL tier must run at
+        // synchronous=FULL - the same pairing the network branch above
+        // has always used. The mode is also READ BACK after applying:
+        // a failed journal_mode pragma (transient lock, open
+        // transaction) used to silently leave the default journal in
+        // place while synchronous=NORMAL stayed applied - exactly the
+        // corruption window B1 describes. A mismatch now logs DS_ERROR
+        // and forces synchronous=FULL regardless of tier.
+        const QString jmSql =
+            QString("PRAGMA journal_mode = %1;").arg(tierCfg.journalMode);
+        if (sqlite3_exec(db_, jmSql.toUtf8().constData(),
+                         nullptr, nullptr, nullptr) != SQLITE_OK) {
+            DS_WARN("Database", QString("Pragma failed: %1 -> %2")
+                                    .arg(jmSql, sqlite3_errmsg(db_)));
+        }
+        const QString actualMode = pragmaText(db_, "PRAGMA journal_mode;");
+        const bool walActive = (actualMode == QLatin1String("wal"));
+        if (!actualMode.isEmpty()
+            && actualMode != tierCfg.journalMode.toLower()
+            && !walActive) {
+            DS_ERROR("Database",
+                     QString("journal_mode did not take effect "
+                             "(asked %1, got %2) - forcing synchronous=FULL")
+                         .arg(tierCfg.journalMode, actualMode));
+        }
         pragmas = {
-            QString("PRAGMA journal_mode = %1;").arg(tierCfg.journalMode),
-            "PRAGMA synchronous  = NORMAL;",
+            QString("PRAGMA synchronous  = %1;")
+                .arg(walActive ? "NORMAL" : "FULL"),
             "PRAGMA temp_store   = MEMORY;",
             QString("PRAGMA cache_size = -%1;").arg(tierCfg.databaseCacheSize / 1024),
             QString("PRAGMA mmap_size = %1;").arg(tierCfg.mmapSize),
@@ -107,8 +158,8 @@ bool Database::open(const QString& path, QString* err) {
             "PRAGMA encoding     = 'UTF-8';",
             "PRAGMA automatic_index = OFF;",
         };
-        
-        if (tierCfg.journalMode == "WAL") {
+
+        if (walActive) {
             pragmas.append("PRAGMA wal_autocheckpoint = 500;");
         }
     }
@@ -128,11 +179,20 @@ bool Database::open(const QString& path, QString* err) {
 void Database::close() {
     QMutexLocker lock(&dbMutex_);
     if (!db_) return;
-    while (txnDepth_ > 0) {
+    // A single ROLLBACK unwinds the whole savepoint stack; the old
+    // per-depth loop re-issued ROLLBACK against no active transaction
+    // (error no-ops after the first). (audit A4)
+    if (txnDepth_ > 0) {
         sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
-        --txnDepth_;
+        txnDepth_ = 0;
     }
-    sqlite3_close(db_);
+    // close_v2 defers deallocation when a cached prepared statement is
+    // still outstanding (FileRepository keeps its upsert statements
+    // across calls) instead of failing the close silently with
+    // SQLITE_BUSY and leaking the handle. (audit A4)
+    const int rc = sqlite3_close_v2(db_);
+    if (rc != SQLITE_OK)
+        DS_WARN("Database", QString("sqlite3_close_v2 rc=%1").arg(rc));
     db_ = nullptr;
     path_.clear();
 }
@@ -208,11 +268,16 @@ bool Database::rollback() {
         sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
         DS_DEBUG("Transaction", "ROLLBACK transaction");
     } else {
-        // PHASE 1: Rollback to SAVEPOINT
+        // PHASE 1: Rollback to SAVEPOINT. RELEASE afterwards keeps the
+        // savepoint stack exact - ROLLBACK TO alone leaves the
+        // savepoint open (audit A5); a later begin() re-creates the
+        // same name, and any outermost commit/rollback discards the
+        // rest of the stack.
         QString savepoint = getSavepointName(txnDepth_ - 1);
-        QString sql = QString("ROLLBACK TO SAVEPOINT %1;").arg(savepoint);
+        QString sql = QString("ROLLBACK TO SAVEPOINT %1; "
+                              "RELEASE SAVEPOINT %1;").arg(savepoint);
         sqlite3_exec(db_, sql.toUtf8().constData(), nullptr, nullptr, nullptr);
-        DS_DEBUG("Transaction", QString("ROLLBACK TO SAVEPOINT %1").arg(savepoint));
+        DS_DEBUG("Transaction", QString("ROLLBACK TO %1 + RELEASE").arg(savepoint));
     }
     --txnDepth_;
     return true;

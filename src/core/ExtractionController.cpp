@@ -313,7 +313,10 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
     // 60 s — a brand-new index extracts itself end-to-end without the
     // user babysitting the Extract button. The 200 ms per-file pacing
     // is untouched, so stability is preserved.
-    const int sessionCap = m_firstRunMode ? 200 : 30;
+    // v1.7.23: the first-run cap is tier-tuned (setFirstRunSessionCap;
+    // LowEnd 25 / Mid 100 / HighEnd 200). The steady-state 30-file cap
+    // is unchanged.
+    const int sessionCap = m_firstRunMode ? m_firstRunSessionCap : 30;
     const int maxFilesThisSession = qMin(total, sessionCap);
     emit statusMessage(
         QString("Extracting %1 of %2 files... (click Stop Extracting to cancel)")

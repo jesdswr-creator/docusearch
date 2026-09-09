@@ -35,6 +35,11 @@ public:
     void setOcrPool(OcrWorkerPool* pool) { ocrPool_ = pool; }
     void setExtractionController(ExtractionController* ctrl) { extractionCtrl_ = ctrl; }
     void setEmbeddingController(EmbeddingController* ctrl) { embeddingCtrl_ = ctrl; }
+    // v1.7.23: the tick interval restored at Healthy. MainWindow seeds
+    // it with the tier's base pacing (200 ms + indexingPauseMs) so a
+    // LowEnd machine keeps its slower indexing after pressure clears
+    // instead of snapping back to a hardcoded 200 ms (audit C2).
+    void setHealthyTickMs(int ms) { healthyTickMs_ = qMax(20, ms); }
 
     DegradationLevel level() const { return currentLevel_; }
     bool isPaused() const { return currentLevel_ == DegradationLevel::Emergency; }

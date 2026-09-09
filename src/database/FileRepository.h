@@ -11,6 +11,9 @@
 #include <vector>
 #include "../core/Types.h"
 
+struct sqlite3;
+struct sqlite3_stmt;
+
 namespace DocuSearch {
 
 class Database;
@@ -19,6 +22,7 @@ class FileRepository : public QObject {
     Q_OBJECT
 public:
     explicit FileRepository(Database& db, QObject* parent = nullptr);
+    ~FileRepository() override;
 
     // ---- Files ---------------------------------------------------------
 
@@ -91,6 +95,15 @@ public:
 
 private:
     Database& db_;
+
+    // C4 (audit 2026-09-09): the scan upsert used to prepare + finalize
+    // two statements PER FILE. Both are prepared once per sqlite handle
+    // and cached; the cache is invalidated when Database reopens (the
+    // handle changes - Remove Database / restore paths).
+    sqlite3_stmt* upsertStmt_ = nullptr;
+    sqlite3_stmt* idLookupStmt_ = nullptr;
+    sqlite3*      stmtDb_ = nullptr;
+
     bool ftsUpsert(qint64 fileId, const QString& filename,
                    const QString& content, const QString& path,
                    const QString& extension);
