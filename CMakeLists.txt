@@ -94,13 +94,34 @@ endif()
 # Point PDFIUM_ROOT at an extracted pdfium-windows-x64 package
 # (include/fpdfview.h + lib/pdfium.dll.lib + pdfium.dll).
 set(PDFIUM_ROOT "" CACHE PATH "Root of the PDFium SDK (include/ + lib/)")
+# PDFium release archives are not consistent about whether the SDK is
+# placed directly under the root or under an extra (version/platform)
+# directory.  Search recursively as well as the conventional locations;
+# otherwise CI can download a valid SDK and silently build without PDFium.
 find_path(PDFIUM_INCLUDE_DIR fpdfview.h
     HINTS "${PDFIUM_ROOT}" "$ENV{PDFIUM_ROOT}"
-    PATH_SUFFIXES include)
+    PATH_SUFFIXES include pdfium/include)
+if(NOT PDFIUM_INCLUDE_DIR AND PDFIUM_ROOT)
+    file(GLOB_RECURSE PDFIUM_HEADER_CANDIDATES
+        "${PDFIUM_ROOT}/fpdfview.h")
+    list(LENGTH PDFIUM_HEADER_CANDIDATES PDFIUM_HEADER_COUNT)
+    if(PDFIUM_HEADER_COUNT GREATER 0)
+        list(GET PDFIUM_HEADER_CANDIDATES 0 PDFIUM_HEADER)
+        get_filename_component(PDFIUM_INCLUDE_DIR "${PDFIUM_HEADER}" DIRECTORY)
+    endif()
+endif()
 find_library(PDFIUM_LIBRARY
     NAMES pdfium.dll.lib pdfium
     HINTS "${PDFIUM_ROOT}" "$ENV{PDFIUM_ROOT}"
     PATH_SUFFIXES lib bin)
+if(NOT PDFIUM_LIBRARY AND PDFIUM_ROOT)
+    file(GLOB_RECURSE PDFIUM_LIBRARY_CANDIDATES
+        "${PDFIUM_ROOT}/*.lib")
+    list(LENGTH PDFIUM_LIBRARY_CANDIDATES PDFIUM_LIBRARY_COUNT)
+    if(PDFIUM_LIBRARY_COUNT GREATER 0)
+        list(GET PDFIUM_LIBRARY_CANDIDATES 0 PDFIUM_LIBRARY)
+    endif()
+endif()
 if(DOCUSEARCH_ENABLE_PDFIUM AND PDFIUM_INCLUDE_DIR AND PDFIUM_LIBRARY)
     add_library(Pdfium::Lib INTERFACE IMPORTED)
     set_target_properties(Pdfium::Lib PROPERTIES
