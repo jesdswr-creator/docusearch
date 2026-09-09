@@ -29,6 +29,11 @@ public:
     explicit FirstLaunchTierDetection(const SystemProfile& profile, QWidget* parent = nullptr);
     ~FirstLaunchTierDetection() override;
 
+    bool addFolderChosen() const { return addFolderChosen_; }
+
+signals:
+    void addFolderRequested();
+
 private:
     void buildUI();
     void populateTierInfo();
@@ -41,6 +46,8 @@ private:
     QLabel* featuresAvailable_ = nullptr;
     QLabel* setupRecommendations_ = nullptr;
     QPushButton* continueBtn_ = nullptr;
+    QPushButton* addFolderBtn_ = nullptr;
+    bool addFolderChosen_ = false;
 };
 
 } // namespace DocuSearch

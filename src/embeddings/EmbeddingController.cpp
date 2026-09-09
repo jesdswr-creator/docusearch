@@ -65,7 +65,7 @@ void EmbeddingController::ensureBackfill()
     // One batch in flight at a time; noteEmbeddingFinished chains the
     // next batch while unembedded files remain, so a >1000-file backlog
     // drains progressively instead of being silently truncated.
-    if (m_backfillRunning || m_rebuildPurging
+    if (m_paused.load() || m_backfillRunning || m_rebuildPurging
         || !m_service || !m_service->isReady() || !m_db)
         return;
     sqlite3* raw = m_db->raw();

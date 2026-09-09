@@ -1,36 +1,35 @@
 #pragma once
 
 // ============================================================
-// DuplicateExtractionGuard.h - Prevent double-extraction
+// DuplicateExtractionGuard.h - One in-flight extract per file
 // ============================================================
-// CRITICAL: Prevents same file from being extracted twice
-// when both FileWatcher and auto-scan trigger simultaneously
+// Stops the FileWatcher and the extraction session from extracting
+// the same file_id at the same time (the re-entrancy class that
+// used to double-write DocumentText).
 // ============================================================
 
 #include <QSet>
-#include <QPair>
 #include <QMutex>
-#include <QString>
+#include <QtGlobal>
 
 namespace DocuSearch {
 
 class DuplicateExtractionGuard {
 public:
-    // Returns true if file should be extracted, false if already queued
-    bool tryEnqueue(int fileId, int sessionId);
-    
-    // Remove when extraction completes
-    void dequeue(int fileId, int sessionId);
-    
-    // Check if file is currently being extracted
-    bool isQueued(int fileId, int sessionId) const;
-    
-    // Clear all (on shutdown)
+    // Returns true if this file should be extracted now.
+    bool tryEnqueue(qint64 fileId);
+
+    void dequeue(qint64 fileId);
+
+    bool isQueued(qint64 fileId) const;
+
     void clear();
-    
+
+    int size() const;
+
 private:
     mutable QMutex m_mutex;
-    QSet<QPair<int, int>> m_activeExtractions;  // (fileId, sessionId)
+    QSet<qint64> m_active;
 };
 
 } // namespace DocuSearch

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.21
+    VERSION 1.7.22
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -213,6 +213,11 @@ set(APP_SOURCES
     src/core/FileUtils.cpp
     src/core/SehTranslator.cpp
     src/core/CrashHandler.cpp
+    src/core/SystemProfile.cpp
+    src/core/TierConfig.cpp
+    src/core/MemoryMonitor.cpp
+    src/core/GracefulDegradation.cpp
+    src/core/DuplicateExtractionGuard.cpp
     # v1.7.21: headless extraction-session controller (wiring-tested)
     src/core/ExtractionController.cpp
     # database
@@ -254,6 +259,7 @@ set(APP_SOURCES
     src/embeddings/BgeService.cpp
     # search (hybrid)
     src/search/HybridSearchEngine.cpp
+    src/search/SemanticSearchThrottle.cpp
     # settings
     src/settings/SettingsManager.cpp
     # backup
@@ -271,6 +277,8 @@ set(APP_SOURCES
     src/ui/IndexingProgress.cpp
     src/ui/SettingsDialog.cpp
     src/ui/SwitchControl.cpp
+    src/ui/FirstLaunchTierDetection.cpp
+    src/ui/SystemHealthDashboard.cpp
     src/ui/MainWindow.cpp
     # entry
     src/main.cpp
@@ -285,6 +293,11 @@ set(APP_HEADERS
     src/core/FileUtils.h
     src/core/SehTranslator.h
     src/core/CrashHandler.h
+    src/core/SystemProfile.h
+    src/core/TierConfig.h
+    src/core/MemoryMonitor.h
+    src/core/GracefulDegradation.h
+    src/core/DuplicateExtractionGuard.h
     # v1.7.21: headless pipeline controllers
     src/core/ExtractionController.h
     src/embeddings/EmbeddingController.h
@@ -317,6 +330,7 @@ set(APP_HEADERS
     src/embeddings/BgeEmbeddingDb.h
     src/embeddings/BgeService.h
     src/search/HybridSearchEngine.h
+    src/search/SemanticSearchThrottle.h
     src/settings/SettingsManager.h
     src/backup/BackupManager.h
     src/win/JumpList.h
@@ -335,6 +349,8 @@ set(APP_HEADERS
     src/ui/IndexingProgress.h
     src/ui/SettingsDialog.h
     src/ui/SwitchControl.h
+    src/ui/FirstLaunchTierDetection.h
+    src/ui/SystemHealthDashboard.h
     src/ui/MainWindow.h
 )
 

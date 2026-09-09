@@ -3,38 +3,34 @@
 // ============================================================
 // SystemHealthDashboard.h - Real-time performance metrics
 // ============================================================
-// Shown in status bar or settings:
-// - RAM usage (live graph)
-// - CPU usage (per-tier baseline)
-// - Indexing speed (files/min)
-// - Search latency (P99)
-// - Semantic search quality (result count, cache hit rate)
-// - System tier & current degradation level
-// ============================================================
 
 #include <QWidget>
 #include <QString>
-#include <memory>
+#include <functional>
 #include <QTimer>
 
 namespace DocuSearch {
 
 struct HealthMetrics {
-    int ramUsagePercent;
-    int cpuUsagePercent;
-    int indexingSpeedFilesPerMin;
-    int searchLatencyMs;
-    int semanticCacheHitRate;
+    int ramFreePercent = 100;
+    int cpuUsagePercent = 0;
+    int indexingSpeedFilesPerMin = 0;
+    int searchLatencyMs = 0;
+    int semanticCoveragePercent = 0;
     QString currentDegradationLevel;
+    QString tierName;
 };
 
 class SystemHealthDashboard : public QWidget {
     Q_OBJECT
 
 public:
+    using MetricsProvider = std::function<HealthMetrics()>;
+
     explicit SystemHealthDashboard(QWidget* parent = nullptr);
     ~SystemHealthDashboard() override;
 
+    void setMetricsProvider(MetricsProvider fn);
     void updateMetrics(const HealthMetrics& m);
     void startMonitoring();
     void stopMonitoring();
@@ -45,6 +41,7 @@ private slots:
 private:
     void buildUI();
 
+    MetricsProvider provider_;
     QTimer* updateTimer_ = nullptr;
     class QLabel* ramLabel_ = nullptr;
     class QLabel* cpuLabel_ = nullptr;
@@ -52,6 +49,7 @@ private:
     class QLabel* searchLatencyLabel_ = nullptr;
     class QLabel* semanticCacheLabel_ = nullptr;
     class QLabel* degradationLabel_ = nullptr;
+    class QLabel* tierLabel_ = nullptr;
 };
 
 } // namespace DocuSearch

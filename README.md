@@ -13,9 +13,13 @@ Your data never leaves your machine.
 - **Full-text search** powered by SQLite FTS5 with BM25 ranking
 - **Advanced query syntax**: phrases, boolean (AND/OR/NOT), field filters
   (`type:pdf`, `folder:Railway`, `date:>2024-01-01`)
-- **PDF text extraction** via Poppler (born-digital PDFs) + **OCR** via
+- **PDF text extraction** via PDFium (born-digital PDFs) + **OCR** via
   Windows.Media.Ocr (the official WinRT OCR API — supports 25+ languages,
   no licensing risk for commercial use)
+- **Semantic search** (BGE-small-en-v1.5, fully offline) — always on,
+  throttled on low-RAM machines rather than disabled
+- **Adaptive performance** — auto-detects Low / Mid / High-end hardware,
+  slows extraction under memory pressure, never drops search
 - **Auto-scan every 1 hour** — detects new and modified files automatically
 - **Tags, notes, favorites, saved searches** — organize your way
 - **Duplicate detection** by SHA-256 hash
@@ -55,7 +59,7 @@ the duplicate finder works on document formats only.
 | UI Framework | Qt 6.7 (Widgets) |
 | Database | SQLite 3 + FTS5 (full-text search) |
 | OCR | Windows.Media.Ocr (WinRT, ships with Windows 10 1809+) |
-| PDF | Poppler (cpp binding) |
+| PDF | PDFium (Chromium, BSD) |
 | Build | CMake + vcpkg (manifest mode) |
 | Installer | WiX v4 (MSI) |
 | CI | GitHub Actions (Windows Server 2022) |
@@ -113,18 +117,20 @@ cmake --build build --config Release --parallel
 
 ```
 src/
-  core/         Config, Logger, FileUtils, Constants, Types
-  database/     Database (RAII SQLite), FileRepository, Schema
+  core/         Config, Logger, SystemProfile, MemoryMonitor,
+                GracefulDegradation, ExtractionController, ...
+  database/     Database (RAII SQLite + nested SAVEPOINTs), FileRepository, Schema
   documents/    DocumentExtractorRegistry, PdfExtractor, DocxExtractor, ...
   ocr/          WindowsOcrEngine (Windows.Media.Ocr wrapper), ocr_helper_main.cpp
-  indexer/      ContentIndexer, MetadataIndexer, PriorityScheduler
-  search/       SearchEngine, QueryParser (AST-based)
-  preview/      ThumbnailGenerator
+  indexer/      PriorityScheduler
+  search/       SearchEngine, QueryParser, HybridSearchEngine, SemanticSearchThrottle
+  embeddings/   BGE tokenizer/engine/service, EmbeddingController
+  preview/      FilePreviewPane, Pdf/Image/Office/Text preview
   monitoring/   FileWatcher (ReadDirectoryChangesW)
   backup/       BackupManager
   settings/     SettingsManager
   ui/           MainWindow, SearchBar, ResultsPane, PreviewPane,
-                MetadataPane, TagsNotesPane, SettingsDialog, Theme
+                FirstLaunchTierDetection, SystemHealthDashboard, Theme
   win/          JumpList
 ```
 

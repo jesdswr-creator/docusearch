@@ -79,12 +79,19 @@ void FirstLaunchTierDetection::buildUI() {
 
     layout->addStretch();
 
-    // Continue button
     auto* btnLayout = new QHBoxLayout();
     btnLayout->addStretch();
-    continueBtn_ = new QPushButton("Continue", this);
+    continueBtn_ = new QPushButton(QStringLiteral("Continue"), this);
+    addFolderBtn_ = new QPushButton(QStringLiteral("Add my first folder"), this);
+    addFolderBtn_->setDefault(true);
     connect(continueBtn_, &QPushButton::clicked, this, &QDialog::accept);
+    connect(addFolderBtn_, &QPushButton::clicked, this, [this]() {
+        addFolderChosen_ = true;
+        emit addFolderRequested();
+        accept();
+    });
     btnLayout->addWidget(continueBtn_);
+    btnLayout->addWidget(addFolderBtn_);
     layout->addLayout(btnLayout);
 }
 
