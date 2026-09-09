@@ -145,7 +145,7 @@ QList<int> DuplicateScanController::selectDoomedCopies(
 // ============================================================
 
 void DuplicateScanController::start(const QString& dbPath) {
-    const bool expected = false;
+    bool expected = false;   // CAS takes T& — must stay mutable
     if (!running_.compare_exchange_strong(expected, true)) return;
 
     cancelFlag_ = std::make_shared<std::atomic<bool>>(false);

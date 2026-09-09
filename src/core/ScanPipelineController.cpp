@@ -538,7 +538,7 @@ void ScanPipelineController::pumpPendingFolderScan() {
 
 void ScanPipelineController::startIntegrityPass(const ScanParams& params,
                                                 bool junkAuditNeeded) {
-    const bool expected = false;
+    bool expected = false;   // CAS takes T& — must stay mutable
     if (!integrityRunning_.compare_exchange_strong(expected, true)) return;
 
     auto result = std::make_shared<IntegrityResult>();
@@ -766,7 +766,7 @@ void ScanPipelineController::startIntegrityPass(const ScanParams& params,
 // ============================================================
 
 void ScanPipelineController::startPurgeNonIndexable(const QString& dbPath) {
-    const bool expected = false;
+    bool expected = false;   // CAS takes T& — must stay mutable
     if (!purgeRunning_.compare_exchange_strong(expected, true)) return;
 
     auto purged = std::make_shared<std::atomic<int>>(0);
