@@ -3,23 +3,6 @@
 // ============================================================
 // MainWindow.h - Top-level window with custom title bar
 // ============================================================
-//
-// Layout (top to bottom):
-//   ┌─────────────────────────────────────────────────────────┐
-//   │ [Logo] DocuSearch 1.0.0 • Offline Document Search  ☀🌙─☐✕ │ title bar
-//   ├──────┬──────────────────────────────────┬────────────────┤
-//   │ Side │ [search bar with all buttons]    │ Metadata       │
-//   │ bar  ├──────────┬───────────────────────┤                │
-//   │      │ Results  │ Document viewer       │ Tags           │
-//   │ nav  │ (340px)  │ (flex)                │                │
-//   │      │          ├───────────────────────┤ Notes          │
-//   │      │          │ Extracted text panel  │                │
-//   │      │          │ (tabs + content)      │                │
-//   │ st.  │          │                       │                │
-//   ├──────┴──────────┴───────────────────────┴────────────────┤
-//   │ ● Ready  Indexed: 2,451  Size: 3.42 GB  Last: ...  [📁] │ status bar
-//   └─────────────────────────────────────────────────────────┘
-// ============================================================
 
 #include <QMainWindow>
 #include <QString>
@@ -32,8 +15,7 @@
 #include <atomic>
 
 #include "../core/Types.h"
-#include "../search/HybridSearchEngine.h"   // v1.7.18: HybridResult in the
-                                             // applySemanticResults signature
+#include "../search/HybridSearchEngine.h"
 
 class QSplitter;
 class QMenu;
@@ -54,8 +36,9 @@ class Database;
 class FileRepository;
 class SearchEngine;
 class OcrWorkerPool;
-struct ExtractionResult;   // v1.7.20: documents/IDocumentExtractor.h
+struct ExtractionResult;
 class FileWatcher;
+class MemoryMonitor;  // PHASE 1: Memory pressure monitoring
 
 class SearchBar;
 class ResultsPane;
@@ -66,25 +49,14 @@ class TagsNotesPane;
 class IndexingProgressWidget;
 class SwitchControl;
 
-// v1.7.18: HybridSearchEngine.h is included at the top of this header
-// (HybridResult appears in applySemanticResults). BgeService stays
-// forward-declared for its unique_ptr member.
 class BgeService;
 class HybridSearchEngine;
-// v1.7.21: headless pipeline controllers (QtCore-only, wiring-tested
-// in tests/tst_Wiring.cpp — the suite that catches "declared but
-// never constructed / never wired" bugs).
 class ExtractionController;
 class EmbeddingController;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    // v1.7.20: the caller PRE-OPENS the database on a background thread
-    // (main.cpp) and hands the finished Database over — the ctor no longer
-    // blocks the UI thread on sqlite open + schema migrate, so the splash
-    // animation never freezes during startup. `preopened` may be null/unclean
-    // (defensive path): the ctor then opens inline exactly as before.
     explicit MainWindow(std::unique_ptr<Database> preopened,
                         QWidget* parent = nullptr);
     ~MainWindow() override;
@@ -115,12 +87,12 @@ private slots:
     void onFileModified(const QString& path);
     void onFileRenamed(const QString& oldPath, const QString& newPath);
     void onFileDeleted(const QString& path);
+    
+    // PHASE 1: Memory pressure handlers
+    void onMemoryPressureWarning();
+    void onMemoryPressureCritical();
+    void onMemoryPressureRecovered();
 
-    // v1.7.5: shared single-file pipeline used by the watcher handlers.
-    // Upserts the Files row, re-extracts the content, refreshes the FTS
-    // row, clears now-stale AI embeddings (rebuilt by the backfill) and
-    // wakes the embedding backfill. Returns false when the file is not
-    // an indexable document (unsupported type, excluded folder, gone).
     bool extractAndIndexFile(const QString& path);
     void onSavedSearchSelected(const QString& name);
     void onTagAdded(qint64 fileId, const QString& tag);
@@ -130,9 +102,6 @@ private slots:
     void onAbout();
     void onExportCsv();
     void onDetectDuplicates();
-    // v1.7.13: "Delete duplicate copies" on the duplicates results —
-    // keeps the newest copy per group, moves the rest to the Recycle
-    // Bin, purges the deleted rows and re-runs the check.
     void onDeleteDuplicateCopies();
     void onAddFolder();
     void onExtract();
@@ -145,217 +114,101 @@ private slots:
     void runStartupIntegrityPass();
     bool ocrWorkOutstanding() const;
 
-    // v1.7.4: AUTO-wake of the extraction pipeline (startup timer, scan
-    // completion, new folder). Unlike the Extract button's toggle
-    // semantics, this NEVER cancels a run already in flight and yields
-    // (with retries) while a scan is still walking the folders.
     void requestAutoExtract();
-    // v1.7.4: remove every index row under `folder` (Settings -> Indexed
-    // Folders removal). Cascades to SearchIndex, BgeEmbeddings and
-    // EmbeddingChunks so no ghost of the removed folder can resurface
-    // in keyword or AI search.
     void purgeFolderFromIndex(const QString& folder);
-    // v1.7.4: self-heal — delete index rows whose file no longer exists
-    // on a REACHABLE drive (an unplugged drive must never be purged;
-    // those rows are only hidden from display instead). Returns the
-    // number of rows actually removed.
     int purgeStaleRows(const QStringList& paths, const QString& context);
-    // v1.7.7: one-time startup cleanup — delete every Files row (plus
-    // SearchIndex/BgeEmbeddings/EmbeddingChunks) whose extension is not
-    // in Constants::kIndexableExtensions. Older versions indexed every
-    // file type they walked (md notes, installers, archives...); this
-    // makes "documents and images only" true immediately on first launch
-    // of 1.7.7. Returns the number of rows removed.
     int purgeNonIndexableRows();
-
-    // v1.7.10: Settings → "Remove Database (Reset)". Cancels running
-    // extraction/OCR, closes the database, deletes docusearch.db
-    // (+ -wal/-shm), reopens a fresh one, re-initializes the schema and
-    // kicks the auto-scan so the index rebuilds from the configured
-    // folders without a restart.
     void removeAndRebuildDatabase();
-
-    // v1.7.17: first-run onboarding — a welcome dialog that walks the
-    // user through adding their first folder and sets expectations
-    // honestly: indexing is fast and keyword search works right away,
-    // extraction and AI embedding take time and full AI search arrives
-    // as embedding progresses. One-time (AppSettings::welcomeDone).
     void showWelcomeDialog();
 
 private:
-    // UI builders
     void buildTitleBar();
     void buildCentral();
     void buildStatusBar();
     void applyTheme();
-    // v1.7.11: ONE apply path for settings. Both the dialog's Apply button
-    // and its OK button route here, so every setting takes effect the same
-    // way regardless of which button the user pressed. Diffs indexedDrives
-    // against the CURRENT settings_ (watch/unwatch/purge/scan), pushes CPU
-    // throttle settings into the OCR pool, honors monitorFileChanges, and
-    // persists + re-themes.
     void applyNewSettings(const AppSettings& s);
     void loadSettings();
     void saveSettings();
     void refreshSavedSearches();
     void openFile(const QString& path);
-
-    // v1.7.18: BACKGROUND HALF OF THE TWO-STAGE SEARCH. onSearch() shows
-    // keyword results immediately and runs the semantic scan (BGE query
-    // embedding + chunk/document cosine scans) on the global thread pool;
-    // when it lands this renders the merged list — keyword order never
-    // touched, AI additions appended, badges + summary + final status.
-    // Runs on the UI thread (delivered by the QFutureWatcher); the heavy
-    // work never blocks input. `generation` is compared against searchGen_
-    // by the caller so a superseded query's result is dropped untouched.
-    // (A plain private method — deliberately NOT a slot, so moc never
-    // has to normalize its std::vector parameter.)
     void applySemanticResults(const QString& query,
                               const QList<SearchHit>& keywordHits,
                               std::vector<HybridResult> results,
                               qint64 totalMs);
-
-    // Fast metadata-only scan of a folder.
     void scanFolderFast(const QString& folder);
-
-    // Refresh the preview pane with the currently-selected file's
-    // extracted text.
     void refreshPreviewForSelectedFile();
-
-    // Re-render all Lucide icons throughout the UI (call after theme toggle).
     void refreshAllIcons();
-
-    // One-shot: restore WS_THICKFRAME so Windows honors the WM_NCHITTEST
-    // resize borders on our frameless window. See MainWindow.cpp.
     void enableNativeResize();
     bool nativeResizeApplied_ = false;
 
-
 public:
     Q_INVOKABLE void updateIndexStats();
-    // Refresh the OCR availability indicator on the status bar.
     void updateOcrStatusIndicator();
-    // Initialize the BGE semantic search subsystem (optional, async).
     void initializeSemanticSearch();
-    // Returns a human-readable extraction status string for the status bar.
     QString getExtractionStatusString();
 
-    // Owned subsystems
     std::unique_ptr<Database>       db_;
     std::unique_ptr<FileRepository> repo_;
     std::unique_ptr<SearchEngine>   search_;
     std::unique_ptr<OcrWorkerPool>  ocrPool_;
     std::unique_ptr<FileWatcher>    watcher_;
-    // v1.7.21: HEADLESS PIPELINE CONTROLLERS. The extraction session
-    // machine and the AI-embedding backfill/rebuild state machine moved
-    // out of this class into QtCore-only controllers that the wiring
-    // tests construct headless. Declared AFTER db_/repo_ so they are
-    // destroyed FIRST — their pools drain while the database is open.
     std::unique_ptr<ExtractionController> extractionController_;
     std::unique_ptr<EmbeddingController>  embeddingController_;
-    // Phase 9: Debounce file watcher events (merge add+modify within 500ms).
+    std::unique_ptr<MemoryMonitor>  memoryMonitor_;  // PHASE 1: Monitor RAM pressure
+    
     QHash<QString, qint64> fileEventDebounce_;
     QTimer* fileEventDebounceTimer_ = nullptr;
 
-    // ---- UI widgets ----
-    // Title bar
     QWidget*        titleBar_             = nullptr;
     QLabel*         appLogoLbl_           = nullptr;
     QLabel*         titleBarText_         = nullptr;
     QLabel*         titleBarSubtitle_     = nullptr;
-    // No theme toggle button — light mode only
     QPushButton*    titleMinBtn_          = nullptr;
     QPushButton*    titleMaxBtn_          = nullptr;
     QPushButton*    titleCloseBtn_        = nullptr;
 
-    // Sidebar
     QWidget*        sidebar_              = nullptr;
     QListWidget*    sidebarList_          = nullptr;
     QLabel*         indexedHeaderLbl_     = nullptr;
     QLabel*         indexedInfoLbl_       = nullptr;
-    // v1.7.14: full index-stat breakdown chips (Indexed / Extracted /
-    // Embedded) shown in the top-right badge.
     QLabel*         extractedInfoLbl_     = nullptr;
     QLabel*         embeddedInfoLbl_      = nullptr;
     QProgressBar*   indexedBar_           = nullptr;
 
-    // Center panel
     SearchBar*      searchBar_            = nullptr;
-    QSplitter*      mainSplitter_         = nullptr;  // 3-way: results | viewer | metadata
+    QSplitter*      mainSplitter_         = nullptr;
     ResultsPane*    resultsPane_          = nullptr;
     PreviewPane*    previewPane_          = nullptr;
-    // New top-pane native file preview (PDF/image/text/office).
-    // Sits ABOVE previewPane_ in the same column.
     FilePreviewPane* filePreviewPane_     = nullptr;
-    // Semantic search toggle button (in search bar).
-    QPushButton*    semanticToggleBtn_    = nullptr;  // legacy; unused after switch port
-    QWidget*        aiControlWidget_     = nullptr;  // container: [sparkles-ico] AI [switch] [state label]
+    QPushButton*    semanticToggleBtn_    = nullptr;
+    QWidget*        aiControlWidget_     = nullptr;
     QLabel*         aiIconLbl_           = nullptr;
-    SwitchControl*  aiSwitch_            = nullptr;
+    class SwitchControl* aiSwitch_            = nullptr;
     QLabel*         aiStateLbl_          = nullptr;
     QPushButton*    themeToggleBtn_       = nullptr;
 
-    // Semantic search subsystem (BGE + hybrid).
     std::unique_ptr<BgeService>        bgeService_;
-    // v1.7.11: future of the background BGE initialize() (captures
-    // `this`); joined in ~MainWindow before bgeService_ is destroyed.
     QFuture<void>                      bgeInitFuture_;
     std::unique_ptr<HybridSearchEngine> hybridSearch_;
     bool            semanticEnabled_     = false;
 
-    // v1.7.18: TWO-STAGE SEARCH STATE.
-    // searchGen_ increments on every onSearch(); a background semantic
-    // result whose generation no longer matches is discarded (the user
-    // typed a newer query). semanticSearchFuture_ is joined in the dtor
-    // (mirrors bgeInitFuture_) so a worker can never touch a dying
-    // hybridSearch_/bgeService_. semanticSearchMutex_ serializes the
-    // worker section: two overlapping scans must not interleave
-    // setTypeFilter+search on the shared HybridSearchEngine.
     quint64         searchGen_           = 0;
     QFuture<std::vector<HybridResult>> semanticSearchFuture_;
     QMutex          semanticSearchMutex_;
     std::atomic<bool> searchWorkersStop_{false};
-    // v1.7.19: cooperative cancellation of the semantic scan. Every
-    // onSearch() invalidates the PREVIOUS search's flag (the running
-    // scan notices within one batch and exits; a queued-but-unstarted
-    // worker sees it at entry) and installs a fresh one. The worker
-    // keeps the shared_ptr alive even after the member moves on, so
-    // there is no dangling-pointer race. Without this, the NEW query
-    // waited behind semanticSearchMutex_ for the ENTIRE superseded scan
-    // to finish — typing three queries meant waiting three scan-times.
     std::shared_ptr<std::atomic<bool>> activeSemanticCancel_;
-    // v1.7.19: DEDICATED single-thread pool for the semantic scan. The
-    // global QtConcurrent pool is shared with per-file extraction tasks
-    // and the batch-embedding worker; when a big folder is being
-    // extracted, every pool thread is busy and the semantic worker
-    // waited in the queue for SECONDS before its scan even started —
-    // a major hidden contributor to the "AI result takes too long"
-    // report. One dedicated thread + the mutex keeps scans serialized
-    // (as before) while making them immune to global-pool starvation.
     QThreadPool*    searchPool_          = nullptr;
-    // v1.7.20 (carried): every background path owns a thread — search
-    // keeps its dedicated searchPool_ (v1.7.19), OCR runs on its own
-    // OcrWorkerPool QThreads, and since v1.7.21 extraction runs on
-    // ExtractionController's pool and embedding on EmbeddingController's
-    // pool (both eagerly constructed + audited by verifyWiring()).
 
-    // v1.7.13: the duplicates result set the pane is currently showing
-    // (dupKeys_ runs parallel to dupResults_), backing the "Delete
-    // duplicate copies" action. Cleared whenever the finder reports
-    // nothing or the pane is reused for search results.
     QList<SearchHit> dupResults_;
     QStringList      dupKeys_;
 
-    // Persistent status chip text for the AI control (state + counts).
     void setAiChip(const QString& text, bool active);
     void updateTitleBarState();
 
-    // Right panel
-    QSplitter*      rightSplitter_        = nullptr;  // metadata | tags/notes (vertical)
+    QSplitter*      rightSplitter_        = nullptr;
     MetadataPane*   metadataPane_         = nullptr;
     TagsNotesPane*  tagsNotesPane_        = nullptr;
 
-    // Status bar
     QLabel*         statusDotLbl_         = nullptr;
     QLabel*         statusReadyLbl_       = nullptr;
     QLabel*         statusIndexedLbl_     = nullptr;
@@ -363,35 +216,28 @@ public:
     QLabel*         statusLastLbl_        = nullptr;
     QPushButton*    openLocationBtn_      = nullptr;
     QProgressBar*   extractionProgressBar_ = nullptr;
-    // OCR availability indicator (right side of status bar).
     QWidget*        ocrStatusWidget_      = nullptr;
     QLabel*         ocrDotLbl_            = nullptr;
     QLabel*         ocrStatusLbl_         = nullptr;
+    QLabel*         memoryStatusLbl_      = nullptr;  // PHASE 1: Memory pressure indicator
 
-    // Hidden (kept for stats plumbing)
     IndexingProgressWidget* indexingWidget_ = nullptr;
 
-    // Timers
     QTimer*         liveSearchTimer_      = nullptr;
     QTimer*         autoScanTimer_        = nullptr;
     QString         pendingQuery_;
 
     AppSettings     settings_;
     bool            darkMode_             = true;
-    // Pastel theme cycling: 0=Lavender, 1=Mint, 2=Peach, 3=Midnight (dark)
     int             pastelTheme_          = 0;
-    // v1.7.21: the extraction session state (running flag, cancel flag,
-    // in-flight guard, session generation, OCR accounting, first-run
-    // mode, watcher) moved INTO ExtractionController — this class keeps
-    // only the db-reset latch for its own late watcher-driven writes.
     bool            dbResetting_          = false;
 
     bool            autoScanRunning_      = false;
-    qint64          autoScanStartedMs_    = 0;    // v1.7.3: watchdog clock
-    int             autoExtractRetryLeft_ = 0;    // v1.7.4: startup auto-extract retries while a scan is busy
-    qint64          lastWatcherRescanMs_  = 0;    // v1.7.4: throttle for overflow-triggered rescans
+    qint64          autoScanStartedMs_    = 0;
+    int             autoExtractRetryLeft_ = 0;
+    qint64          lastWatcherRescanMs_  = 0;
     bool            maximized_            = false;
-    bool            ocrBtnEnabled_        = true;  // false while OCR is running
+    bool            ocrBtnEnabled_        = true;
     qint64          selectedFileId_       = 0;
     QString         selectedPath_;
 };
