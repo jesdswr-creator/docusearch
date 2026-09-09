@@ -101,6 +101,32 @@ target_sources(tst_Wiring PRIVATE
 docusearch_add_test(tst_TierRuntime)
 target_link_libraries(tst_Wiring PRIVATE Qt6::Concurrent)
 
+# ---- Scan pipeline tests (v1.7.24) -------------------------------------
+# The ScanPipelineController (auto-scan / folder ingest / startup
+# integrity pass / legacy purge) driven headless against a temp
+# database + temp folders: allowlist gates, queued-row survival,
+# the Pass-2 prune INCLUDING EmbeddingChunks, unavailable-folder
+# skips, the integrity-pass requeue/backfill contracts, the one-shot
+# junk-audit flag, the upsert-with-hash ingest, FIFO queueing and
+# the static purges.
+docusearch_add_test(tst_ScanPipeline)
+target_sources(tst_ScanPipeline PRIVATE
+    ../src/core/ScanPipelineController.cpp
+)
+target_link_libraries(tst_ScanPipeline PRIVATE Qt6::Concurrent)
+
+# ---- Duplicate scan tests (v1.7.24) ------------------------------------
+# The DuplicateScanController five-pass scanner driven headless over
+# real duplicate files: grouping, singleton drops, ghost-row
+# reporting, hash write-back, identity collapse (one physical file
+# can never pair with itself), newest-kept selection, and the
+# collision-safe move helper.
+docusearch_add_test(tst_DuplicateScan)
+target_sources(tst_DuplicateScan PRIVATE
+    ../src/core/DuplicateScanController.cpp
+)
+target_link_libraries(tst_DuplicateScan PRIVATE Qt6::Concurrent)
+
 # ---- OCR helper test (separate function — no SQLite deps) -------------
 # Verifies the Windows.Media.Ocr helper exe crash safety. Tests that the
 # helper exits cleanly on missing files / corrupt images without

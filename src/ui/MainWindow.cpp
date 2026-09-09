@@ -39,11 +39,15 @@
 #include "../core/GracefulDegradation.h"
 #include "../core/SystemProfile.h"
 #include "../core/TierConfig.h"
+#include "../core/ScanPipelineController.h"
+#include "../core/DuplicateScanController.h"
+#include "../core/StorageHealth.h"
 #include "../embeddings/EmbeddingController.h"
 #include "../search/HybridSearchEngine.h"
 #include "../settings/SettingsManager.h"
 #include "FirstLaunchTierDetection.h"
 #include "SystemHealthDashboard.h"
+#include "TitleBarWidget.h"
 
 #ifdef DOCUSEARCH_HAS_PDFIUM
 #  include "../pdf/PdfiumDocument.h"
@@ -124,13 +128,6 @@
 
 namespace DocuSearch {
 
-namespace {
-// Forward declaration: the definition lives in the anonymous namespace
-// further down this file, but the ctor's path-gate lambda (injected
-// into ExtractionController) sits before that point in the file.
-QSet<QString> normalizedExtSet(const QStringList& exts);
-}
-
 // ── Brand logo pixmap ─────────────────────────────────────────
 // The title bar must carry the REAL DocuSearch logo (the same artwork
 // the taskbar icon uses: :/icons/DocuSearch-256.png) — not a generic
@@ -153,61 +150,6 @@ inline QPixmap appLogoPixmap(qreal dpr = 1.0) {
     pm.setDevicePixelRatio(dpr);
     return pm;
 }
-
-// ============================================================
-// Custom title bar widget — handles mouse dragging to move window
-// ============================================================
-class TitleBarWidget : public QWidget {
-public:
-    explicit TitleBarWidget(MainWindow* owner, QWidget* parent = nullptr)
-        : QWidget(parent), owner_(owner) {
-        setFixedHeight(44);
-        setObjectName("titleBar");
-        setMouseTracking(true);
-    }
-
-    void setDraggableWidget(QWidget* w) { draggable_ = w; }
-
-protected:
-    void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton) {
-            // Delegate to the platform's native move loop instead of manual
-            // owner_->move() tracking. The manual tracker had a fatal flaw:
-            // if the release happened outside the window (Alt+Tab, a toast
-            // stealing focus, Win+Down minimizing mid-drag), dragging_ stayed
-            // true forever and every later mouse-move teleported the window —
-            // which also wedged WM_NCHITTEST resize handling until restart.
-            // startSystemMove() hands control to Windows, supports Aero Snap,
-            // and can never get stuck in a half-finished drag.
-            if (owner_->windowHandle())
-                owner_->windowHandle()->startSystemMove();
-            e->accept();
-        }
-    }
-
-    void mouseMoveEvent(QMouseEvent* e) override {
-        QWidget::mouseMoveEvent(e);  // native loop owns movement
-    }
-
-    void mouseReleaseEvent(QMouseEvent* e) override {
-        QWidget::mouseReleaseEvent(e);
-    }
-
-    void mouseDoubleClickEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton) {
-            if (owner_->isMaximized()) {
-                owner_->showNormal();
-            } else {
-                owner_->showMaximized();
-            }
-            e->accept();
-        }
-    }
-
-private:
-    MainWindow* owner_ = nullptr;
-    QWidget* draggable_ = nullptr;
-};
 
 // ============================================================
 // Constructor / destructor
@@ -426,6 +368,26 @@ MainWindow::MainWindow(std::unique_ptr<Database> preopened, QWidget* parent)
 
     embeddingController_ = std::make_unique<EmbeddingController>(this);
     embeddingController_->setDatabase(db_.get());
+
+    // v1.7.24: the scan pipeline + the duplicate scanner — the third
+    // and fourth pipelines extracted from this window. Constructed
+    // EAGERLY (the wiring contract: everything declared is built, the
+    // class of bug the v1.7.21 verifyWiring audit exists for) and
+    // wired here so every pipeline→UI wire is visible in one block.
+    scanPipeline_ = std::make_unique<ScanPipelineController>(this);
+    connect(scanPipeline_.get(), &ScanPipelineController::autoScanFinished,
+            this, &MainWindow::onAutoScanFinished);
+    connect(scanPipeline_.get(), &ScanPipelineController::folderScanFinished,
+            this, &MainWindow::onFolderScanFinished);
+    connect(scanPipeline_.get(), &ScanPipelineController::integrityFinished,
+            this, &MainWindow::onIntegrityFinished);
+    connect(scanPipeline_.get(),
+            &ScanPipelineController::purgeNonIndexableFinished,
+            this, &MainWindow::onPurgeNonIndexableFinished);
+
+    duplicateScan_ = std::make_unique<DuplicateScanController>(this);
+    connect(duplicateScan_.get(), &DuplicateScanController::finished,
+            this, &MainWindow::onDuplicateScanFinished);
 
     // v1.7.22: live RAM/CPU monitor + graceful degradation. Semantic
     // search stays on; OCR/extraction slow or pause under pressure.
@@ -906,7 +868,8 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     // "Don't ask again" switch that persists immediately.
     if (settings_.closeConfirmAsk) {
         QStringList busy;
-        if (autoScanRunning_)            busy << "a folder scan";
+        if (scanPipeline_ && scanPipeline_->isAutoScanRunning())
+                                         busy << "a folder scan";
         if (extractionController_ && extractionController_->isRunning())
                                          busy << "text extraction";
         if (embeddingController_ && embeddingController_->isBackfillRunning())
@@ -1832,69 +1795,10 @@ void MainWindow::refreshSavedSearches() {
 // ============================================================
 // Search & results
 // ============================================================
-namespace {
-// v1.7.11: Normalize the user's "Excluded Extensions" list into a fast
-// lookup set - trimmed, lowercased, leading dot stripped (".ISO", "iso"
-// and " Iso " all mean the same thing). Shared by every ingest gate
-// (Add-Folder scan, hourly scan, live watcher) so the setting finally
-// takes effect: before this, the list was saved and round-tripped but
-// consulted by NOTHING.
-QSet<QString> normalizedExtSet(const QStringList& exts) {
-    QSet<QString> out;
-    out.reserve(exts.size());
-    for (QString e : exts) {
-        e = e.trimmed().toLower();
-        while (e.startsWith('.')) e.remove(0, 1);
-        if (!e.isEmpty()) out.insert(e);
-    }
-    return out;
-}
-
-// v1.7.4: True when the STORAGE ROOT of an absolute path is reachable.
-// Used to tell "this file was deleted" apart from "the whole drive is
-// offline": an unplugged USB drive or disconnected network share must
-// NEVER cause index purges (the hourly scan skips unavailable folders
-// for exactly the same reason). Only hide results for offline roots.
-bool storageRootReachable(const QString& path) {
-    if (path.isEmpty()) return false;
-    const QString abs = QDir::toNativeSeparators(
-        QFileInfo(path).absoluteFilePath());
-    if (abs.startsWith(QLatin1String("\\\\"))) {
-        // UNC: \\server\share\... — the share is the storage root.
-        const QStringList parts = abs.split('\\', Qt::SkipEmptyParts);
-        if (parts.size() < 2) return false;
-        const QString root = QLatin1String("\\\\") + parts.at(0)
-                           + QLatin1Char('\\') + parts.at(1);
-        return QFileInfo::exists(root);
-    }
-    if (abs.size() >= 3 && abs.at(1) == QLatin1Char(':')) {
-        return QFileInfo::exists(abs.left(3));   // e.g. "D:\"
-    }
-    return QFileInfo::exists(abs);
-}
-
-// v1.7.3: hide results whose file no longer exists (deleted or moved while
-// the app was closed — the FileWatcher only catches changes while we run).
-// The hourly scan prunes them from the index; this covers the gap until
-// the next scan so users never click a result that opens to nothing.
-// v1.7.4: returns the hidden paths so the caller can PURGE the rows whose
-// drive is still reachable (self-healing index); rows on offline roots are
-// only hidden — purging those would wipe live data.
-QStringList hideStaleResults(QList<SearchHit>& hits) {
-    QList<SearchHit> kept;
-    kept.reserve(hits.size());
-    QStringList removedPaths;
-    for (const SearchHit& h : hits) {
-        if (!h.path.isEmpty() && !QFileInfo::exists(h.path)) {
-            removedPaths.append(h.path);
-            continue;
-        }
-        kept.append(h);
-    }
-    hits = kept;
-    return removedPaths;
-}
-} // namespace
+// (v1.7.24: the file-local helpers that used to live here —
+// normalizedExtSet, storageRootReachable, hideStaleResults — moved
+// to core/StorageHealth.h so the extracted scan/duplicate pipelines
+// share ONE definition with the window.)
 
 void MainWindow::onSearch(const QString& query) {
     if (!repo_ || !db_ || !search_) return;
@@ -2399,98 +2303,12 @@ void MainWindow::openFile(const QString& path) {
 }
 
 // ============================================================
-// Folder scan + content extraction
+// Folder scan: v1.7.24 — the walk lives in ScanPipelineController
+// (startFolderScan on its own worker + sqlite connection). The old
+// synchronous scanFolderFast pumped processEvents every 10 files —
+// the app's last big UI-thread re-entrancy surface. The window only
+// reports what onFolderScanFinished receives.
 // ============================================================
-void MainWindow::scanFolderFast(const QString& folder) {
-    if (!repo_ || !db_ || folder.isEmpty()) return;
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
-
-    // ONLY index file types the user cares about — documents and common
-    // images. v1.7.7: this private list is GONE — scanFolderFast now
-    // consults the SAME central allowlist (Constants::isIndexableExtension)
-    // as the hourly scan, the watcher and the full re-index, so every
-    // ingest path agrees on what may enter the index.
-    //
-    // v1.7.10: this scan also computes the CONTENT HASH. The INSERT
-    // below never wrote the hash column, so every row added through
-    // "Add Folder" — the most common ingest path — had hash='' and the
-    // duplicate finder (which groups on hash) honestly reported "no
-    // duplicate documents found" for an index FULL of duplicates. Now
-    // the index is duplicates-ready the moment the scan finishes,
-    // matching what the hourly walk already does.
-    const bool hashEnabled = settings_.hashLargeFiles;
-    int count = 0, skipped = 0, hashed = 0;
-    // v1.7.11: honor Settings → Indexing. The walk used to receive an
-    // EMPTY exclude list ("emptyExcludes"), so Excluded Folders was
-    // silently ignored by the most common ingest path (Add Folder /
-    // newly added drives), and Excluded Extensions was consulted by
-    // nothing at all — both settings looked broken to the user.
-    const QSet<QString> userExcludedExts =
-        normalizedExtSet(settings_.excludedExtensions);
-    FileUtils::walkDirectory(folder, settings_.excludedFolders,
-                             [&](const QFileInfo& fi) -> bool {
-        const QString ext = FileUtils::extensionOf(fi.absoluteFilePath()).toLower();
-        if (!Constants::isIndexableExtension(ext)) { ++skipped; return true; }
-        if (userExcludedExts.contains(ext))        { ++skipped; return true; }
-
-        const QString path = FileUtils::toNative(fi.absoluteFilePath());
-        const QString filename = fi.fileName();
-        const qint64 size = fi.size();
-        const qint64 created = fi.birthTime().toSecsSinceEpoch();
-        const qint64 modified = fi.lastModified().toSecsSinceEpoch();
-        const char* ocrStat = (Constants::kDocumentExtensions.contains(ext) ||
-                               Constants::kImageExtensions.contains(ext))
-                              ? "pending" : "not_needed";
-
-        // Same 64 MB cap as the hourly walk, so both paths store the
-        // SAME fingerprint for the SAME file and duplicates group
-        // correctly no matter which scanner saw the file first.
-        QString hash;
-        if (hashEnabled) {
-            hash = FileUtils::sha256OfFile(path, 64 * 1024 * 1024);
-            if (!hash.isEmpty()) ++hashed;
-        }
-
-        sqlite3_stmt* s = nullptr;
-        sqlite3_prepare_v2(raw,
-            "INSERT INTO Files (path, filename, extension, size, "
-            "  created_date, modified_date, hash, indexing_status, ocr_status) "
-            "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'metadata_only', ?8) "
-            "ON CONFLICT(path) DO UPDATE SET "
-            "  filename=excluded.filename, extension=excluded.extension, "
-            "  size=excluded.size, modified_date=excluded.modified_date, "
-            "  hash=CASE WHEN excluded.hash != '' "
-            "            THEN excluded.hash ELSE Files.hash END;",
-            -1, &s, nullptr);
-        if (s) {
-            sqlite3_bind_text(s, 1, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(s, 2, filename.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(s, 3, ext.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(s, 4, size);
-            sqlite3_bind_int64(s, 5, created);
-            sqlite3_bind_int64(s, 6, modified);
-            sqlite3_bind_text(s, 7, hash.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(s, 8, ocrStat, -1, SQLITE_TRANSIENT);
-            sqlite3_step(s);
-            sqlite3_finalize(s);
-        }
-        ++count;
-        if (count % 10 == 0) {
-            statusBar()->showMessage(
-                QString("Scanning... %1 indexed (%2 skipped)").arg(count).arg(skipped));
-            QApplication::processEvents();
-        }
-        return true;
-    });
-    updateIndexStats();
-    statusBar()->showMessage(
-        QString("Scan complete: %1 files indexed, %2 skipped%3")
-            .arg(count).arg(skipped)
-            .arg(hashed > 0 ? QString(
-                ", %1 fingerprint%2 computed")
-                .arg(hashed).arg(hashed == 1 ? "" : "s") : QString()), 5000);
-}
 
 // ============================================================
 // v1.7.17: FIRST-RUN WELCOME — onboarding + honest expectations
@@ -2649,7 +2467,7 @@ void MainWindow::onMemoryPressureRecovered() {
 void MainWindow::maybeRunAutomaticBackup() {
     if (!autoBackupEnabled_ || autoBackupInFlight_) return;
     if (!db_ || !db_->isOpen()) return;
-    if (autoScanRunning_
+    if ((scanPipeline_ && scanPipeline_->isAutoScanRunning())
         || (extractionController_ && extractionController_->isRunning())) {
         return;  // busy pipeline - the next tick retries
     }
@@ -2776,7 +2594,6 @@ void MainWindow::onAddFolder() {
 
     try {
         statusBar()->showMessage("Scanning " + folder + " ...");
-        QApplication::processEvents();
 
         // v1.7.4: watch the folder LIVE. addWatches() ran once at startup
         // only, so folders added through this button were scanned but not
@@ -2825,18 +2642,10 @@ void MainWindow::onAddFolder() {
             }
         }
 
-        scanFolderFast(folder);
-
-        // Auto-start extraction immediately after scanning.
-        // This extracts text from all newly-indexed files in the
-        // background (QTimer, 200 files per session) so the user
-        // doesn't need to manually click Extract.
-        statusBar()->showMessage("Scan complete. Starting auto-extraction...", 3000);
-        QApplication::processEvents();
-        QTimer::singleShot(500, this, [this]() {
-            autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
-            requestAutoExtract();
-        });
+        // v1.7.24: the walk runs on the ScanPipelineController worker
+        // (own sqlite connection). Completion — the status report and
+        // the auto-extract wake — arrives via onFolderScanFinished.
+        scanPipeline_->startFolderScan(folder, currentScanParams());
     } catch (...) {
         statusBar()->showMessage("Folder scan failed.", 5000);
     }
@@ -2979,422 +2788,73 @@ void MainWindow::onExtract() {
 }
 
 void MainWindow::autoScanIndexedFolders() {
-    if (!repo_ || !db_) return;
+    if (!scanPipeline_ || !repo_ || !db_) return;
 
     // v1.7.3: the old guard DROPPED the hourly tick silently whenever an
-    // extraction session or a full re-index was busy - with long runs that
-    // made the scan "never happen". Retry shortly after instead of losing
-    // the tick.
-    const bool busy = extractionController_ && extractionController_->isRunning();
-    if (busy) {
+    // extraction session or a full re-index was busy - with long runs
+    // that made the scan "never happen". Retry shortly after instead of
+    // losing the tick.
+    if (extractionController_ && extractionController_->isRunning()) {
         QTimer::singleShot(10 * 60 * 1000, this, [this]{
             autoScanIndexedFolders();
         });
         return;
     }
 
-    // v1.7.3 watchdog: a scan stuck for >30 min (network share gone
-    // silent, dead drive) used to block EVERY future scan via
-    // autoScanRunning_. Re-arm and let a fresh scan proceed.
-    if (autoScanRunning_) {
-        const qint64 elapsedMs =
-            QDateTime::currentMSecsSinceEpoch() - autoScanStartedMs_;
-        if (elapsedMs < 30 * 60 * 1000) return;   // previous scan still OK
-        DS_WARN("Scan", "Auto-scan watchdog: previous scan stuck >30 min - re-arming");
-        autoScanRunning_ = false;
-    }
+    // CRITICAL: Only scan the folders the user explicitly added via
+    // Settings -> Indexing -> Indexed Drives (see v1.6 notes for why
+    // DB-derived folders were wrong).
+    if (settings_.indexedDrives.isEmpty()) return;
 
-    // CRITICAL: Only scan the folders the user explicitly added via Settings
-    // -> Indexing -> Indexed Drives (see v1.6 notes for why DB-derived
-    // folders were wrong).
-    if (settings_.indexedDrives.isEmpty()) {
-        autoScanRunning_ = false;
-        return;
-    }
-
-    autoScanRunning_ = true;
-    autoScanStartedMs_ = QDateTime::currentMSecsSinceEpoch();
     statusBar()->showMessage("Auto-scanning indexed folders...");
+    // v1.7.24: the walk (and its >30-min watchdog) live in the
+    // controller; the result arrives via onAutoScanFinished.
+    scanPipeline_->startAutoScan(currentScanParams());
+}
 
-    struct ScanStats {
-        int newFiles = 0;
-        int updatedFiles = 0;
-        int removedFiles = 0;
-        int unavailable = 0;
-    };
-    auto stats = std::make_shared<ScanStats>();
+void MainWindow::onAutoScanFinished(const DocuSearch::ScanStats& stats) {
+    updateIndexStats();
 
-    const QStringList folderList = settings_.indexedDrives;
-    // v1.7.11: the hourly walk used to pass an EMPTY exclude list to
-    // walkDirectory and never consulted excludedExtensions — so a folder
-    // the user explicitly excluded in Settings kept being re-indexed
-    // every hour. Both lists now gate the walk; excluded files also drop
-    // out of `seen`, so the Pass-2 prune below cleans up rows that were
-    // indexed BEFORE the user excluded their folder/extension.
-    const QStringList excludedFolders = settings_.excludedFolders;
-    const QSet<QString> userExcludedExts =
-        normalizedExtSet(settings_.excludedExtensions);
-    QString dbPath = Config::instance().dbPath();
-    bool hashEnabled = settings_.hashLargeFiles;
+    const QString unavailableNote = stats.unavailable > 0
+        ? QStringLiteral(" (%1 folder%2 unavailable)")
+              .arg(stats.unavailable)
+              .arg(stats.unavailable == 1 ? "" : "s")
+        : QString();
 
-    QFuture<void> future = QtConcurrent::run(
-        [folderList, excludedFolders, userExcludedExts,
-         dbPath, hashEnabled, stats]() {
-        sqlite3* workerDb = nullptr;
-        if (sqlite3_open_v2(dbPath.toUtf8().constData(), &workerDb,
-                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
-                            nullptr) != SQLITE_OK) {
-            return;
-        }
-        // v1.7.11: the main connection sets busy_timeout (Database::open);
-        // this raw worker connection did not, so a concurrent UI-thread
-        // write could hand it SQLITE_BUSY and silently skip its work.
-        sqlite3_exec(workerDb, "PRAGMA busy_timeout = 5000;",
-                     nullptr, nullptr, nullptr);
+    if (stats.newFiles > 0 || stats.updatedFiles > 0) {
+        statusBar()->showMessage(
+            QStringLiteral("Auto-scan complete: %1 new, %2 changed, %3 "
+                           "removed%4")
+                .arg(stats.newFiles)
+                .arg(stats.updatedFiles)
+                .arg(stats.removedFiles)
+                .arg(unavailableNote),
+            8000);
+        // Only wake the extraction pipeline when there is actual work;
+        // waking it on every idle tick was pure noise.
+        QTimer::singleShot(500, this, [this]() {
+            autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
+            requestAutoExtract();
+        });
+    } else {
+        statusBar()->showMessage(
+            QStringLiteral("Auto-scan complete: index up to date "
+                           "(%1 removed%2)")
+                .arg(stats.removedFiles).arg(unavailableNote),
+            5000);
+    }
+}
 
-        for (const auto& folder : folderList) {
-            try {
-                const QString root = FileUtils::toNative(folder);
-
-                // v1.7.3: if the folder is temporarily unavailable
-                // (unplugged drive, disconnected share) DO NOT walk and
-                // DO NOT prune - pruning would wipe the entire index for
-                // it and the files would have to be re-extracted from
-                // scratch on return. Skip and report instead.
-                if (!QDir(root).exists()) { ++stats->unavailable; continue; }
-
-                // ---- Pass 1: walk + upsert, remembering what we saw ----
-                QSet<QString> seen;              // case-folded native paths
-                seen.reserve(1024);
-                FileUtils::walkDirectory(folder, excludedFolders,
-                    [&](const QFileInfo& fi) -> bool {
-                        // v1.7.7: THE extension allowlist gate. Checked
-                        // BEFORE the path enters `seen`, so the Pass-2
-                        // prune below treats every non-indexable file
-                        // (md notes, txt, logs, installers, archives...)
-                        // as unseen and deletes any row an older version
-                        // indexed — the index self-heals to documents +
-                        // images only.
-                        // v1.7.11: the user's Excluded Extensions list is
-                        // an additional gate on top of the allowlist.
-                        const QString ext =
-                            FileUtils::extensionOf(fi.absoluteFilePath());
-                        if (!Constants::isIndexableExtension(ext))
-                            return true;
-                        if (userExcludedExts.contains(ext.toLower()))
-                            return true;
-
-                        const QString path =
-                            FileUtils::toNative(fi.absoluteFilePath());
-                        seen.insert(path.toLower());
-
-                        // Read the existing row (if any) so we can tell
-                        // "same file, metadata refresh" from "file CHANGED".
-                        qint64 oldSize = -1, oldModified = -1;
-                        QString oldHash;
-                        bool isNew = true;
-                        sqlite3_stmt* chk = nullptr;
-                        if (sqlite3_prepare_v2(workerDb,
-                                "SELECT id, size, modified_date, hash FROM "
-                                "Files WHERE path = ?1;",
-                                -1, &chk, nullptr) == SQLITE_OK) {
-                            sqlite3_bind_text(chk, 1,
-                                              path.toUtf8().constData(), -1,
-                                              SQLITE_TRANSIENT);
-                            if (sqlite3_step(chk) == SQLITE_ROW) {
-                                isNew       = false;
-                                oldSize     = sqlite3_column_int64(chk, 1);
-                                oldModified = sqlite3_column_int64(chk, 2);
-                                const unsigned char* h =
-                                    sqlite3_column_text(chk, 3);
-                                oldHash = h ? QString::fromUtf8(
-                                    reinterpret_cast<const char*>(h))
-                                            : QString();
-                            }
-                            sqlite3_finalize(chk);
-                        }
-
-                        const qint64 size = fi.size();
-                        const qint64 modified =
-                            fi.lastModified().toSecsSinceEpoch();
-                        // Same size + same mtime = untouched file.
-                        const bool changed =
-                            !isNew && (size != oldSize ||
-                                       modified != oldModified);
-
-                        // (Re)compute the hash only when it can have
-                        // changed - brand-new, modified, or rows whose hash
-                        // was never computed (backfill so the duplicates
-                        // finder stays meaningful). Otherwise preserve the
-                        // stored hash: re-hashing every unchanged file on
-                        // every scan would hammer the disk for nothing.
-                        QString hash;
-                        if (!hashEnabled) {
-                            hash = oldHash;              // preserve whatever exists
-                        } else if (isNew || changed || oldHash.isEmpty()) {
-                            hash = FileUtils::sha256OfFile(
-                                path, 64 * 1024 * 1024);
-                        } else {
-                            hash = oldHash;
-                        }
-
-                        if (isNew) {
-                            sqlite3_stmt* upd = nullptr;
-                            sqlite3_prepare_v2(workerDb,
-                                "INSERT INTO Files (path, filename, "
-                                "  extension, size, created_date, "
-                                "  modified_date, hash, indexing_status, "
-                                "  ocr_status) "
-                                "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                                -1, &upd, nullptr);
-                            if (upd) {
-                                sqlite3_bind_text(upd, 1,
-                                                  path.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 2, fi.fileName()
-                                                          .toUtf8()
-                                                          .constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 3,
-                                                  ext.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_int64(upd, 4, size);
-                                sqlite3_bind_int64(
-                                    upd, 5, fi.birthTime().toSecsSinceEpoch());
-                                sqlite3_bind_int64(upd, 6, modified);
-                                sqlite3_bind_text(
-                                    upd, 7, hash.toUtf8().constData(), -1,
-                                    SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 8, "metadata_only",
-                                                  -1, SQLITE_TRANSIENT);
-                                const char* ocrStat =
-                                    (Constants::kDocumentExtensions.contains(
-                                         ext) ||
-                                     Constants::kImageExtensions.contains(ext))
-                                        ? "pending" : "not_needed";
-                                sqlite3_bind_text(upd, 9, ocrStat, -1,
-                                                  SQLITE_TRANSIENT);
-                                sqlite3_step(upd);
-                                sqlite3_finalize(upd);
-                            }
-                            ++stats->newFiles;
-                        } else if (changed) {
-                            // v1.7.3 CRITICAL FIX: the old upsert set
-                            // indexing_status='content_done' for EVERY
-                            // existing row on EVERY scan - silently
-                            // "completing" files that were still queued
-                            // (metadata_only) or waiting for OCR
-                            // (needs_ocr) without doing any work. That
-                            // froze visible progress and read as "hourly
-                            // scanning is not happening". Now: refresh
-                            // metadata, and ONLY when the file actually
-                            // changed re-queue it for extraction/OCR.
-                            sqlite3_stmt* upd = nullptr;
-                            sqlite3_prepare_v2(workerDb,
-                                "UPDATE Files SET filename = ?2, "
-                                "  extension = ?3, size = ?4, "
-                                "  modified_date = ?6, hash = ?7, "
-                                "  indexing_status = 'metadata_only', "
-                                "  ocr_status = ?9 "
-                                "WHERE id = (SELECT id FROM Files "
-                                "            WHERE path = ?1)",
-                                -1, &upd, nullptr);
-                            if (upd) {
-                                sqlite3_bind_text(upd, 1,
-                                                  path.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 2, fi.fileName()
-                                                          .toUtf8()
-                                                          .constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 3,
-                                                  ext.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_int64(upd, 4, size);
-                                sqlite3_bind_int64(upd, 6, modified);
-                                sqlite3_bind_text(
-                                    upd, 7, hash.toUtf8().constData(), -1,
-                                    SQLITE_TRANSIENT);
-                                const char* ocrStat =
-                                    (Constants::kDocumentExtensions.contains(
-                                         ext) ||
-                                     Constants::kImageExtensions.contains(ext))
-                                        ? "pending" : "not_needed";
-                                sqlite3_bind_text(upd, 9, ocrStat, -1,
-                                                  SQLITE_TRANSIENT);
-                                sqlite3_step(upd);
-                                sqlite3_finalize(upd);
-                            }
-                            ++stats->updatedFiles;
-                        } else if (hashEnabled && !hash.isEmpty()) {
-                            // Unchanged file: refresh metadata + (preserved
-                            // or backfilled) hash. NEVER touch
-                            // indexing_status/ocr_status here - queued
-                            // (metadata_only), needs-OCR and failed rows
-                            // must survive scans untouched.
-                            sqlite3_stmt* upd = nullptr;
-                            sqlite3_prepare_v2(workerDb,
-                                "UPDATE Files SET filename = ?2, "
-                                "  extension = ?3, size = ?4, "
-                                "  modified_date = ?6, hash = ?7 "
-                                "WHERE id = (SELECT id FROM Files "
-                                "            WHERE path = ?1)",
-                                -1, &upd, nullptr);
-                            if (upd) {
-                                sqlite3_bind_text(upd, 1,
-                                                  path.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 2, fi.fileName()
-                                                          .toUtf8()
-                                                          .constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 3,
-                                                  ext.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_int64(upd, 4, size);
-                                sqlite3_bind_int64(upd, 6, modified);
-                                sqlite3_bind_text(
-                                    upd, 7, hash.toUtf8().constData(), -1,
-                                    SQLITE_TRANSIENT);
-                                sqlite3_step(upd);
-                                sqlite3_finalize(upd);
-                            }
-                        } else {
-                            // Unchanged, no hash refresh: filename/ext
-                            // metadata only.
-                            sqlite3_stmt* upd = nullptr;
-                            sqlite3_prepare_v2(workerDb,
-                                "UPDATE Files SET filename = ?2, "
-                                "  extension = ?3, size = ?4, "
-                                "  modified_date = ?6 "
-                                "WHERE id = (SELECT id FROM Files "
-                                "            WHERE path = ?1)",
-                                -1, &upd, nullptr);
-                            if (upd) {
-                                sqlite3_bind_text(upd, 1,
-                                                  path.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 2, fi.fileName()
-                                                          .toUtf8()
-                                                          .constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_text(upd, 3,
-                                                  ext.toUtf8().constData(),
-                                                  -1, SQLITE_TRANSIENT);
-                                sqlite3_bind_int64(upd, 4, size);
-                                sqlite3_bind_int64(upd, 6, modified);
-                                sqlite3_step(upd);
-                                sqlite3_finalize(upd);
-                            }
-                        }
-                        return true;
-                    });
-
-                // ---- Pass 2: prune rows the walk did not see ----
-                // The FileWatcher only removes rows for deletions that
-                // happen WHILE the app runs. Files deleted or moved while
-                // it was closed stayed in the index forever - showing up
-                // in search results and skewing the duplicates finder and
-                // the "N indexed" badge. Reconcile now: any row under this
-                // folder whose case-folded path was not seen is gone.
-                // (Hidden/system files are also skipped by the walk; a
-                // row for one would be pruned and re-added next scan -
-                // accepted churn, far better than permanent ghosts.)
-                QString prefix = root;
-                while (prefix.endsWith('\\')) prefix.chop(1);
-                prefix += QLatin1Char('\\');
-
-                QList<qint64> staleIds;
-                sqlite3_stmt* q = nullptr;
-                if (sqlite3_prepare_v2(workerDb,
-                        "SELECT id, path FROM Files "
-                        "WHERE upper(substr(path, 1, ?1)) = upper(?2);",
-                        -1, &q, nullptr) == SQLITE_OK) {
-                    const QByteArray prefixUtf8 = prefix.toUtf8();
-                    sqlite3_bind_int(q, 1, prefix.length());
-                    sqlite3_bind_text(q, 2, prefixUtf8.constData(),
-                                      -1, SQLITE_TRANSIENT);
-                    while (sqlite3_step(q) == SQLITE_ROW) {
-                        const qint64 id = sqlite3_column_int64(q, 0);
-                        const unsigned char* p = sqlite3_column_text(q, 1);
-                        const QString rowPath = p
-                            ? QString::fromUtf8(
-                                  reinterpret_cast<const char*>(p))
-                            : QString();
-                        if (seen.contains(rowPath.toLower())) continue;
-                        staleIds.append(id);
-                    }
-                    sqlite3_finalize(q);
-                }
-                if (!staleIds.isEmpty()) {
-                    sqlite3_exec(workerDb, "BEGIN;", nullptr, nullptr,
-                                 nullptr);
-                    for (const qint64 id : staleIds) {
-                        // Mirror FileRepository::deleteFile: cascade
-                        // handles Tags/Notes/DocumentText; SearchIndex and
-                        // BgeEmbeddings need explicit deletes.
-                        static const char* kDelSql[] = {
-                            "DELETE FROM Files WHERE id = ?1;",
-                            "DELETE FROM SearchIndex WHERE file_id = ?1;",
-                            "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
-                        };
-                        for (const char* sql : kDelSql) {
-                            sqlite3_stmt* d = nullptr;
-                            if (sqlite3_prepare_v2(workerDb, sql, -1, &d,
-                                                   nullptr) == SQLITE_OK) {
-                                sqlite3_bind_int64(d, 1, id);
-                                sqlite3_step(d);
-                                sqlite3_finalize(d);
-                            }
-                        }
-                        ++stats->removedFiles;
-                    }
-                    sqlite3_exec(workerDb, "COMMIT;", nullptr, nullptr,
-                                 nullptr);
-                }
-            } catch (...) {}
-        }
-
-        sqlite3_close(workerDb);
-    });
-
-    auto* watcher = new QFutureWatcher<void>(this);
-    connect(watcher, &QFutureWatcher<void>::finished, this,
-            [this, watcher, stats]() {
-        autoScanRunning_ = false;
-        updateIndexStats();
-
-        const QString unavailableNote = stats->unavailable > 0
-            ? QStringLiteral(" (%1 folder%2 unavailable)")
-                  .arg(stats->unavailable)
-                  .arg(stats->unavailable == 1 ? "" : "s")
-            : QString();
-
-        if (stats->newFiles > 0 || stats->updatedFiles > 0) {
-            statusBar()->showMessage(
-                QStringLiteral("Auto-scan complete: %1 new, %2 changed, %3 "
-                               "removed%4")
-                    .arg(stats->newFiles)
-                    .arg(stats->updatedFiles)
-                    .arg(stats->removedFiles)
-                    .arg(unavailableNote),
-                8000);
-            // Only wake the extraction pipeline when there is actual work;
-            // waking it on every idle tick was pure noise.
-            QTimer::singleShot(500, this, [this]() {
-                autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
-                requestAutoExtract();
-            });
-        } else {
-            statusBar()->showMessage(
-                QStringLiteral("Auto-scan complete: index up to date "
-                               "(%1 removed%2)")
-                    .arg(stats->removedFiles).arg(unavailableNote),
-                5000);
-        }
-        watcher->deleteLater();
-    });
-    watcher->setFuture(future);
+// v1.7.24: the ScanParams bundle, read fresh from the CURRENT settings
+// at every call site (the controller receives values only).
+DocuSearch::ScanParams MainWindow::currentScanParams() const {
+    DocuSearch::ScanParams p;
+    p.folders            = settings_.indexedDrives;
+    p.excludedFolders    = settings_.excludedFolders;
+    p.excludedExtensions = settings_.excludedExtensions;
+    p.dbPath             = Config::instance().dbPath();
+    p.hashEnabled        = settings_.hashLargeFiles;
+    return p;
 }
 
 // ============================================================
@@ -3411,7 +2871,7 @@ void MainWindow::requestAutoExtract() {
     // The startup/hourly scan walks the very files we would extract and
     // writes to its own DB connection. Rather than racing it, wait; its
     // finished handler wakes extraction when work exists anyway.
-    if (autoScanRunning_) {
+    if (scanPipeline_ && scanPipeline_->isAutoScanRunning()) {
         if (autoExtractRetryLeft_ > 0) {
             --autoExtractRetryLeft_;
             QTimer::singleShot(30 * 1000, this, [this]() {
@@ -3456,202 +2916,39 @@ bool MainWindow::ocrWorkOutstanding() const {
 //     hourly scan, which backfills too.
 // ============================================================
 void MainWindow::runStartupIntegrityPass() {
-    if (!db_) return;
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
+    if (!scanPipeline_ || !db_) return;
+    // v1.7.24: the whole pass (fake-done requeue, failed-row retry,
+    // one-time junk-text audit, hash backfill) runs on the controller's
+    // worker thread with its own sqlite connection — it used to run on
+    // the UI thread, pumping processEvents every 100/500/25 rows.
+    // junkTextAuditDone is the caller-owned one-shot flag: the
+    // controller reports whether the audit actually scanned; the flag
+    // is persisted in onIntegrityFinished.
+    scanPipeline_->startIntegrityPass(currentScanParams(),
+                                      !settings_.junkTextAuditDone);
+}
 
-    sqlite3_exec(raw,
-        "UPDATE Files SET indexing_status='metadata_only' "
-        "WHERE indexing_status='content_done' "
-        "AND extension IN ('pdf','doc','docx','xls','xlsx','xlsm',"
-        "'ppt','pptx') "
-        "AND id NOT IN (SELECT file_id FROM DocumentText);",
-        nullptr, nullptr, nullptr);
-    const int requeued = sqlite3_changes(raw);
-
-    // v1.7.10: give FAILED rows one honest retry per launch. Rotated
-    // scans that OCR'd under the broken auto-orientation (or while no
-    // OCR language pack was installed) are parked at 'failed' forever —
-    // nothing ever re-queued them, so "OCR returning nothing" stuck
-    // even after the engine improved. Documents drop back to
-    // metadata_only (the text pipeline re-runs); images get their OCR
-    // status reset to pending (the pool re-runs). Bounded at 500 per
-    // launch so a folder of permanently unreadable files can't stall
-    // startup; rows that fail again simply wait for the next launch.
-    int failedRequeued = 0;
-    {
-        QList<qint64> failIds;
-        sqlite3_stmt* fq = nullptr;
-        if (sqlite3_prepare_v2(raw,
-                "SELECT id, extension FROM Files "
-                "WHERE indexing_status='failed' "
-                "AND extension IN ('pdf','doc','docx','xls','xlsx','xlsm',"
-                "'ppt','pptx','jpg','jpeg','png','tif','tiff',"
-                "'bmp','gif','webp') "
-                "AND id NOT IN (SELECT file_id FROM DocumentText) "
-                "LIMIT 500;",
-                -1, &fq, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(fq) == SQLITE_ROW)
-                failIds.append(sqlite3_column_int64(fq, 0));
-            sqlite3_finalize(fq);
-        }
-        for (const qint64 id : failIds) {
-            sqlite3_exec(raw,
-                QString("UPDATE Files SET indexing_status='metadata_only', "
-                        "ocr_status='pending' WHERE id=%1;").arg(id)
-                    .toUtf8().constData(),
-                nullptr, nullptr, nullptr);
-            ++failedRequeued;
-            if ((failedRequeued % 100) == 0)
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
-        }
+void MainWindow::onIntegrityFinished(const DocuSearch::IntegrityResult& r) {
+    if (r.junkAuditScanned && !settings_.junkTextAuditDone) {
+        settings_.junkTextAuditDone = true;
+        Config::instance().save(settings_);
+        DS_INFO("Index", QString("Junk-text audit complete: %1 poisoned "
+                                 "rows requeued for re-extraction (OCR "
+                                 "re-reads them with auto-orientation)")
+                                 .arg(r.junkRequeued));
     }
-
-    // v1.7.16: ONE-TIME junk-text audit. Older builds accepted the text
-    // layer some scanner drivers embed INTO a PDF at scan time even when
-    // it is garbage: a rotated page OCR'd by the scanner itself yields
-    // punctuation-soup letter fragments that the old classifier's scope
-    // rules never examined (they only judged letter-dominant text).
-    // That junk was indexed as real content - keyword search missed
-    // every real word, and the AI embeddings of junk vectors pushed
-    // unrelated results into semantic search. The classifier now has a
-    // fragment-soup gate, so this pass re-judges every stored text
-    // against it: flagged rows lose their text, FTS row and (stale-junk)
-    // embeddings and drop back to metadata_only, letting the normal
-    // pipeline re-extract them - PdfExtractor now routes the file to
-    // OCR, where auto-orientation reads the REAL page. The classifier
-    // itself is microseconds per row (substr-bounded reads, pumped
-    // every 500 rows), so every row is examined in one pass - a LIMIT
-    // here would silently un-audit large libraries. The expensive part,
-    // re-extraction of flagged rows, is drained gradually by the normal
-    // extraction sessions. One-shot via the persisted flag, set ONLY
-    // after a successful scan: new junk cannot enter afterwards
-    // (extraction now rejects it at the source).
-    int junkRequeued = 0;
-    if (!settings_.junkTextAuditDone) {
-        bool auditScanned = false;
-        QList<qint64> junkIds;
-        {
-            sqlite3_stmt* jq = nullptr;
-            if (sqlite3_prepare_v2(raw,
-                    "SELECT f.id, substr(d.extracted_text, 1, 20000) "
-                    "FROM DocumentText d JOIN Files f ON f.id = d.file_id "
-                    "WHERE f.indexing_status = 'content_done' "
-                    "AND length(d.extracted_text) > 0;",
-                    -1, &jq, nullptr) == SQLITE_OK) {
-                int seen = 0;
-                while (sqlite3_step(jq) == SQLITE_ROW) {
-                    const unsigned char* t = sqlite3_column_text(jq, 1);
-                    const QString text = t
-                        ? QString::fromUtf8(reinterpret_cast<const char*>(t))
-                        : QString();
-                    QString why;
-                    if (TextQuality::looksLikeGarbage(text, &why)) {
-                        DS_INFO("Index", QString("Junk-text audit: file %1 "
-                                                 "flagged (%2)")
-                                                 .arg(qint64(sqlite3_column_int64(jq, 0)))
-                                                 .arg(why));
-                        junkIds.append(sqlite3_column_int64(jq, 0));
-                    }
-                    if ((++seen % 500) == 0)
-                        QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
-                }
-                sqlite3_finalize(jq);
-                auditScanned = true;
-            }
-        }
-        if (auditScanned) {
-            for (const qint64 id : junkIds) {
-                // Same purge the re-extraction path performs on content
-                // change: text, FTS row and both embedding tables, then
-                // the row drops back to metadata_only + ocr pending.
-                for (const char* delSql : {
-                         "DELETE FROM DocumentText WHERE file_id=?1;",
-                         "DELETE FROM SearchIndex WHERE file_id=?1;",
-                         "DELETE FROM BgeEmbeddings WHERE file_id=?1;",
-                         "DELETE FROM EmbeddingChunks WHERE file_id=?1;" }) {
-                    sqlite3_stmt* del = nullptr;
-                    if (sqlite3_prepare_v2(raw, delSql, -1, &del, nullptr) == SQLITE_OK) {
-                        sqlite3_bind_int64(del, 1, id);
-                        sqlite3_step(del);
-                        sqlite3_finalize(del);
-                    }
-                }
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='metadata_only', "
-                            "ocr_status='pending' WHERE id=%1;").arg(id)
-                        .toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
-                ++junkRequeued;
-                if ((junkRequeued % 100) == 0)
-                    QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
-            }
-            settings_.junkTextAuditDone = true;
-            Config::instance().save(settings_);
-            DS_INFO("Index", QString("Junk-text audit complete: %1 poisoned "
-                                     "rows requeued for re-extraction (OCR "
-                                     "re-reads them with auto-orientation)")
-                                     .arg(junkRequeued));
-        }
-    }
-
-    int hashed = 0;
-    if (settings_.hashLargeFiles) {
-        QList<qint64> ids;
-        QStringList paths;
-        sqlite3_stmt* q = nullptr;
-        if (sqlite3_prepare_v2(raw,
-                "SELECT id, path FROM Files "
-                "WHERE (hash IS NULL OR hash = '') "
-                "AND extension IN ('pdf','doc','docx','xls','xlsx','xlsm',"
-                "'ppt','pptx','jpg','jpeg','png','tif','tiff',"
-                "'bmp','gif','webp') "
-                "LIMIT 4000;",
-                -1, &q, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(q) == SQLITE_ROW) {
-                ids.append(sqlite3_column_int64(q, 0));
-                const unsigned char* p = sqlite3_column_text(q, 1);
-                paths.append(p ? QString::fromUtf8(
-                    reinterpret_cast<const char*>(p)) : QString());
-            }
-            sqlite3_finalize(q);
-        }
-        for (int i = 0; i < ids.size(); ++i) {
-            const QString h =
-                FileUtils::sha256OfFile(paths.at(i), 64 * 1024 * 1024);
-            if (h.isEmpty()) continue;   // unreadable now — retry next launch
-            sqlite3_stmt* u = nullptr;
-            if (sqlite3_prepare_v2(raw,
-                    "UPDATE Files SET hash=?1 WHERE id=?2;",
-                    -1, &u, nullptr) == SQLITE_OK) {
-                sqlite3_bind_text(u, 1, h.toUtf8().constData(), -1,
-                                  SQLITE_TRANSIENT);
-                sqlite3_bind_int64(u, 2, ids.at(i));
-                sqlite3_step(u);
-                sqlite3_finalize(u);
-                ++hashed;
-            }
-            if ((i % 25) == 0)
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
-        }
-    }
-
-    if (requeued > 0 || hashed > 0 || failedRequeued > 0 || junkRequeued > 0) {
-        DS_INFO("Index", QString("Startup integrity pass: %1 fake-done rows "
-                                 "requeued for extraction, %2 failed rows "
-                                 "retried, %3 junk-text rows requeued, "
-                                 "%4 hashes backfilled.")
-                             .arg(requeued).arg(failedRequeued)
-                             .arg(junkRequeued).arg(hashed));
+    if (r.requeued > 0 || r.hashed > 0 || r.failedRequeued > 0 ||
+        r.junkRequeued > 0) {
         statusBar()->showMessage(
             QString("Index repair: %1 file%2 requeued for extraction, "
                     "%3 hash%4 computed.")
-                .arg(requeued + failedRequeued + junkRequeued)
-                .arg(requeued + failedRequeued + junkRequeued == 1 ? "" : "s")
-                .arg(hashed)
-                .arg(hashed == 1 ? "" : "es"), 10000);
+                .arg(r.requeued + r.failedRequeued + r.junkRequeued)
+                .arg(r.requeued + r.failedRequeued + r.junkRequeued == 1
+                         ? "" : "s")
+                .arg(r.hashed)
+                .arg(r.hashed == 1 ? "" : "es"), 10000);
         updateIndexStats();
-        if (requeued > 0 || failedRequeued > 0 || junkRequeued > 0) {
+        if (r.requeued > 0 || r.failedRequeued > 0 || r.junkRequeued > 0) {
             // Fresh work exists — wake extraction (requestAutoExtract
             // yields on its own if the startup scan is still running).
             autoExtractRetryLeft_ = 20;
@@ -3665,54 +2962,13 @@ void MainWindow::runStartupIntegrityPass() {
 // ============================================================
 void MainWindow::purgeFolderFromIndex(const QString& folder) {
     if (!db_) return;
-    sqlite3* raw = db_->raw();
-    if (!raw) return;
-
-    QString prefix = FileUtils::toNative(folder);
-    while (prefix.endsWith('\\')) prefix.chop(1);
-    if (prefix.isEmpty()) return;
-    prefix += QLatin1Char('\\');
-
-    QList<qint64> ids;
-    sqlite3_stmt* q = nullptr;
-    if (sqlite3_prepare_v2(raw,
-            "SELECT id FROM Files "
-            "WHERE upper(substr(path, 1, ?1)) = upper(?2);",
-            -1, &q, nullptr) == SQLITE_OK) {
-        const QByteArray prefixUtf8 = prefix.toUtf8();
-        sqlite3_bind_int(q, 1, prefix.length());
-        sqlite3_bind_text(q, 2, prefixUtf8.constData(), -1, SQLITE_TRANSIENT);
-        while (sqlite3_step(q) == SQLITE_ROW) {
-            ids.append(sqlite3_column_int64(q, 0));
-        }
-        sqlite3_finalize(q);
-    }
-    if (ids.isEmpty()) return;
-
-    // Mirror FileRepository::deleteFile (Files + SearchIndex +
-    // BgeEmbeddings + EmbeddingChunks; cascades cover Tags/Notes/Text).
-    sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
-    static const char* kDelSql[] = {
-        "DELETE FROM Files WHERE id = ?1;",
-        "DELETE FROM SearchIndex WHERE file_id = ?1;",
-        "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
-        "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
-    };
-    for (const qint64 id : ids) {
-        for (const char* sql : kDelSql) {
-            sqlite3_stmt* d = nullptr;
-            if (sqlite3_prepare_v2(raw, sql, -1, &d, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int64(d, 1, id);
-                sqlite3_step(d);
-                sqlite3_finalize(d);
-            }
-        }
-    }
-    sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
-
-    updateIndexStats();
-    DS_INFO("Settings", QString("Purged %1 index rows under removed folder %2")
-                          .arg(ids.size()).arg(folder));
+    // v1.7.24: the cascade lives in ScanPipelineController (static, runs
+    // on the CALLER'S thread over the main connection — the Settings
+    // removal action is small and bounded); the window adds the stats
+    // refresh and the log the old code emitted after the delete.
+    const qint64 purged =
+        ScanPipelineController::purgeFolderFromIndex(*db_, folder);
+    if (purged > 0) updateIndexStats();
 }
 
 // ============================================================
@@ -3749,95 +3005,22 @@ int MainWindow::purgeStaleRows(const QStringList& paths, const QString& context)
 // re-add these rows, so even an offline drive loses nothing that
 // would come back.
 // ============================================================
-int MainWindow::purgeNonIndexableRows() {
-    if (!db_) return 0;
-    sqlite3* raw = db_->raw();
-    if (!raw) return 0;
+void MainWindow::purgeNonIndexableRows() {
+    if (!scanPipeline_ || !db_) return;
+    // v1.7.24: async on the controller's worker (was a UI-thread batch
+    // loop pumping processEvents between 500-row commits). Batched
+    // commits survive a kill exactly as before; the result arrives via
+    // onPurgeNonIndexableFinished.
+    scanPipeline_->startPurgeNonIndexable(Config::instance().dbPath());
+}
 
-    QString list;
-    for (const QString& ext : Constants::kIndexableExtensions) {
-        if (!list.isEmpty()) list += QLatin1Char(',');
-        list += QString("'%1'").arg(ext.toLower());
-    }
-
-    QList<qint64> ids;
-    sqlite3_stmt* q = nullptr;
-    // NULL-extension rows (should not exist, but older scans could write
-    // them) must purge too — "NOT IN" alone would keep them via 3-valued
-    // logic, so the IS NULL case is spelled out.
-    const QString sql = QString(
-        "SELECT id FROM Files "
-        "WHERE extension IS NULL "
-        "   OR lower(trim(extension)) NOT IN (%1);").arg(list);
-    if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(), -1,
-                           &q, nullptr) == SQLITE_OK) {
-        while (sqlite3_step(q) == SQLITE_ROW)
-            ids.append(sqlite3_column_int64(q, 0));
-        sqlite3_finalize(q);
-    }
-    if (ids.isEmpty()) return 0;
-
-    // v1.7.8 REWRITE — this used to run INSIDE the constructor and was
-    // the reason the app could look stuck on the splash forever:
-    //   • it re-PREPARED the same 4 DELETE statements for EVERY row
-    //     (4 × N prepares — and N was huge on indexes built by versions
-    //     that indexed every file type they walked),
-    //   • it deleted ALL rows in ONE transaction — kill the app mid-purge
-    //     and everything rolled back, so the next launch started the
-    //     identical purge from zero (a "stuck at splash" loop),
-    //   • it never pumped the event loop, so the splash froze.
-    // Now: each statement is prepared ONCE, rows are committed in
-    // 500-row batches (progress survives a kill), and the event loop is
-    // pumped between batches. It is also scheduled AFTER the window is
-    // visible, so startup can never block on it.
-    static const char* kDelSql[] = {
-        "DELETE FROM Files WHERE id = ?1;",
-        "DELETE FROM SearchIndex WHERE file_id = ?1;",
-        "DELETE FROM BgeEmbeddings WHERE file_id = ?1;",
-        "DELETE FROM EmbeddingChunks WHERE file_id = ?1;",
-    };
-    sqlite3_stmt* del[4] = {nullptr, nullptr, nullptr, nullptr};
-    bool prepared = true;
-    for (int i = 0; i < 4 && prepared; ++i)
-        prepared = sqlite3_prepare_v2(raw, kDelSql[i], -1,
-                                      &del[i], nullptr) == SQLITE_OK;
-    if (!prepared) {
-        for (sqlite3_stmt* d : del) if (d) sqlite3_finalize(d);
-        return 0;
-    }
-
-    constexpr int kPurgeBatch = 500;
-    int purged = 0;
-    const qsizetype total = ids.size();
-    for (qsizetype start = 0; start < total; start += kPurgeBatch) {
-        const qsizetype end = qMin(start + kPurgeBatch, total);
-        sqlite3_exec(raw, "BEGIN;", nullptr, nullptr, nullptr);
-        for (qsizetype i = start; i < end; ++i) {
-            for (sqlite3_stmt* d : del) {
-                sqlite3_reset(d);
-                sqlite3_clear_bindings(d);
-                sqlite3_bind_int64(d, 1, ids.at(i));
-                sqlite3_step(d);
-            }
-        }
-        sqlite3_exec(raw, "COMMIT;", nullptr, nullptr, nullptr);
-        purged = end;
-
-        // Keep the UI alive during a long cleanup — the window is
-        // already on screen by the time this runs (v1.7.8 scheduling).
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 8);
-    }
-    for (sqlite3_stmt* d : del) if (d) sqlite3_finalize(d);
-
-    DS_INFO("Index", QString("Startup purge: removed %1 non-document "
-                             "index entries (md/txt/exe/archive/...)")
-                         .arg(purged));
+void MainWindow::onPurgeNonIndexableFinished(int purged) {
+    if (purged <= 0) return;
     updateIndexStats();
     statusBar()->showMessage(
         QString("Index cleanup: removed %1 non-document entries "
                 "(md, txt, exe, archives...) — only documents and "
                 "images are indexed now.").arg(purged), 10000);
-    return purged;
 }
 
 // ============================================================
@@ -3866,6 +3049,26 @@ void MainWindow::removeAndRebuildDatabase() {
     if (searchBar_) searchBar_->setExtracting(false);
     if (extractionProgressBar_) extractionProgressBar_->setVisible(false);
     dbResetting_ = true;   // late watcher-driven writes become no-ops
+
+    // 1.5) v1.7.24: the scan pipeline holds its OWN sqlite connection
+    // to this file — on Windows an open connection blocks the delete
+    // below (sharing violation) and the reset would degrade into the
+    // "could not be deleted" warning path. Stop the hourly tick (a
+    // queued tick must not start a fresh job while we drain), then
+    // wait BOUNDED for any running scan job. The pumps keep the
+    // window responsive and deliver the controllers' finished
+    // signals; a job that refuses to end inside 10 s falls through to
+    // the honest warning path instead of hanging the reset forever.
+    if (autoScanTimer_) autoScanTimer_->stop();
+    if (scanPipeline_ && scanPipeline_->isBusy()) {
+        QElapsedTimer drain; drain.start();
+        while (scanPipeline_->isBusy() && drain.elapsed() < 10000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        }
+        if (scanPipeline_->isBusy())
+            DS_WARN("Database", "Scan job still running after 10 s — "
+                                "the reset may report a locked file.");
+    }
 
     // 2) Close and delete.
     const QString dbPath = Config::instance().dbPath();
@@ -3928,6 +3131,7 @@ void MainWindow::removeAndRebuildDatabase() {
 
     // 5) Rebuild: rescan the configured folders, then wake extraction so
     // the fresh index fills up again on its own.
+    if (autoScanEnabled_ && autoScanTimer_) autoScanTimer_->start();
     autoScanIndexedFolders();
     autoExtractRetryLeft_ = 20;
     QTimer::singleShot(4000, this, [this]() { requestAutoExtract(); });
@@ -4632,10 +3836,30 @@ void MainWindow::onNoteChanged(qint64 fileId, const QString& note) {
 // ============================================================
 // Settings & theme
 // ============================================================
+// ============================================================
+// v1.7.24: "OCR this file" no longer runs ON the UI thread. The old
+// implementation executed the helper process (and, for PDFs, the
+// whole per-page render + OCR loop) synchronously between
+// processEvents() pumps — seconds of effectively frozen UI for a
+// multi-page scan, and re-entrancy surface on every pump. The
+// acquisition now runs on a QtConcurrent worker (the same place the
+// OCR pool calls WindowsOcrEngine from); the watcher continuation
+// lands on the UI thread and does what a window should do: the
+// index writes, the preview update, the status line.
+// The interpolated UPDATE the 2026-09 audit flagged is a prepared
+// statement now.
+// ============================================================
 void MainWindow::onOcrThisFile(const QString& path) {
     if (!repo_ || !db_ || path.isEmpty()) return;
     if (!QFileInfo::exists(path)) {
         statusBar()->showMessage("File not found: " + path, 5000);
+        return;
+    }
+    // Single flight: a second click while one file is being read
+    // would double-charge the helper and race the preview updates.
+    if (ocrThisFileInFlight_.load()) {
+        statusBar()->showMessage("OCR is already running on a file...",
+                                 3000);
         return;
     }
 
@@ -4652,66 +3876,57 @@ void MainWindow::onOcrThisFile(const QString& path) {
         return;
     }
 
-    // OCR runs in a SEPARATE PROCESS (docusearch_ocr_helper.exe).
-    // No need for QtConcurrent — the helper exe is crash-isolated.
-    // We use QProcess on the main thread with processEvents() to
-    // keep the UI responsive while waiting.
     const qint64 fileId = selectedFileId_;
     const QString filePath = path;
 
+    ocrThisFileInFlight_ = true;
     statusBar()->showMessage("Running OCR...", 0);
-    QApplication::processEvents();
 
-    // Use the singleton — this way the available_ flag persists
-    // across calls (the status bar indicator and the OCR button share
-    // the same engine state).
-    WindowsOcrEngine& ocrEngine = WindowsOcrEngine::instance();
-    if (!ocrEngine.init()) {
-        statusBar()->showMessage("OCR helper not found.", 5000);
-        QMessageBox::information(this, "OCR",
-            "OCR helper (docusearch_ocr_helper.exe) not found.\n"
-            "Make sure it's in the same folder as DocuSearch.exe.");
-        return;
-    }
-    // Don't check isAvailable() — the cached flag may be stale.
-    // Just try OCR silently. If it fails, empty text will be shown as
-    // the result, and the helper's stderr will update the flag for
-    // the next status-bar refresh.
+    struct OcrOutcome {
+        bool helperMissing = false;
+        bool openFailed = false;
+        QString openError;
+        QString text;
+    };
 
-    QString ocrText;
+    QFuture<OcrOutcome> future = QtConcurrent::run(
+        [filePath, ext, isImage, isPdf]() {
+        OcrOutcome out;
 
-    if (isImage) {
-        statusBar()->showMessage("OCR: processing image...", 0);
-        QApplication::processEvents();
-        ocrText = ocrEngine.ocrFile(filePath);
-    }
+        // Use the singleton — this way the available_ flag persists
+        // across calls (the status bar indicator and the OCR button
+        // share the same engine state). WindowsOcrEngine is designed
+        // to be driven from worker threads (the OCR pool does it).
+        WindowsOcrEngine& ocrEngine = WindowsOcrEngine::instance();
+        if (!ocrEngine.init()) {
+            out.helperMissing = true;
+            return out;
+        }
+        // Don't check isAvailable() — the cached flag may be stale.
+        // Just try OCR silently. If it fails, empty text will be shown
+        // as the result, and the helper's stderr updates the flag.
+
+        if (isImage) {
+            out.text = ocrEngine.ocrFile(filePath);
+            return out;
+        }
 #ifdef DOCUSEARCH_HAS_PDFIUM
-    else if (isPdf) {
-        // For PDFs: render each page to image via PDFium, save as temp
-        // PNG, then OCR each page via the helper exe.
+        // For PDFs: render each page to image via PDFium, save as
+        // temp PNG, then OCR each page via the helper exe.
         try {
-            statusBar()->showMessage("OCR: opening PDF...", 0);
-            QApplication::processEvents();
-
             PdfiumDocument doc;
             if (!doc.loadFromFile(filePath) || doc.pageCount() == 0) {
-                statusBar()->showMessage(
-                    doc.lastError().isEmpty()
-                        ? QStringLiteral("OCR: failed to open PDF.")
-                        : QStringLiteral("OCR: %1.").arg(doc.lastError()),
-                    5000);
-                return;
+                out.openFailed = true;
+                out.openError = doc.lastError();
+                return out;
             }
 
             const int dpi = 96;  // lower DPI for OCR speed
             const int pageTotal = doc.pageCount();
-            const int maxPages = (pageTotal < 10) ? pageTotal : 10;  // max 10 pages
+            const int maxPages =
+                (pageTotal < 10) ? pageTotal : 10;  // max 10 pages
 
             for (int i = 0; i < maxPages; ++i) {
-                statusBar()->showMessage(
-                    QString("OCR: page %1/%2...").arg(i + 1).arg(maxPages), 0);
-                QApplication::processEvents();
-
                 try {
                     const QImage qimg = doc.renderPage(i, dpi);
                     if (qimg.isNull()) continue;
@@ -4720,10 +3935,11 @@ void MainWindow::onOcrThisFile(const QString& path) {
                     // Use native separators: the OCR helper exe calls
                     // WinRT StorageFile::GetFileFromPathAsync which
                     // rejects forward slashes with the misleading
-                    // "The path contains one or more invalid characters"
-                    // error. (Note: ocrFile() also normalizes defensively,
-                    // but doing it here keeps the tempPath we log / remove
-                    // consistent with what we pass to the helper.)
+                    // "The path contains one or more invalid
+                    // characters" error. (Note: ocrFile() also
+                    // normalizes defensively, but doing it here keeps
+                    // the tempPath we log / remove consistent with
+                    // what we pass to the helper.)
                     QString tempPath = QDir::toNativeSeparators(
                         QDir::tempPath() + "/docusearch_ocr_page_" +
                         QString::number(i) + ".png");
@@ -4733,109 +3949,152 @@ void MainWindow::onOcrThisFile(const QString& path) {
                     QFile::remove(tempPath);
 
                     if (!pageText.isEmpty()) {
-                        ocrText += pageText + "\n";
+                        out.text += pageText + "\n";
                     }
                 } catch (...) {
                     // Skip this page
                 }
             }
         } catch (...) {
-            statusBar()->showMessage("OCR: PDF rendering failed.", 5000);
+            out.openFailed = true;
+            out.openError = QStringLiteral("PDF rendering failed");
+        }
+#endif
+        return out;
+    });
+
+    auto* watcher = new QFutureWatcher<OcrOutcome>(this);
+    connect(watcher, &QFutureWatcher<OcrOutcome>::finished, this,
+            [this, watcher, fileId, filePath, ext]() {
+        const OcrOutcome out = watcher->result();
+        watcher->deleteLater();
+        ocrThisFileInFlight_ = false;
+
+        if (out.helperMissing) {
+            statusBar()->showMessage("OCR helper not found.", 5000);
+            QMessageBox::information(this, "OCR",
+                "OCR helper (docusearch_ocr_helper.exe) not found.\n"
+                "Make sure it's in the same folder as DocuSearch.exe.");
             return;
         }
-    }
-#endif
-
-    if (ocrText.isEmpty()) {
-        statusBar()->showMessage("OCR: no text recognized.", 5000);
-        QMessageBox::information(this, "OCR",
-            "No text was recognized.\n\n"
-            "This could mean:\n"
-            "  - The OCR helper (docusearch_ocr_helper.exe) is missing\n"
-            "  - No OCR languages are installed in Windows\n"
-            "    (Settings > Time & Language > Language >\n"
-            "     Add a language > Optical character recognition)\n"
-            "  - The image quality is too low\n"
-            "  - The file doesn't contain recognizable text");
-        return;
-    }
-
-    // Save OCR text to database.
-    try {
-        sqlite3* raw = db_->raw();
-        if (raw) {
-            QByteArray textBytes = ocrText.toUtf8();
-            qint64 now = QDateTime::currentSecsSinceEpoch();
-
-            sqlite3_stmt* upd = nullptr;
-            sqlite3_prepare_v2(raw,
-                "INSERT INTO DocumentText (file_id, extracted_text, text_source, char_count, updated_at) "
-                "VALUES (?1, ?2, 'ocr', ?3, ?4) "
-                "ON CONFLICT(file_id) DO UPDATE SET "
-                "  extracted_text=excluded.extracted_text, "
-                "  text_source='ocr', "
-                "  char_count=excluded.char_count, "
-                "  updated_at=excluded.updated_at;",
-                -1, &upd, nullptr);
-            if (upd) {
-                sqlite3_bind_int64(upd, 1, fileId);
-                sqlite3_bind_text(upd, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_int64(upd, 3, ocrText.size());
-                sqlite3_bind_int64(upd, 4, now);
-                sqlite3_step(upd);
-                sqlite3_finalize(upd);
-            }
-
-            sqlite3_exec(raw,
-                QString("UPDATE Files SET indexing_status='content_done', ocr_status='done' WHERE id=%1;")
-                    .arg(fileId).toUtf8().constData(),
-                nullptr, nullptr, nullptr);
-
-            sqlite3_stmt* del = nullptr;
-            sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
-                               -1, &del, nullptr);
-            if (del) {
-                sqlite3_bind_int64(del, 1, fileId);
-                sqlite3_step(del);
-                sqlite3_finalize(del);
-            }
-            QFileInfo fi(filePath);
-            QByteArray fn = fi.fileName().toUtf8();
-            QByteArray pth = filePath.toUtf8();
-            QByteArray ext2 = ext.toUtf8();
-            sqlite3_stmt* ins = nullptr;
-            sqlite3_prepare_v2(raw,
-                "INSERT INTO SearchIndex (filename, content, path, extension, file_id) "
-                "VALUES (?1, ?2, ?3, ?4, ?5);",
-                -1, &ins, nullptr);
-            if (ins) {
-                sqlite3_bind_text(ins, 1, fn.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 2, textBytes.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 3, pth.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(ins, 4, ext2.constData(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_int64(ins, 5, fileId);
-                sqlite3_step(ins);
-                sqlite3_finalize(ins);
-            }
+        if (out.openFailed) {
+            statusBar()->showMessage(
+                out.openError.isEmpty()
+                    ? QStringLiteral("OCR: failed to open PDF.")
+                    : QStringLiteral("OCR: %1.").arg(out.openError),
+                5000);
+            return;
         }
-    } catch (...) {
-        // DB save failure is non-fatal
-    }
+        const QString ocrText = out.text;
 
-    previewPane_->setExtractedText(ocrText);
-    previewPane_->setDocumentText(ocrText);
-    // OCR results are text — surface them even when the selected file is
-    // not a PDF (the extracted-text pane starts hidden for those types).
-    previewPane_->setVisible(true);
-    updateIndexStats();
-    statusBar()->showMessage(
-        QString("OCR complete: %1 characters recognized.").arg(ocrText.size()), 5000);
+        if (ocrText.isEmpty()) {
+            statusBar()->showMessage("OCR: no text recognized.", 5000);
+            QMessageBox::information(this, "OCR",
+                "No text was recognized.\n\n"
+                "This could mean:\n"
+                "  - The OCR helper (docusearch_ocr_helper.exe) is missing\n"
+                "  - No OCR languages are installed in Windows\n"
+                "    (Settings > Time & Language > Language >\n"
+                "     Add a language > Optical character recognition)\n"
+                "  - The image quality is too low\n"
+                "  - The file doesn't contain recognizable text");
+            return;
+        }
 
-    // Refresh the OCR status indicator — if OCR just succeeded, the
-    // Windows.Media.Ocr language packs are definitely installed. This
-    // fixes the case where the indicator showed "Setup Required" because
-    // the user installed language packs after launching DocuSearch.
-    updateOcrStatusIndicator();
+        // Save OCR text to database (UI thread, main connection).
+        try {
+            sqlite3* raw = db_->raw();
+            if (raw) {
+                QByteArray textBytes = ocrText.toUtf8();
+                qint64 now = QDateTime::currentSecsSinceEpoch();
+
+                sqlite3_stmt* upd = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO DocumentText (file_id, extracted_text, "
+                    "  text_source, char_count, updated_at) "
+                    "VALUES (?1, ?2, 'ocr', ?3, ?4) "
+                    "ON CONFLICT(file_id) DO UPDATE SET "
+                    "  extracted_text=excluded.extracted_text, "
+                    "  text_source='ocr', "
+                    "  char_count=excluded.char_count, "
+                    "  updated_at=excluded.updated_at;",
+                    -1, &upd, nullptr);
+                if (upd) {
+                    sqlite3_bind_int64(upd, 1, fileId);
+                    sqlite3_bind_text(upd, 2, textBytes.constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 3, ocrText.size());
+                    sqlite3_bind_int64(upd, 4, now);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
+                }
+
+                // v1.7.24: prepared (was QString::arg interpolation).
+                sqlite3_stmt* st = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "UPDATE Files SET indexing_status='content_done', "
+                    "ocr_status='done' WHERE id=?1;",
+                    -1, &st, nullptr);
+                if (st) {
+                    sqlite3_bind_int64(st, 1, fileId);
+                    sqlite3_step(st);
+                    sqlite3_finalize(st);
+                }
+
+                sqlite3_stmt* del = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "DELETE FROM SearchIndex WHERE file_id=?1;",
+                    -1, &del, nullptr);
+                if (del) {
+                    sqlite3_bind_int64(del, 1, fileId);
+                    sqlite3_step(del);
+                    sqlite3_finalize(del);
+                }
+                QFileInfo fi(filePath);
+                QByteArray fn = fi.fileName().toUtf8();
+                QByteArray pth = filePath.toUtf8();
+                QByteArray ext2 = ext.toUtf8();
+                sqlite3_stmt* ins = nullptr;
+                sqlite3_prepare_v2(raw,
+                    "INSERT INTO SearchIndex (filename, content, path, "
+                    "  extension, file_id) VALUES (?1, ?2, ?3, ?4, ?5);",
+                    -1, &ins, nullptr);
+                if (ins) {
+                    sqlite3_bind_text(ins, 1, fn.constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 2, textBytes.constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 3, pth.constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_text(ins, 4, ext2.constData(), -1,
+                                      SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(ins, 5, fileId);
+                    sqlite3_step(ins);
+                    sqlite3_finalize(ins);
+                }
+            }
+        } catch (...) {
+            // DB save failure is non-fatal
+        }
+
+        previewPane_->setExtractedText(ocrText);
+        previewPane_->setDocumentText(ocrText);
+        // OCR results are text — surface them even when the selected
+        // file is not a PDF (the extracted-text pane starts hidden for
+        // those types).
+        previewPane_->setVisible(true);
+        updateIndexStats();
+        statusBar()->showMessage(
+            QString("OCR complete: %1 characters recognized.")
+                .arg(ocrText.size()), 5000);
+
+        // Refresh the OCR status indicator — if OCR just succeeded, the
+        // Windows.Media.Ocr language packs are definitely installed. This
+        // fixes the case where the indicator showed "Setup Required" because
+        // the user installed language packs after launching DocuSearch.
+        updateOcrStatusIndicator();
+    });
+    watcher->setFuture(future);
 }
 
 void MainWindow::onOpenSettings() {
@@ -5064,7 +4323,6 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
             statusBar()->showMessage(
                 QStringLiteral("Removing excluded folder '%1' from the index...")
                     .arg(ex));
-            QApplication::processEvents();
             purgeFolderFromIndex(ex);
         }
     }
@@ -5083,7 +4341,6 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
         statusBar()->showMessage(
             QStringLiteral("Removing '%1' from the index...")
                 .arg(drive));
-        QApplication::processEvents();
         if (watcher_) watcher_->removeWatch(drive);
         purgeFolderFromIndex(drive);
     }
@@ -5092,6 +4349,9 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
     // v1.7.4 fix: a newly added folder was scanned but NEVER
     // watched (addWatches ran once at startup only), so live
     // changes in it went unnoticed until the next hourly scan.
+    // v1.7.24: the walks queue on the ScanPipelineController worker
+    // (FIFO) and each completion wakes extraction in
+    // onFolderScanFinished — no UI-thread scan, no processEvents.
     for (const QString& drive : settings_.indexedDrives) {
         if (oldFolded.contains(FileUtils::toNative(drive).toLower()))
             continue;  // unchanged
@@ -5099,13 +4359,7 @@ void MainWindow::applyNewSettings(const AppSettings& s) {
             watcher_ && !watcher_->isWatched(drive))
             watcher_->addWatch(drive);
         statusBar()->showMessage("Scanning " + drive + " ...");
-        QApplication::processEvents();
-        scanFolderFast(drive);
-        // Auto-extract after scanning new drives
-        QTimer::singleShot(500, this, [this]() {
-            autoExtractRetryLeft_ = 20;  // fresh budget
-            requestAutoExtract();
-        });
+        scanPipeline_->startFolderScan(drive, currentScanParams());
     }
 
     if (removedFolders > 0) {
@@ -5237,34 +4491,18 @@ void MainWindow::onExportCsv() {
 // happened to run. "No duplicates" now means the bytes really do
 // differ.
 // ============================================================
-// v1.7.13: ONE identity function for "which physical file is this?".
-// Used by the same-file collapse (pass 2) AND by the final guard before
-// display, so the two passes can never disagree. Covers the spellings
-// that used to slip through and make one physical file pair with
-// itself ("single file is showing as duplicates"):
-//   - canonical resolution (junctions, symlinks, mapped drives)
-//   - extended-length prefixes: \\\\?\D:\... and \\\\?\UNC\\server\\...
-//     (the UNC form used to become "UNC\\server\\..." after the prefix
-//     strip and never matched the plain \\\\server\\... spelling)
-//   - dot segments and mixed separators (cleanPath on the fallback)
-//   - Windows case-insensitivity
-static QString pathIdentityKey(const QString& p) {
-    QString key = QFileInfo(p).canonicalFilePath();
-    if (key.isEmpty()) key = QDir::cleanPath(p);
-#ifdef Q_OS_WIN
-    if (key.startsWith(QStringLiteral("\\\\?\\")) ||
-        key.startsWith(QStringLiteral("//?/"))) {
-        key.remove(0, 4);
-        if (key.startsWith(QStringLiteral("UNC")) && key.size() > 3 &&
-            (key.at(3) == QLatin1Char('\\') || key.at(3) == QLatin1Char('/')))
-            key = QStringLiteral("//") + key.mid(4);
-    }
-    key.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    key = key.toLower();
-#endif
-    return key;
-}
-
+// ============================================================
+// v1.7.24: DUPLICATES — the five passes (candidate pull, same-file
+// collapse, size pre-grouping, fingerprinting with write-back,
+// survivors-only grouping + re-verification + ordering) now run on
+// DuplicateScanController's worker thread with its own sqlite
+// connection. The window keeps what a window should own: the tier
+// gate, the single-flight guard, the progress dialog (which now
+// POLLS the worker's atomic hash counter instead of being kept
+// alive by processEvents pumps), and rendering the result.
+// pathIdentityKey() and moveFileKeepingName() live in the
+// controller as statics — one definition, testable headless.
+// ============================================================
 void MainWindow::onDetectDuplicates() {
     if (!repo_ || !db_) return;
     // v1.7.23 (audit C2): the tier gate is real now. Every tier ships
@@ -5274,353 +4512,90 @@ void MainWindow::onDetectDuplicates() {
             "Duplicate detection is disabled on this system tier.", 4000);
         return;
     }
-    // The hashing loop below pumps the event loop, so the user can
-    // click Duplicates again (or the sidebar can re-enter this slot)
-    // while it is still running. Two concurrent runs would fight over
-    // the same results pane and hash the same files twice.
-    static bool running = false;
-    if (running) return;
-    running = true;
-    struct Guard {
-        bool& f;
-        ~Guard() { f = false; }
-    } guard{running};
+    // Single flight: two concurrent scans would fight over the same
+    // results pane and hash the same files twice (the old code guarded
+    // a static bool across event-loop pumps; the controller's atomic
+    // running flag is the honest version of the same guard).
+    if (!duplicateScan_ || duplicateScan_->isRunning()) return;
+
+    // Nothing from a PREVIOUS run may survive on screen.
+    dupResults_.clear();
+    dupKeys_.clear();
+    resultsPane_->setResults({});
+    resultsPane_->setAction(QString());
+    resultsPane_->setAiSummary(QString());
+
+    // Range must never be 0..0 — that is QProgressDialog's "busy"
+    // mode, which shows a spinner forever for a job with nothing
+    // to do. The real maximum arrives with the first poll.
+    dupProgress_ = new QProgressDialog(
+        QStringLiteral("Comparing file contents..."),
+        QStringLiteral("Cancel"), 0, 1, this);
+    dupProgress_->setWindowTitle(QStringLiteral("Duplicates"));
+    dupProgress_->setWindowModality(Qt::WindowModal);
+    dupProgress_->setMinimumDuration(400);   // no flash for instant jobs
+    connect(dupProgress_, &QProgressDialog::canceled, this, [this]() {
+        // Cancel stops BEFORE the next file: nothing is ever
+        // half-compared, and the finished result reports the
+        // partial run honestly.
+        if (duplicateScan_) duplicateScan_->cancel();
+    });
+    dupProgressTimer_ = new QTimer(dupProgress_);
+    connect(dupProgressTimer_, &QTimer::timeout, dupProgress_, [this]() {
+        if (!duplicateScan_ || !dupProgress_) return;
+        const int done = duplicateScan_->hashProgressDone();
+        const int total = qMax(1, duplicateScan_->hashProgressTotal());
+        dupProgress_->setMaximum(total);
+        dupProgress_->setValue(qMin(done, total));
+        if (done > 0) {
+            dupProgress_->setLabelText(
+                QStringLiteral("Comparing file contents... %1 / %2")
+                    .arg(done).arg(total));
+        }
+    });
+    dupProgressTimer_->start(250);
+
+    duplicateScan_->start(Config::instance().dbPath());
+}
+
+void MainWindow::onDuplicateScanFinished(
+        const DocuSearch::DuplicateScanResult& r) {
+    if (dupProgressTimer_) {
+        dupProgressTimer_->stop();
+        dupProgressTimer_ = nullptr;
+    }
+    if (dupProgress_) {
+        dupProgress_->setValue(dupProgress_->maximum());  // closes it
+        dupProgress_->deleteLater();
+        dupProgress_ = nullptr;
+    }
+
     try {
-        sqlite3* raw = db_->raw();
-        if (!raw) return;
+        // v1.7.24: ghost-row purge happens HERE, on the UI thread,
+        // through FileRepository::deleteByPath — the scan only
+        // REPORTED the rows (purging mid-walk on a worker connection
+        // was both racy against the main connection and pointless:
+        // the candidates were excluded either way).
+        if (!r.stalePaths.isEmpty())
+            purgeStaleRows(r.stalePaths, QStringLiteral("duplicates"));
 
-        // Duplicate detection covers everything the app indexes:
-        // documents AND images (identical scanned jpg/png/tif pairs
-        // are real duplicates, and are the most common kind users
-        // actually have).
-        QString typeList;
+        // Honest helper for the summary: what the check covers.
         QString docTypeHelp;
-        for (const QString& t : Constants::kIndexableExtensions) {
-            if (!typeList.isEmpty()) typeList += QLatin1Char(',');
-            typeList += QString("'%1'").arg(t.toLower());
+        for (const QString& t : Constants::kIndexableExtensions)
             docTypeHelp += QStringLiteral(" .%1").arg(t.toLower());
-        }
 
-        // ---- Pass 1: pull every indexable row (hashed or not) ----
-        // No `hash != ''` filter any more: an unhashed row is a
-        // perfectly good duplicate candidate, we just have to do the
-        // work ourselves below.
-        struct Cand {
-            qint64  id = 0;
-            QString path, filename, extension;
-            qint64  size = 0;
-            qint64  rowMtime = 0;
-            QString storedHash;
-        };
-        QList<Cand> cands;
-
-        sqlite3_stmt* s = nullptr;
-        const QString sql = QString(
-            "SELECT id, path, filename, extension, size, "
-            "       modified_date, COALESCE(hash, '') "
-            "FROM Files WHERE lower(extension) IN (%1);").arg(typeList);
-        if (sqlite3_prepare_v2(raw, sql.toUtf8().constData(),
-                               -1, &s, nullptr) != SQLITE_OK) {
-            statusBar()->showMessage("Duplicate detection failed.", 3000);
-            return;
-        }
-
-        int skippedMissing = 0;
-        // v1.7.4: collected DURING the walk, purged AFTER finalize —
-        // never delete from Files while a SELECT on it is stepping.
-        QStringList stalePaths;
-        int scanned = 0;
-
-        while (sqlite3_step(s) == SQLITE_ROW) {
-            Cand c;
-            c.id = sqlite3_column_int64(s, 0);
-            auto col = [&](int i) {
-                const unsigned char* p = sqlite3_column_text(s, i);
-                return p ? QString::fromUtf8(
-                    reinterpret_cast<const char*>(p)) : QString();
-            };
-            c.path       = col(1);
-            c.filename   = col(2);
-            c.extension  = col(3);
-            c.size       = sqlite3_column_int64(s, 4);
-            c.rowMtime   = sqlite3_column_int64(s, 5);
-            c.storedHash = col(6);
-
-            // Index rows can outlive their files (deleted after
-            // scanning, or MOVED and the old row not yet pruned).
-            // A "duplicate" pointing at nothing helps nobody.
-            if (!QFileInfo::exists(c.path)) {
-                ++skippedMissing;
-                if (storageRootReachable(c.path)) stalePaths.append(c.path);
-                continue;
-            }
-            cands.append(c);
-
-            if ((++scanned % 500) == 0) {
-                statusBar()->showMessage(
-                    QString("Checking for duplicates... %1 files")
-                        .arg(scanned));
-                QApplication::processEvents();
-            }
-        }
-        sqlite3_finalize(s);
-
-        // v1.7.4: purge the ghost rows gathered above (drive reachable
-        // = a genuine deletion/move; offline roots are left untouched).
-        if (!stalePaths.isEmpty())
-            purgeStaleRows(stalePaths, QStringLiteral("duplicates"));
-
-        // ---- Pass 2: collapse rows that are the SAME physical file ----
-        // The same file can sit in Files more than once — after
-        // aggressive re-scans, or under two spellings of one path:
-        //   • mixed separators   D:\Docs\a.pdf  vs  D:/Docs/a.pdf
-        //   • dot segments       D:\Docs\a.pdf  vs  D:\Docs\.\a.pdf
-        //   • junctions/symlinks D:\Real\a.pdf  vs  D:\Link\a.pdf
-        //   • overlapping roots  (a folder added as root AND as child)
-        // Canonicalization resolves all four. One physical file must
-        // never pass as a "group of two" with itself.
-        int staleRows = 0;
-        {
-            // v1.7.13: collapse now runs through pathIdentityKey(), so
-            // the extended-length prefixes, dot segments and separator
-            // spellings this pass used to miss cannot self-pair either.
-            QSet<QString> seenPaths;
-            QList<Cand> unique;
-            unique.reserve(cands.size());
-            for (const Cand& c : cands) {
-                const QString key = pathIdentityKey(c.path);
-                if (seenPaths.contains(key)) { ++staleRows; continue; }
-                seenPaths.insert(key);
-                unique.append(c);
-            }
-            cands = std::move(unique);
-        }
-
-        // ---- Pass 3: size pre-grouping (free, and exact) ----
-        // Two files of different sizes cannot be byte-identical, so a
-        // size that occurs exactly once needs no I/O at all. On a
-        // typical index this removes 90 %+ of the work, which is what
-        // makes live hashing affordable.
-        // Use the CURRENT on-disk size, not the indexed one: a row
-        // whose file changed since scanning must still be grouped
-        // (previously such rows were dropped outright).
-        QHash<qint64, int> sizeCount;
-        QList<qint64> liveSize;
-        QList<qint64> liveMtime;
-        liveSize.reserve(cands.size());
-        liveMtime.reserve(cands.size());
-        for (const Cand& c : cands) {
-            const QFileInfo fi(c.path);
-            const qint64 sz = fi.size();
-            liveSize.append(sz);
-            liveMtime.append(fi.lastModified().toSecsSinceEpoch());
-            ++sizeCount[sz];
-        }
-
-        // ---- Pass 4: fingerprint the survivors ----
-        QList<SearchHit> hits;
-        QStringList hashes;
-        int hashedNow = 0, unreadable = 0;
-
-        QList<int> toHash;
-        for (int i = 0; i < cands.size(); ++i)
-            if (sizeCount.value(liveSize[i], 0) >= 2) toHash.append(i);
-
-        // Range must never be 0..0 — that is QProgressDialog's "busy"
-        // mode, which shows a spinner forever for a job with nothing
-        // to do.
-        QProgressDialog prog(
-            QStringLiteral("Comparing file contents..."),
-            QStringLiteral("Cancel"), 0,
-            qMax(1, static_cast<int>(toHash.size())), this);
-        prog.setWindowTitle(QStringLiteral("Duplicates"));
-        prog.setWindowModality(Qt::WindowModal);
-        // Don't flash a dialog for a job that finishes instantly.
-        prog.setMinimumDuration(400);
-        bool cancelled = false;
-
-        for (int n = 0; n < toHash.size(); ++n) {
-            const int i = toHash[n];
-            const Cand& c = cands[i];
-
-            // Reuse the stored fingerprint ONLY if it still describes
-            // the file on disk (2 s mtime tolerance for FAT's coarse
-            // timestamps). Otherwise re-hash — a stale hash used to
-            // mean "drop this file", which silently hid every freshly
-            // copied duplicate.
-            QString h;
-            // v1.7.13: a row with NO mtime is never trusted either —
-            // size alone cannot distinguish an edited file from an
-            // untouched one. The write-back below heals such rows on
-            // this very run, so the cost is one hashing pass, once.
-            const bool storedIsFresh =
-                !c.storedHash.isEmpty() &&
-                c.rowMtime > 0 &&
-                liveSize[i] == c.size &&
-                qAbs(liveMtime[i] - c.rowMtime) <= 2;
-            if (storedIsFresh) {
-                h = c.storedHash;
-            } else {
-                // Same 64 MB cap as every other hashing path, so a
-                // fingerprint computed here is comparable with one
-                // written by the scanners.
-                h = FileUtils::sha256OfFile(c.path, 64 * 1024 * 1024);
-                if (h.isEmpty()) { ++unreadable; continue; }
-                ++hashedNow;
-                // Write the whole fingerprint triple back — hash AND
-                // the live size/mtime it was computed from. Writing
-                // only the hash left drifted rows stale (the row still
-                // claimed the old size), so storedIsFresh stayed false
-                // and every run re-hashed the same files; the row also
-                // disagreed with itself for any future consumer.
-                sqlite3_stmt* u = nullptr;
-                if (sqlite3_prepare_v2(raw,
-                        "UPDATE Files SET hash = ?1, size = ?2, "
-                        "modified_date = ?3 WHERE id = ?4;",
-                        -1, &u, nullptr) == SQLITE_OK) {
-                    sqlite3_bind_text(u, 1, h.toUtf8().constData(), -1,
-                                      SQLITE_TRANSIENT);
-                    sqlite3_bind_int64(u, 2, liveSize[i]);
-                    sqlite3_bind_int64(u, 3, liveMtime[i]);
-                    sqlite3_bind_int64(u, 4, c.id);
-                    sqlite3_step(u);
-                    sqlite3_finalize(u);
-                }
-            }
-
-            SearchHit sh;
-            sh.fileId       = c.id;
-            sh.path         = c.path;
-            sh.filename     = c.filename;
-            sh.extension    = c.extension;
-            sh.size         = liveSize[i];
-            sh.modifiedDate = QDateTime::fromSecsSinceEpoch(liveMtime[i]);
-            hits.append(sh);
-            // Group key = exact size + fingerprint. The fingerprint is
-            // capped at 64 MB (same cap every hashing path uses), so
-            // two DIFFERENT files larger than the cap that happen to
-            // share their first 64 MB — e.g. two long videos-of-scans
-            // exported from the same tool, or two PDFs with identical
-            // front matter — would otherwise collide into a false
-            // "duplicate". Qualifying the key with the byte-exact size
-            // makes that impossible without re-reading whole files.
-            hashes.append(QStringLiteral("%1:%2")
-                              .arg(liveSize[i]).arg(h));
-
-            if ((n % 16) == 0) {
-                prog.setValue(n);
-                QApplication::processEvents();
-                if (prog.wasCanceled()) { cancelled = true; break; }
-            }
-        }
-        prog.setValue(prog.maximum());   // closes the dialog
-
-        // ---- Pass 5: keep only hashes with >= 2 SURVIVING files ----
-        // A lone file whose partner was deleted must never render as
-        // a "duplicate" of something that no longer exists.
-        int droppedSingletons = 0;
-        {
-            QHash<QString, int> groupSize;
-            for (const QString& hs : hashes) ++groupSize[hs];
-            QList<SearchHit> kept;
-            QStringList keptHashes;
-            for (int i = 0; i < hits.size(); ++i) {
-                if (groupSize.value(hashes[i], 0) >= 2) {
-                    kept.append(hits[i]);
-                    keptHashes.append(hashes[i]);
-                } else {
-                    ++droppedSingletons;
-                }
-            }
-            hits   = std::move(kept);
-            hashes = std::move(keptHashes);
-        }
-
-        // Display-time re-verification: processEvents() above lets the
-        // user (or a sync client) move/delete files WHILE the walk
-        // runs. Re-verify and re-run the survivors-only grouping so a
-        // file whose partner vanished mid-walk can never render as a
-        // pair whose second file is gone.
-        // v1.7.13: the SAME identity check also runs here as a last
-        // line of defense — if two surviving rows still resolve to one
-        // physical file (a spelling canonicalization cannot unify),
-        // the shadow row is dropped and the recount below makes sure
-        // a group reduced to one file disappears instead of showing
-        // "a duplicate" that has no partner.
-        {
-            QList<SearchHit> verified;
-            QStringList verifiedHashes;
-            verified.reserve(hits.size());
-            QSet<QString> seenIdentity;
-            for (int i = 0; i < hits.size(); ++i) {
-                if (!QFileInfo::exists(hits[i].path)) {
-                    ++droppedSingletons;   // keep the summary honest
-                    continue;
-                }
-                const QString ident = pathIdentityKey(hits[i].path);
-                if (seenIdentity.contains(ident)) {
-                    ++staleRows;           // one file, two rows: shadow
-                    continue;
-                }
-                seenIdentity.insert(ident);
-                verified.append(hits[i]);
-                verifiedHashes.append(hashes[i]);
-            }
-            QHash<QString, int> aliveSize;
-            for (const QString& hs : verifiedHashes) ++aliveSize[hs];
-            QList<SearchHit> paired;
-            QStringList pairedHashes;
-            for (int i = 0; i < verified.size(); ++i) {
-                if (aliveSize.value(verifiedHashes[i], 0) >= 2) {
-                    paired.append(verified[i]);
-                    pairedHashes.append(verifiedHashes[i]);
-                }
-            }
-            hits   = std::move(paired);
-            hashes = std::move(pairedHashes);
-        }
-
-        // Order the output so members of a group sit together.
-        {
-            QList<int> idx;
-            idx.reserve(hits.size());
-            for (int i = 0; i < hits.size(); ++i) idx.append(i);
-            std::sort(idx.begin(), idx.end(), [&](int a, int b) {
-                if (hashes[a] != hashes[b]) return hashes[a] < hashes[b];
-                return hits[a].filename.localeAwareCompare(
-                           hits[b].filename) < 0;
-            });
-            QList<SearchHit> sortedHits;
-            QStringList sortedHashes;
-            sortedHits.reserve(hits.size());
-            for (const int i : idx) {
-                sortedHits.append(hits[i]);
-                sortedHashes.append(hashes[i]);
-            }
-            hits   = std::move(sortedHits);
-            hashes = std::move(sortedHashes);
-        }
-
-        int groupCount = 0;
-        QString lastHash;
-        for (const QString& hs : hashes) {
-            if (hs != lastHash) { ++groupCount; lastHash = hs; }
-        }
-
-        if (hits.isEmpty()) {
+        if (r.hits.isEmpty()) {
             // Empty the results list too, so the listing from a
             // PREVIOUS duplicate check can't stay on screen behind
-            // the message box.
+            // the message box. (Cleared above — kept explicit here.)
             resultsPane_->setResults({});
-            // v1.7.13: nothing to delete, and no stale caption/pill from
-            // an earlier run (or from search) may survive either.
             dupResults_.clear();
             dupKeys_.clear();
             resultsPane_->setAction(QString());
             resultsPane_->setAiSummary(QString());
 
             QString detail;
-            if (cancelled) {
+            if (r.cancelled) {
                 detail = QStringLiteral(
                     "The check was cancelled before it finished, so "
                     "some files were never compared.");
@@ -5632,36 +4607,36 @@ void MainWindow::onDetectDuplicates() {
                     "%1 indexed file%2 compared by content"
                     "%3.\n\nDuplicate search covers documents and "
                     "images:%4")
-                    .arg(cands.size())
-                    .arg(cands.size() == 1 ? " was" : "s were")
-                    .arg(hashedNow > 0
+                    .arg(qint64(r.candidateCount))
+                    .arg(r.candidateCount == 1 ? " was" : "s were")
+                    .arg(r.hashedNow > 0
                         ? QString(" (%1 fingerprint%2 computed now)")
-                            .arg(hashedNow)
-                            .arg(hashedNow == 1 ? "" : "s")
+                            .arg(r.hashedNow)
+                            .arg(r.hashedNow == 1 ? "" : "s")
                         : QString())
                     .arg(docTypeHelp);
             }
             QStringList notes;
-            if (skippedMissing > 0)
+            if (r.skippedMissing > 0)
                 notes << QString("%1 index entr%2 pointed at files that "
                                  "no longer exist")
-                             .arg(skippedMissing)
-                             .arg(skippedMissing == 1 ? "y" : "ies");
-            if (staleRows > 0)
+                             .arg(r.skippedMissing)
+                             .arg(r.skippedMissing == 1 ? "y" : "ies");
+            if (r.staleRows > 0)
                 notes << QString("%1 duplicate index row%2 for the same "
                                  "physical file %3 collapsed")
-                             .arg(staleRows)
-                             .arg(staleRows == 1 ? "" : "s")
-                             .arg(staleRows == 1 ? "was" : "were");
-            if (droppedSingletons > 0)
+                             .arg(r.staleRows)
+                             .arg(r.staleRows == 1 ? "" : "s")
+                             .arg(r.staleRows == 1 ? "was" : "were");
+            if (r.droppedSingletons > 0)
                 notes << QString("%1 file%2 lost its duplicate partner "
                                  "during the check")
-                             .arg(droppedSingletons)
-                             .arg(droppedSingletons == 1 ? "" : "s");
-            if (unreadable > 0)
+                             .arg(r.droppedSingletons)
+                             .arg(r.droppedSingletons == 1 ? "" : "s");
+            if (r.unreadable > 0)
                 notes << QString("%1 file%2 could not be read")
-                             .arg(unreadable)
-                             .arg(unreadable == 1 ? "" : "s");
+                             .arg(r.unreadable)
+                             .arg(r.unreadable == 1 ? "" : "s");
 
             QMessageBox::information(this, "Duplicates",
                 QString("No duplicate files found.\n\n%1%2")
@@ -5671,75 +4646,47 @@ void MainWindow::onDetectDuplicates() {
                         : QStringLiteral("\n\n") + notes.join(", ")
                               + QStringLiteral(".")));
             statusBar()->showMessage(
-                cancelled ? "Duplicate check cancelled."
-                          : "No duplicate files found.", 5000);
+                r.cancelled ? "Duplicate check cancelled."
+                            : "No duplicate files found.", 5000);
             return;
         }
 
-        resultsPane_->setResults(hits);
-        // v1.7.13: arm the cleanup action + remember what the pane is
-        // showing (the delete slot re-validates against disk anyway).
-        dupResults_ = hits;
-        dupKeys_    = hashes;
+        resultsPane_->setResults(r.hits);
+        // arm the cleanup action + remember what the pane is showing
+        // (the delete slot re-validates against disk anyway).
+        dupResults_ = r.hits;
+        dupKeys_    = r.groupKeys;
         resultsPane_->setAction(
             QStringLiteral("Delete duplicates..."));
         // A cancelled check must not pass as complete: keep the note on
         // screen as long as the results are (not an 8 s status toast).
-        resultsPane_->setAiSummary(cancelled
+        resultsPane_->setAiSummary(r.cancelled
             ? QStringLiteral("Check cancelled early - the list is "
                              "partial; some files were never compared.")
             : QString());
         statusBar()->showMessage(
             QString("Found %1 duplicate group%2 (%3 files)%4%5%6")
-                .arg(groupCount)
-                .arg(groupCount == 1 ? "" : "s")
-                .arg(hits.size())
-                .arg(hashedNow > 0
+                .arg(r.groupCount)
+                .arg(r.groupCount == 1 ? "" : "s")
+                .arg(r.hits.size())
+                .arg(r.hashedNow > 0
                     ? QString("; %1 fingerprint%2 computed now")
-                        .arg(hashedNow).arg(hashedNow == 1 ? "" : "s")
+                        .arg(r.hashedNow).arg(r.hashedNow == 1 ? "" : "s")
                     : QString())
-                .arg(staleRows > 0
+                .arg(r.staleRows > 0
                     ? QString("; %1 duplicate index row%2 collapsed")
-                        .arg(staleRows).arg(staleRows == 1 ? "" : "s")
+                        .arg(r.staleRows).arg(r.staleRows == 1 ? "" : "s")
                     : QString())
-                .arg(cancelled ? QStringLiteral("; check cancelled early")
-                               : QString()),
+                .arg(r.cancelled ? QStringLiteral("; check cancelled early")
+                                 : QString()),
             8000);
-        if (hashedNow > 0) updateIndexStats();
+        if (r.hashedNow > 0) updateIndexStats();
     } catch (const std::exception& e) {
         DS_ERROR("Duplicates", QString("Failed: %1").arg(e.what()));
         statusBar()->showMessage("Duplicate detection failed.", 3000);
     } catch (...) {
         statusBar()->showMessage("Duplicate detection failed.", 3000);
     }
-}
-
-// v1.7.14: move a file into a user-chosen folder, keeping its name
-// ("name (2).ext" on collision). QFile::rename fails across volumes
-// (ERROR_NOT_SAME_DEVICE), so fall back to copy-then-remove — and the
-// copy is size-verified before the original is unlinked, so a partial
-// copy can never destroy the only other copy of the content.
-static bool moveFileKeepingName(const QString& src, const QString& destDir) {
-    const QFileInfo fi(src);
-    if (!fi.exists() || !QFileInfo(destDir).isDir()) return false;
-    const QString base   = fi.completeBaseName();
-    const QString suffix = fi.suffix();
-    QString candidate = destDir + "/" + fi.fileName();
-    if (QFileInfo::exists(candidate)) {
-        for (int n = 2; ; ++n) {
-            if (n > 999) return false;   // pathological — never spin forever
-            candidate = destDir + "/" + base + " (" + QString::number(n) + ")" +
-                        (suffix.isEmpty() ? QString() : "." + suffix);
-            if (!QFileInfo::exists(candidate)) break;
-        }
-    }
-    if (QFile::rename(src, candidate)) return true;
-    if (!QFile::copy(src, candidate))  return false;
-    if (QFileInfo(candidate).size() != fi.size()) {
-        QFile::remove(candidate);        // copy unverifiable — keep original
-        return false;
-    }
-    return QFile::remove(src);
 }
 
 // v1.7.13: "Delete duplicate copies" — cleanup for the duplicates
@@ -5751,39 +4698,17 @@ static bool moveFileKeepingName(const QString& src, const QString& destDir) {
 // truth after. The list is re-validated against disk FIRST: files
 // moved/deleted since the check, and groups whose partner is gone,
 // are skipped — a group with one survivor is never touched at all.
+// v1.7.24: the newest-kept selection lives in
+// DuplicateScanController::selectDoomedCopies, the collision-safe
+// move in its moveFileKeepingName — both headless-testable.
 void MainWindow::onDeleteDuplicateCopies() {
     if (dupResults_.isEmpty() || dupKeys_.size() != dupResults_.size())
         return;
 
-    // Group only by members that still exist on disk.
-    QHash<QString, QList<int>> groups;
-    for (int i = 0; i < dupResults_.size(); ++i) {
-        if (!QFileInfo::exists(dupResults_[i].path)) continue;
-        groups[dupKeys_[i]].append(i);
-    }
-
-    QList<int> doomed;
     qint64 reclaimBytes = 0;
     int groupsActed = 0;
-    for (auto it = groups.constBegin(); it != groups.constEnd(); ++it) {
-        const QList<int>& members = it.value();
-        if (members.size() < 2) continue;      // never the last copy
-        // Keep the NEWEST copy (highest live mtime; tie -> first).
-        int keep = members[0];
-        qint64 keepMtime = QFileInfo(dupResults_[keep].path)
-                               .lastModified().toSecsSinceEpoch();
-        for (int m = 1; m < members.size(); ++m) {
-            const qint64 mt = QFileInfo(dupResults_[members[m]].path)
-                                  .lastModified().toSecsSinceEpoch();
-            if (mt > keepMtime) { keep = members[m]; keepMtime = mt; }
-        }
-        for (int m : members) {
-            if (m == keep) continue;
-            reclaimBytes += QFileInfo(dupResults_[m].path).size();
-            doomed.append(m);
-        }
-        ++groupsActed;
-    }
+    const QList<int> doomed = DuplicateScanController::selectDoomedCopies(
+        dupResults_, dupKeys_, &reclaimBytes, &groupsActed);
     if (doomed.isEmpty()) {
         QMessageBox::information(this, "Delete duplicate copies",
             "Nothing to delete: no group still has two or more files on "
@@ -5925,7 +4850,7 @@ void MainWindow::onDeleteDuplicateCopies() {
         if (!QFileInfo::exists(p)) continue;
         const bool ok = toRecycleBin
             ? QFile::moveToTrash(p)
-            : moveFileKeepingName(p, destDir);
+            : DuplicateScanController::moveFileKeepingName(p, destDir);
         if (ok) {
             ++deleted;
             movedPaths.append(p);

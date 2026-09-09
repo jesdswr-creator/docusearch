@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DocuSearch
-    VERSION 1.7.23
+    VERSION 1.7.24
     DESCRIPTION "Offline Intelligent Document Search & OCR System"
     LANGUAGES CXX
 )
@@ -241,6 +241,10 @@ set(APP_SOURCES
     src/core/DuplicateExtractionGuard.cpp
     # v1.7.21: headless extraction-session controller (wiring-tested)
     src/core/ExtractionController.cpp
+    # v1.7.24: the scan pipeline + the duplicate scanner, extracted
+    # from MainWindow (wiring-tested; own worker connections)
+    src/core/ScanPipelineController.cpp
+    src/core/DuplicateScanController.cpp
     # database
     src/database/Database.cpp
     src/database/Schema.cpp
@@ -300,6 +304,7 @@ set(APP_SOURCES
     src/ui/SwitchControl.cpp
     src/ui/FirstLaunchTierDetection.cpp
     src/ui/SystemHealthDashboard.cpp
+    src/ui/TitleBarWidget.cpp
     src/ui/MainWindow.cpp
     # entry
     src/main.cpp

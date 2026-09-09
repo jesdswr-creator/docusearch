@@ -30,6 +30,7 @@ class QListWidgetItem;
 class QLabel;
 class QPushButton;
 class QProgressBar;
+class QProgressDialog;
 
 namespace DocuSearch {
 
@@ -55,6 +56,8 @@ class BgeService;
 class HybridSearchEngine;
 class ExtractionController;
 class EmbeddingController;
+class ScanPipelineController;
+class DuplicateScanController;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -117,10 +120,18 @@ private slots:
     void runStartupIntegrityPass();
     bool ocrWorkOutstanding() const;
 
+    // v1.7.24: scan-pipeline reports (ScanPipelineController)
+    void onAutoScanFinished(const DocuSearch::ScanStats& stats);
+    void onFolderScanFinished(int indexed, int skipped, int hashed);
+    void onIntegrityFinished(const DocuSearch::IntegrityResult& result);
+    void onPurgeNonIndexableFinished(int purged);
+    // v1.7.24: duplicate-scan reports (DuplicateScanController)
+    void onDuplicateScanFinished(const DocuSearch::DuplicateScanResult& result);
+
     void requestAutoExtract();
     void purgeFolderFromIndex(const QString& folder);
     int purgeStaleRows(const QStringList& paths, const QString& context);
-    int purgeNonIndexableRows();
+    void purgeNonIndexableRows();
     void removeAndRebuildDatabase();
     void showWelcomeDialog();
     void showStatsAndHealth();
@@ -140,11 +151,14 @@ private:
                               const QList<SearchHit>& keywordHits,
                               std::vector<HybridResult> results,
                               qint64 totalMs);
-    void scanFolderFast(const QString& folder);
     void refreshPreviewForSelectedFile();
     void refreshAllIcons();
     void enableNativeResize();
     bool nativeResizeApplied_ = false;
+
+    // v1.7.24: the ScanParams bundle the window hands the scan
+    // pipeline (read fresh from settings_ at every call site).
+    DocuSearch::ScanParams currentScanParams() const;
 
 public:
     Q_INVOKABLE void updateIndexStats();
@@ -159,6 +173,11 @@ public:
     std::unique_ptr<FileWatcher>    watcher_;
     std::unique_ptr<ExtractionController> extractionController_;
     std::unique_ptr<EmbeddingController>  embeddingController_;
+    // v1.7.24: the scan + duplicate pipelines, eagerly constructed
+    // like every other controller (the wiring contract — the class of
+    // bug the verifyWiring audit exists for).
+    std::unique_ptr<ScanPipelineController>   scanPipeline_;
+    std::unique_ptr<DuplicateScanController>  duplicateScan_;
     std::unique_ptr<MemoryMonitor>  memoryMonitor_;
     std::unique_ptr<GracefulDegradation> degradation_;
     qint64 lastSearchLatencyMs_ = 0;
@@ -208,6 +227,14 @@ public:
 
     QList<SearchHit> dupResults_;
     QStringList      dupKeys_;
+    // v1.7.24: the duplicates progress dialog lives across the whole
+    // async scan (created in onDetectDuplicates, closed in
+    // onDuplicateScanFinished) and polls the worker's atomic counter.
+    QProgressDialog* dupProgress_       = nullptr;
+    QTimer*          dupProgressTimer_  = nullptr;
+    // v1.7.24: one "OCR this file" job at a time (the acquisition now
+    // runs on a worker instead of pumping the UI thread).
+    std::atomic<bool> ocrThisFileInFlight_{false};
 
     void setAiChip(const QString& text, bool active);
     void updateTitleBarState();
@@ -239,8 +266,6 @@ public:
     int             pastelTheme_          = 0;
     bool            dbResetting_          = false;
 
-    bool            autoScanRunning_      = false;
-    qint64          autoScanStartedMs_    = 0;
     // v1.7.23 tier gates (audit C2/B3): read once from TierConfig at
     // construction and actually consumed by the matching code paths.
     bool            liveIndexingEnabled_       = true;
