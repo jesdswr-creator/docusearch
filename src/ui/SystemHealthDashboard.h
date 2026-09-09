@@ -9,6 +9,16 @@
 #include <functional>
 #include <QTimer>
 
+// Forward-declare ::QLabel at GLOBAL scope, BEFORE the namespace opens.
+// NEVER write `class QLabel* member;` (elaborated-type-specifier) inside
+// namespace DocuSearch: with no visible declaration the compiler treats it
+// as a forward declaration of a PHANTOM DocuSearch::QLabel, which then
+// shadows the real ::QLabel inside every namespace-DocuSearch TU that
+// includes this header - even after `#include <QLabel>` - and the build
+// dies with C2027 "use of undefined type 'DocuSearch::QLabel'" in every
+// file that merely mentions QLabel (v1.7.22 CI failure, 100+ errors).
+class QLabel;
+
 namespace DocuSearch {
 
 struct HealthMetrics {
@@ -43,13 +53,13 @@ private:
 
     MetricsProvider provider_;
     QTimer* updateTimer_ = nullptr;
-    class QLabel* ramLabel_ = nullptr;
-    class QLabel* cpuLabel_ = nullptr;
-    class QLabel* indexSpeedLabel_ = nullptr;
-    class QLabel* searchLatencyLabel_ = nullptr;
-    class QLabel* semanticCacheLabel_ = nullptr;
-    class QLabel* degradationLabel_ = nullptr;
-    class QLabel* tierLabel_ = nullptr;
+    QLabel* ramLabel_ = nullptr;
+    QLabel* cpuLabel_ = nullptr;
+    QLabel* indexSpeedLabel_ = nullptr;
+    QLabel* searchLatencyLabel_ = nullptr;
+    QLabel* semanticCacheLabel_ = nullptr;
+    QLabel* degradationLabel_ = nullptr;
+    QLabel* tierLabel_ = nullptr;
 };
 
 } // namespace DocuSearch
