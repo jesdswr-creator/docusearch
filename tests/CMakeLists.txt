@@ -140,6 +140,11 @@ if(MSVC AND DOCUSEARCH_HAS_PDFIUM)
         ${CMAKE_SOURCE_DIR}/src/core/Config.cpp
         ${CMAKE_SOURCE_DIR}/src/core/StringUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/core/FileUtils.cpp
+        # PdfExtractor's PDFium branch (DOCUSEARCH_HAS_PDFIUM) calls
+        # TextQuality::looksLikeGarbage - without this object the fuzz
+        # test fails to LINK (LNK2019), a dep the old Poppler build
+        # never pulled in because that path was never active on CI.
+        ${CMAKE_SOURCE_DIR}/src/core/TextQuality.cpp
         ${CMAKE_SOURCE_DIR}/src/core/SystemProfile.cpp
         ${CMAKE_SOURCE_DIR}/src/core/TierConfig.cpp
         ${CMAKE_SOURCE_DIR}/src/pdf/PdfiumDocument.cpp
