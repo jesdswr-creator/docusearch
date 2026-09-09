@@ -5799,10 +5799,3 @@ void MainWindow::onDeleteDuplicateCopies() {
 }
 
 } // namespace DocuSearch
-amespace DocuSearch
-/ so the reuse path makes this fast.
-    onDetectDuplicates();
-}
-
-} // namespace DocuSearch
-amespace DocuSearch
