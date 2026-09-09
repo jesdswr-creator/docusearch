@@ -34,7 +34,10 @@ set(TEST_SOURCES
     ../src/embeddings/BgeEmbeddingDb.cpp
 )
 
-find_package(Qt6 REQUIRED COMPONENTS Test Sql Concurrent)
+# v1.7.24: Widgets joins the test components - tst_TitleBarWidget is
+# the first WIDGET-layer test (the frameless title bar driven on a
+# real window: construction contract + double-click maximize toggle).
+find_package(Qt6 REQUIRED COMPONENTS Test Sql Concurrent Widgets)
 find_package(SQLite3 REQUIRED)
 
 # Helper: declare one test executable
@@ -126,6 +129,17 @@ target_sources(tst_DuplicateScan PRIVATE
     ../src/core/DuplicateScanController.cpp
 )
 target_link_libraries(tst_DuplicateScan PRIVATE Qt6::Concurrent)
+
+# ---- Title bar widget test (v1.7.24) -----------------------------------
+# The extracted TitleBarWidget on a real window: the #titleBar
+# objectName the theme stylesheet targets, the fixed 44 px bar, and
+# the double-click maximize/restore toggle. Needs Qt6::Widgets and a
+# (real or offscreen) windowing session.
+docusearch_add_test(tst_TitleBarWidget)
+target_sources(tst_TitleBarWidget PRIVATE
+    ../src/ui/TitleBarWidget.cpp
+)
+target_link_libraries(tst_TitleBarWidget PRIVATE Qt6::Widgets)
 
 # ---- OCR helper test (separate function — no SQLite deps) -------------
 # Verifies the Windows.Media.Ocr helper exe crash safety. Tests that the
