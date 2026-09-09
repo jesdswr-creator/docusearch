@@ -341,7 +341,7 @@ private slots:
         ctrl_->startIntegrityPass(params({}, true), false);
         waitUntil([this] { return integFired_; });
         QCOMPARE(lastInteg_.hashed, 1);
-        QCOMPARE(textOf("SELECT length(hash) FROM Files "
+        QCOMPARE(scalar("SELECT length(hash) FROM Files "
                         "WHERE filename='h.pdf';"), 64);
     }
 
@@ -373,7 +373,7 @@ private slots:
         QCOMPARE(fsIndexed_, 1);
         QCOMPARE(fsSkipped_, 1);
         QCOMPARE(fsHashed_, 1);
-        QCOMPARE(textOf("SELECT length(hash) FROM Files "
+        QCOMPARE(scalar("SELECT length(hash) FROM Files "
                         "WHERE filename='a.pdf';"), 64);
 
         // Second run: same count (ON CONFLICT upsert, no dup rows).

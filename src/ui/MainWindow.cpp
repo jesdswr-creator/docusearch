@@ -2845,6 +2845,26 @@ void MainWindow::onAutoScanFinished(const DocuSearch::ScanStats& stats) {
     }
 }
 
+void MainWindow::onFolderScanFinished(int indexed, int skipped, int hashed) {
+    updateIndexStats();
+    statusBar()->showMessage(
+        QString("Scan complete: %1 files indexed, %2 skipped%3 - "
+                "starting auto-extraction...")
+            .arg(indexed)
+            .arg(skipped)
+            .arg(hashed > 0 ? QString(
+                ", %1 fingerprint%2 computed")
+                .arg(hashed).arg(hashed == 1 ? "" : "s") : QString()),
+        5000);
+    // Both Add-Folder and the Settings new-drive path used to wake the
+    // extraction pipeline right after their (synchronous) scan; now
+    // the wake lives exactly once, where the scan actually finished.
+    QTimer::singleShot(500, this, [this]() {
+        autoExtractRetryLeft_ = 20;  // fresh budget (see requestAutoExtract)
+        requestAutoExtract();
+    });
+}
+
 // v1.7.24: the ScanParams bundle, read fresh from the CURRENT settings
 // at every call site (the controller receives values only).
 DocuSearch::ScanParams MainWindow::currentScanParams() const {
