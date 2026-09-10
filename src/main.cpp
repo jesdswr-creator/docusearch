@@ -29,6 +29,7 @@
 #include <QFutureWatcher>
 #include <QtConcurrent>
 #include <memory>
+#include <stdexcept>
 
 using namespace DocuSearch;
 
@@ -172,6 +173,19 @@ int main(int argc, char* argv[]) {
         splash.fadeOutAndClose([&w]() {
             if (w) w->show();
         });
+        // ── v1.7.25: THE REVEAL NEVER DEPENDS ON ONE MECHANISM ──
+        // The splash fade above is the polite, ordered reveal; if it
+        // somehow fails to deliver, the window force-shows 1.2 s later.
+        // An app that keeps RUNNING but never shows its window (splash
+        // gone, nothing on screen, process alive in task manager) is the
+        // worst failure a launcher can have — this makes it impossible.
+        QTimer::singleShot(1200, &app, [&w]() {
+            if (w && !w->isVisible()) {
+                DS_WARN("App", "Splash fade did not reveal the window — "
+                               "forcing show().");
+                w->show();
+            }
+        });
     };
 
     // ── v1.7.20: PRE-OPEN THE DATABASE ON A BACKGROUND THREAD ──
@@ -191,24 +205,43 @@ int main(int argc, char* argv[]) {
                 const QString err = startup->error.isEmpty()
                                         ? QStringLiteral("unknown error")
                                         : startup->error;
-                QMessageBox::critical(nullptr, QStringLiteral("Database Error"),
-                    QStringLiteral("Failed to open database:\n") + err);
-                splash.fadeOutAndClose([]() {
+                DS_ERROR("App", QString("Startup DB unavailable: %1").arg(err));
+                // v1.7.25: fade the splash FIRST, then show the error box.
+                // The splash is a WS_EX_TOPMOST layered window — a modal
+                // box shown while it is up renders BEHIND it, invisible;
+                // the user sees only a splash that never goes away.
+                splash.fadeOutAndClose([err]() {
+                    QMessageBox::critical(nullptr, QStringLiteral("Database Error"),
+                        QStringLiteral("Failed to open database:\n") + err);
                     QTimer::singleShot(0, qApp,
                                        []() { QApplication::quit(); });
                 });
                 return;
             }
+            QElapsedTimer ctorClock;
+            ctorClock.start();
             try {
                 w = std::make_unique<DocuSearch::MainWindow>(
                         std::move(startup->db));
+            } catch (const std::exception& e) {
+                DS_ERROR("App", QString("MainWindow construction failed: %1")
+                                    .arg(e.what()));
+                splash.fadeOutAndClose([]() {
+                    QTimer::singleShot(0, qApp,
+                                       []() { QApplication::quit(); });
+                });
+                return;
             } catch (...) {
+                DS_ERROR("App", "MainWindow construction failed: "
+                                "unknown exception");
                 splash.fadeOutAndClose([]() {
                     QTimer::singleShot(0, qApp,
                                        []() { QApplication::quit(); });
                 });
                 return;
             }
+            DS_INFO("App", QString("MainWindow constructed in %1 ms")
+                                .arg(ctorClock.elapsed()));
             const int remain =
                 kMinSplashMs - static_cast<int>(splashClock.elapsed());
             if (remain > 0) {
@@ -218,6 +251,8 @@ int main(int argc, char* argv[]) {
             }
         });
     dbWatch->setFuture(QtConcurrent::run([startup, dbPath]() {
+        QElapsedTimer dbClock;
+        dbClock.start();
         QString err;
         if (!startup->db->open(dbPath, &err)) {
             startup->error = err;
@@ -231,15 +266,27 @@ int main(int argc, char* argv[]) {
             DS_ERROR("App", "Background schema initialize/migrate failed.");
             return;
         }
-        DS_INFO("App", "Database pre-opened on the background thread.");
+        DS_INFO("App", QString("Database pre-opened on the background "
+                               "thread in %1 ms").arg(dbClock.elapsed()));
     }));
 
     // ── v1.7.8: SPLASH SAFETY NET ──
-    QTimer::singleShot(30 * 1000, &app, [&splash, &windowShown]() {
+    QTimer::singleShot(30 * 1000, &app, [&splash, &windowShown, &w, &splashClock]() {
         if (!windowShown) {
-            DS_WARN("App", "Main window not visible 30 s after launch — "
-                           "dropping the splash so nothing hides behind it.");
+            DS_WARN("App", QString("Main window not visible %1 ms after "
+                                   "launch — dropping the splash so nothing "
+                                   "hides behind it.").arg(splashClock.elapsed()));
             splash.fadeOutAndClose();
+            // ── v1.7.25: if the window was fully constructed but its
+            // reveal was lost (or construction is about to finish),
+            // SHOW IT — a running-but-windowless process is worse than
+            // a slightly out-of-order reveal.
+            if (w && !w->isVisible()) {
+                DS_WARN("App", "MainWindow exists but was never shown — "
+                               "showing it from the safety net.");
+                w->show();
+                windowShown = true;
+            }
         }
     });
 

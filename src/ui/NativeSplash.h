@@ -26,9 +26,16 @@
 //     widget fallback.
 //   * The fade-out animates SourceConstantAlpha in the same thread —
 //     again independent of the (possibly busy) UI thread. The optional
-//     callback runs afterwards on the UI thread via
-//     QMetaObject::invokeMethod, preserving main.cpp's reveal order
-//     (splash fades over the desktop, THEN the main window shows).
+//     callback runs afterwards on the UI thread, preserving main.cpp's
+//     reveal order (splash fades over the desktop, THEN the main
+//     window shows). v1.7.25: the splash thread NEVER owns the
+//     callback — it only flips a fadeDone_ flag on every exit path and
+//     the UI thread delivers the callback itself, so a thread that
+//     died, was joined or already completed its fade cycle can never
+//     orphan the main window's show() (the old single-consume after_
+//     handoff did exactly that: any fadeOutAndClose() call that landed
+//     after the thread's one consume was silently dropped and the app
+//     lived on windowless — splash gone, no window, process running).
 //   * If anything in the Win32 path fails (exotic session, class
 //     registration, window creation), show() transparently falls back
 //     to the old Qt widget splash — a guaranteed-visible splash either
@@ -38,12 +45,14 @@
 #include "SplashOverlay.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QImage>
 #include <QPainter>
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <atomic>
@@ -97,7 +106,19 @@ public:
     // Fade out over ~200 ms and close. The optional callback runs on the
     // UI thread AFTER the splash is gone (main.cpp uses it to show the
     // main window — reveal order: splash fades over the desktop first).
-    // Safe to call more than once; a hidden splash closes immediately.
+    // Safe to call any number of times, at any point in the splash's
+    // life cycle.
+    //
+    // v1.7.25 CALLBACK CONTRACT — the thread NEVER owns the callback.
+    // The old design stored `after_` under a mutex for the splash thread
+    // to consume once at thread exit; a call that landed after that one
+    // consume (the reveal racing the 30 s splash safety net, which fades
+    // with NO callback first) stored its callback into a mailbox nobody
+    // would ever read again — w->show() never ran, and the app became a
+    // windowless zombie (splash gone, no window, process running in task
+    // manager). Now the thread only flips fadeDone_ on EVERY exit path
+    // and the UI thread polls it and runs the callback HERE — a dead,
+    // wedged or already-finished fade can no longer lose a reveal.
     void fadeOutAndClose(std::function<void()> after = {}) {
         if (mode_ == Mode::Widget) {
             if (widget_) widget_->fadeOutAndClose(std::move(after));
@@ -107,14 +128,27 @@ public:
             if (after) after();
             return;
         }
-        {
-            std::lock_guard<std::mutex> lk(cbMutex_);
-            after_ = std::move(after);
-        }
-        if (closeRequested_.exchange(true)) return;   // already fading
-        // The thread notices the flag within one 16 ms tick, fades for
-        // 200 ms, destroys the window, posts the callback to the UI
-        // thread and exits. The dtor joins it if the process is exiting.
+        closeRequested_.store(true);   // idempotent: the thread fades once
+        if (!after) return;            // nothing to deliver (safety-net call)
+        runAfterFadeGone_(std::move(after));
+    }
+
+private:
+    // UI thread only. Delivers `after` on the UI thread as soon as the
+    // splash window is gone (fadeDone_), or after a 1.5 s cap — a wedged
+    // fade must never hold the main window hostage.
+    void runAfterFadeGone_(std::function<void()> after) {
+        auto* poll = new QTimer(qApp);
+        const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + 1500;
+        QObject::connect(poll, &QTimer::timeout, qApp,
+            [this, poll, after = std::move(after), deadlineMs]() mutable {
+                if (!fadeDone_.load(std::memory_order_acquire) &&
+                    QDateTime::currentMSecsSinceEpoch() < deadlineMs)
+                    return;
+                poll->deleteLater();
+                if (after) after();
+            });
+        poll->start(16);
     }
 
 private:
@@ -314,20 +348,16 @@ private:
         if (memDc)    DeleteDC(memDc);
         if (screenDc) ReleaseDC(nullptr, screenDc);
 
-        // Callback — back on the UI thread, after the splash is gone.
-        std::function<void()> cb;
-        {
-            std::lock_guard<std::mutex> lk(cbMutex_);
-            cb = std::move(after_);
-            after_ = nullptr;
-        }
-        if (cb && QCoreApplication::instance())
-            QMetaObject::invokeMethod(QCoreApplication::instance(),
-                                      std::move(cb), Qt::QueuedConnection);
+        // v1.7.25: no callback hand-off here anymore — the UI thread's
+        // fadeOutAndClose() poller watches fadeDone_ and delivers the
+        // callback itself. This thread only signals that it is done.
+        fadeDone_.store(true, std::memory_order_release);
     }
 
     void failAndExit() {
         failed_.store(true);
+        // v1.7.25: every exit path must release the UI thread's poller.
+        fadeDone_.store(true, std::memory_order_release);
         stateCv_.notify_all();
     }
 
@@ -358,8 +388,10 @@ private:
     std::atomic<bool>       shown_{false};
     std::atomic<bool>       failed_{false};
     std::atomic<bool>       closeRequested_{false};
-    std::mutex              cbMutex_;
-    std::function<void()>   after_;
+    // v1.7.25: the fade-completion signal the UI thread's poller waits
+    // on (replaces the old after_ mailbox the thread consumed once —
+    // the mechanism that could orphan the main window's show()).
+    std::atomic<bool>       fadeDone_{false};
 };
 
 } // namespace DocuSearch

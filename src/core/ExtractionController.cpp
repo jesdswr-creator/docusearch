@@ -77,10 +77,7 @@ ExtractionController::ExtractionController(QObject* parent)
 
             if (result.needsOcr && extractedText.isEmpty()) {
                 if (raw) {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
+                    execFileStatusUpdate(raw, item.fileId, "needs_ocr");
                 }
                 ++state->done;
                 ok = false;
@@ -120,10 +117,7 @@ ExtractionController::ExtractionController(QObject* parent)
                     sqlite3_finalize(upd);
                 }
 
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='content_done', ocr_status='not_needed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
+                execFileContentDone(raw, item.fileId);
 
                 sqlite3_stmt* del = nullptr;
                 sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
@@ -160,10 +154,7 @@ ExtractionController::ExtractionController(QObject* parent)
 
                 ++state->done;
             } else if (raw) {
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
+                execFileStatusUpdate(raw, item.fileId, "failed");
                 ++state->failed;
             } else {
                 ++state->failed;
@@ -487,20 +478,14 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
 
         if (!QFileInfo::exists(item.path)) {
             if (raw) {
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                        .arg(item.fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
+                execFileStatusUpdate(raw, item.fileId, "failed");
             }
             ++state->failed;
         } else {
             // Skip files that are too large (protects low-end systems).
             if (fi.size() > Constants::kMaxFilesizeToExtract) {
                 if (raw) {
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='skipped' WHERE id=%1;")
-                            .arg(item.fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
+                    execFileStatusUpdate(raw, item.fileId, "skipped");
                 }
                 ++state->failed;
             } else {
@@ -527,10 +512,7 @@ void ExtractionController::startSessionInternal(QList<ExtractionTodo> todo,
                         "No worker function wired — extraction pipeline "
                         "was never connected. Marking file failed.");
                     if (raw) {
-                        sqlite3_exec(raw,
-                            QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                                .arg(item.fileId).toUtf8().constData(),
-                            nullptr, nullptr, nullptr);
+                        execFileStatusUpdate(raw, item.fileId, "failed");
                     }
                     ++state->failed;
                     ++state->idx;
@@ -635,11 +617,7 @@ void ExtractionController::noteOcrResult(qint64 fileId, const QString& text, boo
             sqlite3_step(upd);
             sqlite3_finalize(upd);
         }
-        sqlite3_exec(raw,
-            QString("UPDATE Files SET indexing_status='content_done', "
-                    "ocr_status='not_needed' WHERE id=%1;")
-                .arg(fileId).toUtf8().constData(),
-            nullptr, nullptr, nullptr);
+        execFileContentDone(raw, fileId);
 
         sqlite3_stmt* del = nullptr;
         sqlite3_prepare_v2(raw, "DELETE FROM SearchIndex WHERE file_id=?1;",
@@ -688,10 +666,7 @@ void ExtractionController::noteOcrResult(qint64 fileId, const QString& text, boo
     } else {
         // OCR failed (no language packs, unreadable image...). 'failed'
         // is honest; the next content change re-queues the file.
-        sqlite3_exec(raw,
-            QString("UPDATE Files SET indexing_status='failed' WHERE id=%1;")
-                .arg(fileId).toUtf8().constData(),
-            nullptr, nullptr, nullptr);
+        execFileStatusUpdate(raw, fileId, "failed");
     }
 
     emit statsDirty();  // badge climbs while OCR runs (same as text path)
@@ -734,6 +709,37 @@ bool ExtractionController::ocrWorkOutstanding() const
 // ============================================================
 // Todo gathering (pure SQL — unit-testable)
 // ============================================================
+
+// ── v1.7.25 SQL hygiene: prepared-statement status setters ─────────
+// One prepared statement per call — the per-file accounting runs a few
+// dozen times per session on a worker connection, so caching is not
+// worth the state; correctness (bound parameter, no interpolation) is.
+void ExtractionController::execFileStatusUpdate(sqlite3* raw, qint64 fileId,
+                                                const char* status) {
+    if (!raw) return;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(raw,
+            "UPDATE Files SET indexing_status=?1 WHERE id=?2;",
+            -1, &st, nullptr) != SQLITE_OK)
+        return;
+    sqlite3_bind_text(st, 1, status, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(st, 2, fileId);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+}
+
+void ExtractionController::execFileContentDone(sqlite3* raw, qint64 fileId) {
+    if (!raw) return;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(raw,
+            "UPDATE Files SET indexing_status='content_done', "
+            "ocr_status='not_needed' WHERE id=?1;",
+            -1, &st, nullptr) != SQLITE_OK)
+        return;
+    sqlite3_bind_int64(st, 1, fileId);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+}
 
 ExtractionController::TodoLists
 ExtractionController::gatherTodoItems(sqlite3* raw)
@@ -899,10 +905,7 @@ bool ExtractionController::extractAndIndexFile(const QString& path)
                     sqlite3_finalize(upd);
 
                     // Update Files status.
-                    sqlite3_exec(raw,
-                        QString("UPDATE Files SET indexing_status='content_done' WHERE id=%1;")
-                            .arg(fileId).toUtf8().constData(),
-                        nullptr, nullptr, nullptr);
+                    execFileStatusUpdate(raw, fileId, "content_done");
 
                     // Update SearchIndex (delete + insert = clean FTS row).
                     sqlite3_stmt* del = nullptr;
@@ -929,10 +932,7 @@ bool ExtractionController::extractAndIndexFile(const QString& path)
                 }
             } else if (result.needsOcr) {
                 // Scanned PDF / image — mark as needs_ocr.
-                sqlite3_exec(raw,
-                    QString("UPDATE Files SET indexing_status='needs_ocr' WHERE id=%1;")
-                        .arg(fileId).toUtf8().constData(),
-                    nullptr, nullptr, nullptr);
+                execFileStatusUpdate(raw, fileId, "needs_ocr");
             }
 
             // v1.7.5: the file's content just changed — any stored AI

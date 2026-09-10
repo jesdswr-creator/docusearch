@@ -188,6 +188,23 @@ public:
     // selection SQL is testable without a session.
     static TodoLists gatherTodoItems(sqlite3* raw);
 
+    // ── v1.7.25 SQL hygiene: prepared-statement file-status setters ──
+    // The TEN per-file status writes used to be composed with
+    // QString("UPDATE ... WHERE id=%1").arg(fileId) and passed to
+    // sqlite3_exec — the exact pattern the 2026-09 audit banned (the
+    // v1.7.24 fix caught the two in MainWindow but missed these, which
+    // moved here in v1.7.21). fileId is an internal integer, so this
+    // was never injectable — the ban is about ONE statement shape:
+    // every dynamic value travels in a bound parameter. Static so
+    // tst_Wiring can exercise them against a temp database.
+    // Sets Files.indexing_status = status ('needs_ocr', 'failed',
+    // 'skipped', ...).
+    static void execFileStatusUpdate(sqlite3* raw, qint64 fileId,
+                                     const char* status);
+    // The two-column done write: indexing_status='content_done' AND
+    // ocr_status='not_needed' (fully literal SET, only the id bound).
+    static void execFileContentDone(sqlite3* raw, qint64 fileId);
+
 signals:
     // statusBar()->showMessage(msg, timeoutMs)
     void statusMessage(const QString& msg, int timeoutMs = 0);
