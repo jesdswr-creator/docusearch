@@ -102,7 +102,7 @@ private:
     float       m_additionsThreshold = 0.60f;
     int         m_topK            = 20;
     QString     m_typeFilter;               // e.g., "pdf" — filters semantic-only results
-    int         lastSemanticBudget_ = 0;    // what the throttle actually used
+    int         lastSemanticBudget_ = 0;    // chunk-row scan budget actually used (v1.7.26)
 };
 
 } // namespace DocuSearch

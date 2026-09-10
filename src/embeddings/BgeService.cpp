@@ -135,7 +135,7 @@ std::vector<SemanticHit> BgeService::searchChunksFiltered(
 }
 
 std::vector<SemanticHit> BgeService::searchChunksAll(
-    const QString& query, int topK, float threshold,
+    const QString& query, int topK, float threshold, int maxRows,
     const std::atomic<bool>* cancel) {
     if (!m_initialized) return {};
     try {
@@ -150,10 +150,23 @@ std::vector<SemanticHit> BgeService::searchChunksAll(
 
         // Precision path: best chunk per file. (v1.7.19: the scan runs a
         // single rowid cursor with the dot-only kernel — see
-        // BgeEmbeddingDb::searchSimilarChunksAll — and honors `cancel`.)
-        auto chunkHits = m_database->searchSimilarChunksAll(queryEmbed, topK, threshold, cancel);
+        // BgeEmbeddingDb::searchSimilarChunksAll — and honors `cancel`.
+        // v1.7.26: the scan is bounded by `maxRows`.)
+        auto chunkHits = m_database->searchSimilarChunksAll(queryEmbed, topK,
+                                                            threshold, maxRows,
+                                                            cancel);
         if (cancel && cancel->load()) return {};
         const float bestChunk = m_database->lastBestSimilarity();
+
+        // v1.7.26: skip the full-document pass when the chunk scan already
+        // delivered enough precise hits. The document pass exists to keep
+        // pre-chunking indexes searchable; running it after a saturated
+        // chunk scan doubled the query cost for no visible gain (its
+        // extras were trimmed away by the topK cut anyway).
+        if (static_cast<int>(chunkHits.size()) >= topK) {
+            m_database->setLastBestSimilarity(bestChunk);
+            return chunkHits;
+        }
 
         // Full-document path. CRITICAL for indexes built before chunked
         // embedding existed: those files have NO EmbeddingChunks rows, so
@@ -169,8 +182,9 @@ std::vector<SemanticHit> BgeService::searchChunksAll(
         if (docHits.empty())   return chunkHits;  // chunks only
 
         // Merge per file — the better of (best chunk, full document).
-        // Document-level hits carry path/filename metadata; chunk hits do
-        // not, so keep whichever entry is richer when upgrading similarity.
+        // Both hit kinds carry path/filename; keep whichever entry is
+        // richer when upgrading similarity (the doc hit is preferred for
+        // metadata on a tie, but the chunk score is the precise one).
         std::map<int, SemanticHit> merged;
         for (auto& h : docHits)   merged[h.fileId] = std::move(h);
         for (auto& h : chunkHits) {

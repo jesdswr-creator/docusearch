@@ -31,19 +31,22 @@ public:
     QStringList recentSearches(int max = 20) const;
     void        recordSearch(const QString& q);
 
+    // Split a raw query into filename LIKE words:
+    //   - strips field:value filters
+    //   - replaces '+' with space (A+B == A B)
+    //   - tokenizes respecting quoted phrases
+    //   - drops FTS5 boolean operators (AND/OR/NOT)
+    //   - drops common English stop words
+    // Static + public so the keyword-coverage gate (MainWindow) can reuse
+    // the EXACT same word list the keyword search itself used.
+    static QStringList splitSearchWords(const QString& raw);
+
 signals:
     void resultsReady(const QList<SearchHit>& hits);
 
 private:
     Database&       db_;
     FileRepository& repo_;
-
-    // Split a raw query into filename LIKE words:
-    //   - strips field:value filters
-    //   - replaces '+' with space (A+B == A B)
-    //   - tokenizes respecting quoted phrases
-    //   - drops FTS5 boolean operators (AND/OR/NOT)
-    QStringList splitSearchWords(const QString& raw);
 };
 
 } // namespace DocuSearch
