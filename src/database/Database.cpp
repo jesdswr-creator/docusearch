@@ -78,7 +78,11 @@ static bool isNetworkPath(const QString& path) {
 
 bool Database::open(const QString& path, QString* err) {
     QMutexLocker lock(&dbMutex_);
-    close();
+    // Call the UNLOCKED core directly. The public close() would try to
+    // lock dbMutex_ (a NON-recursive QMutex) a second time on this same
+    // thread and deadlock — open() is the one caller that already holds
+    // the lock, so it must close through closeLocked() instead.
+    closeLocked();
     path_ = path;
     const int rc = sqlite3_open_v2(
         path.toUtf8().constData(), &db_,
@@ -178,6 +182,10 @@ bool Database::open(const QString& path, QString* err) {
 
 void Database::close() {
     QMutexLocker lock(&dbMutex_);
+    closeLocked();
+}
+
+void Database::closeLocked() {
     if (!db_) return;
     // A single ROLLBACK unwinds the whole savepoint stack; the old
     // per-depth loop re-issued ROLLBACK against no active transaction
