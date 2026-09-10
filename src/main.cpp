@@ -165,7 +165,11 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<DocuSearch::MainWindow> w;
     QElapsedTimer splashClock;
     splashClock.start();
-    constexpr int kMinSplashMs = 1000;
+    // v1.7.26: splash floor lowered 1000 ms -> 300 ms. The full second
+    // minimum kept the splash on screen long after the window was ready
+    // to show; a short floor is enough to avoid a one-frame flash while
+    // still letting the fade finish cleanly on fast machines.
+    constexpr int kMinSplashMs = 300;
 
     bool windowShown = false;
     auto showWindowAndDropSplash = [&]() {

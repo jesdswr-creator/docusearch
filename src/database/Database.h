@@ -54,7 +54,15 @@ private:
     sqlite3* db_  = nullptr;
     QString  path_;
     int      txnDepth_ = 0;
-    
+
+    // Close WITHOUT locking. open() and close() both already hold
+    // dbMutex_ when they call this — open() must NOT re-enter the
+    // public close() (which locks the same non-recursive mutex again
+    // on the same thread), or the background database open deadlocks
+    // forever: the splash fades, the window is never constructed, and
+    // the app keeps running in Task Manager with nothing on screen.
+    void closeLocked();
+
     QString getSavepointName(int depth) const;
 };
 
