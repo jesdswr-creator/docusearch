@@ -104,7 +104,13 @@ void GracefulDegradation::applyDegradation(DegradationLevel level) {
             if (ocrPool_ && ocrPausedByPressure_) {
                 ocrPool_->resume();
             }
-            if (embeddingCtrl_) embeddingCtrl_->setPaused(false);
+            // v1.7.26: leave pressure mode only at full recovery —
+            // Warning keeps the throttle so a machine hovering around
+            // 30-50% free does not flap between batch sizes.
+            if (embeddingCtrl_) {
+                embeddingCtrl_->setPaused(false);
+                embeddingCtrl_->setPressureMode(false);
+            }
             if (indexingPausedByPressure_) {
                 indexingPausedByPressure_ = false;
                 emit indexingResumed();
@@ -133,10 +139,20 @@ void GracefulDegradation::applyDegradation(DegradationLevel level) {
                 ocrPausedByPressure_ = true;
                 emit ocrPaused();
             }
-            // Semantic search stays on. Embedding backfill pauses so
-            // ONNX doesn't fight the user for RAM.
-            if (embeddingCtrl_) embeddingCtrl_->setPaused(true);
-            DS_WARN("Degradation", "CRITICAL: OCR paused, extraction slowed, embeddings paused");
+            // v1.7.26 THE MOTO FIX: embeddings THROTTLE instead of
+            // stopping. <25% free RAM is the steady state on a low-
+            // memory PC, so the old setPaused(true) here kept the AI
+            // index permanently dark ("RAM critical and all stop").
+            // Pressure mode halves the batch text budget and stretches
+            // the chain delay so ONNX stops fighting the user for RAM
+            // while the index KEEPS BUILDING. Search stays instant
+            // (dedicated pool) and the chunk scan budget halves itself
+            // in HybridSearchEngine under the same condition.
+            if (embeddingCtrl_) {
+                embeddingCtrl_->setPaused(false);
+                embeddingCtrl_->setPressureMode(true);
+            }
+            DS_WARN("Degradation", "CRITICAL: OCR paused, extraction slowed, embeddings throttled");
             break;
 
         case DegradationLevel::Emergency:
@@ -150,8 +166,13 @@ void GracefulDegradation::applyDegradation(DegradationLevel level) {
                 ocrPausedByPressure_ = true;
                 emit ocrPaused();
             }
+            // EMERGENCY (<10% free) is the only level that still stops
+            // the embedding pipeline — below this line the OS itself is
+            // about to thrash, and protecting the machine protects the
+            // user experience more than a few more embedded documents.
+            // Search stays live (throttled by HybridSearchEngine).
             if (embeddingCtrl_) embeddingCtrl_->setPaused(true);
-            DS_WARN("Degradation", "EMERGENCY: extraction + OCR paused (search still live)");
+            DS_WARN("Degradation", "EMERGENCY: extraction + OCR + embeddings paused (search still live)");
             break;
     }
 }

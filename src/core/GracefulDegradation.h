@@ -4,8 +4,12 @@
 // GracefulDegradation.h - Slow down under memory pressure
 // ============================================================
 // Semantic search is NEVER disabled — only throttled (smaller
-// batches, serial queries). OCR / extraction pause only at
-// Critical / Emergency so the UI and keyword search stay alive.
+// batches, serial queries). v1.7.26 (the "RAM critical must not
+// stop the moto" fix): at Critical, embedding backfill THROTTLES
+// (smaller text budgets, 250 ms chain delay) instead of pausing —
+// on a low-memory PC <25% free is the normal state and the old
+// pause-at-Critical behaviour kept the AI index permanently dark.
+// Only EMERGENCY (<10% free) still pauses extraction/OCR/embeddings.
 // ============================================================
 
 #include <QObject>

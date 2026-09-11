@@ -579,6 +579,84 @@ private slots:
     }
 
     // --------------------------------------------------------
+    // 8b. BACKFILL: the batch text budget (v1.7.26 low-RAM fix).
+    // Six ~3 MB documents: normal mode loads all of them in ONE batch
+    // (18 MB < 24 MB budget); pressure mode stops early at the 8 MB
+    // budget and the rest ride the next chained batch — no starvation,
+    // the drain still completes. (Fresh database per test — the fake
+    // stores embeddings, so the two modes must not share state.)
+    // --------------------------------------------------------
+    void backfillNormalBatchUnderBudgetLoadsAll() {
+        for (int i = 0; i < 6; ++i) {
+            const qint64 id = seedFile(
+                QString("big%1.pdf").arg(i), "pdf",
+                IS::kContentDone, OS::kNotNeeded);
+            seedDocumentText(id, QString(3 * 1024 * 1024, QChar('a')));
+        }
+
+        FakeEmbeddingService fake;
+        fake.db = db_.get();
+
+        EmbeddingController em;
+        em.setDatabase(db_.get());
+        em.attachService(&fake);
+        QVERIFY(em.verifyWiring());
+
+        em.ensureBackfill();
+        QCOMPARE(fake.batches.size(), 1);
+        QCOMPARE(fake.batches.at(0).fileIds.size(), 6);
+        qint64 batchBytes = 0;
+        for (const QString& t : fake.batches.at(0).texts)
+            batchBytes += t.toUtf8().size();
+        QVERIFY(batchBytes <= EmbeddingController::kBatchTextBytesNormal);
+    }
+
+    void backfillPressureBudgetBoundsBatchAndDrains() {
+        for (int i = 0; i < 6; ++i) {
+            const qint64 id = seedFile(
+                QString("prs%1.pdf").arg(i), "pdf",
+                IS::kContentDone, OS::kNotNeeded);
+            seedDocumentText(id, QString(3 * 1024 * 1024, QChar('a')));
+        }
+
+        FakeEmbeddingService fake;   // stores embeddings per batch
+        fake.db = db_.get();
+
+        EmbeddingController em;
+        em.setDatabase(db_.get());
+        em.attachService(&fake);
+        em.setPressureMode(true);
+
+        em.ensureBackfill();
+        QCOMPARE(fake.batches.size(), 1);
+        const int firstBatch = fake.batches.at(0).fileIds.size();
+        QVERIFY2(firstBatch > 0 && firstBatch < 6,
+                 "pressure budget must bound the batch below all six");
+        qint64 batchBytes = 0;
+        for (const QString& t : fake.batches.at(0).texts)
+            batchBytes += t.toUtf8().size();
+        // The budget is checked AFTER adding a file, so the batch may
+        // overshoot by at most one document (3 MB ASCII = 3 MB UTF-8).
+        QVERIFY2(batchBytes <=
+                     EmbeddingController::kBatchTextBytesPressure
+                     + 3 * 1024 * 1024,
+                 "batch must stay within budget + one document");
+        QCOMPARE(em.isBackfillRunning(), true);
+
+        // The fake stores embeddings for the batch, so the remaining
+        // documents arrive with the next chained batch (250 ms pressure
+        // delay) and the drain completes — throttled, never stalled.
+        em.noteEmbeddingFinished(firstBatch, 0);
+        QTest::qWait(600);
+        QVERIFY(fake.batches.size() >= 2);
+        em.noteEmbeddingFinished(
+            fake.batches.last().fileIds.size(), 0);
+        QTest::qWait(600);
+        QCOMPARE(em.countMissingEmbeddings(), (qint64)0);
+        QCOMPARE(em.isBackfillRunning(), false);
+    }
+
+    // --------------------------------------------------------
     // 9. BACKFILL: the all-fail deadlock guard stops the chain
     // --------------------------------------------------------
     void backfillDeadlockGuardStopsAfterTwoAllFailBatches() {

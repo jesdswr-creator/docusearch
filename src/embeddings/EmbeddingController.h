@@ -60,8 +60,34 @@ public:
 
     // Memory-pressure pause: skip new backfill batches. In-flight batch
     // still finishes. Semantic SEARCH is unaffected (different pool).
+    // v1.7.26: only used at EMERGENCY (<10% free RAM) — see
+    // GracefulDegradation; Critical now throttles instead of pausing.
     void setPaused(bool paused)                 { m_paused.store(paused); }
     bool isPaused() const                       { return m_paused.load(); }
+
+    // v1.7.26 LOW-RAM THROTTLE (the "RAM critical must not stop the
+    // moto" fix): pressure mode keeps the AI index BUILDING on
+    // low-memory machines instead of stopping it. Batches get a much
+    // smaller text budget and the chain delay stretches 25 ms -> 250 ms,
+    // so ONNX stops fighting the user for RAM without the pipeline
+    // going dark. Set by GracefulDegradation at Critical, cleared at
+    // Healthy. Search is unaffected (separate pool).
+    void setPressureMode(bool on)               { m_pressureMode.store(on); }
+    bool isPressureMode() const                 { return m_pressureMode.load(); }
+
+    // v1.7.26: per-chain-step text budget (UTF-8 bytes) for the batch
+    // selection queries. ensureBackfill runs on the UI thread — the old
+    // unbounded "LIMIT 500 texts" allocated tens of MB of QStrings
+    // there every chain step, a visible stutter on 4 GB machines and a
+    // swap-thrash contributor when RAM was already tight. The budget
+    // bounds that burst; files beyond it are simply picked up by the
+    // next chained batch (ORDER BY file_id guarantees no starvation).
+    static constexpr int kBatchTextBytesNormal   = 24 * 1024 * 1024;
+    static constexpr int kBatchTextBytesPressure =  8 * 1024 * 1024;
+    // Per-document SUBSTR cap (characters) for the selection queries —
+    // bounds one pathological row (multi-MB extracted text) without
+    // touching real documents (2M chars is roughly 3000+ pages).
+    static constexpr int kMaxDocTextChars        =  2 * 1024 * 1024;
 
     // Runtime audit: pool eagerly constructed and configured.
     bool verifyWiring() const;
@@ -128,7 +154,8 @@ private:
     bool m_rebuildPurging       = false;  // rebuild purge chain in flight
     int  m_rebuildRetries       = 0;      // consecutive purge SQL failures
     bool m_aiEnabled            = false;  // AI switch state (chip only)
-    std::atomic<bool> m_paused{false};    // memory-pressure pause
+    std::atomic<bool> m_paused{false};    // memory-pressure pause (Emergency)
+    std::atomic<bool> m_pressureMode{false}; // v1.7.26 Critical throttle
 };
 
 } // namespace DocuSearch

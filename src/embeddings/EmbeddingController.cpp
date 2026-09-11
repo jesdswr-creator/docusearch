@@ -145,10 +145,19 @@ void EmbeddingController::ensureBackfill()
     // garbage vectors written by the broken hash-fallback tokenizer
     // builds get replaced automatically, without the user ever finding
     // the "Rebuild AI Embeddings" button.
+    // v1.7.26: ensureBackfill runs on the UI thread, so BOTH selection
+    // queries (a) cap a single pathological text with SUBSTR and
+    // (b) early-stop once the batch text budget is reached. The budget
+    // is the pressure-aware byte cap that keeps this thread burst small
+    // on low-RAM machines; files beyond it arrive with the next chained
+    // batch (ORDER BY file_id — no starvation).
+    const qint64 batchBudgetBytes = m_pressureMode.load()
+        ? kBatchTextBytesPressure : kBatchTextBytesNormal;
+    qint64 batchBytes = 0;
     {
         sqlite3_stmt* sel = nullptr;
         if (sqlite3_prepare_v2(raw,
-            "SELECT dt.file_id, dt.extracted_text "
+            "SELECT dt.file_id, SUBSTR(dt.extracted_text, 1, ?2) "
             "FROM DocumentText dt "
             "LEFT JOIN BgeEmbeddings e ON e.file_id = dt.file_id "
             "WHERE (e.file_id IS NULL "
@@ -157,15 +166,18 @@ void EmbeddingController::ensureBackfill()
             "ORDER BY dt.file_id LIMIT 500;",
             -1, &sel, nullptr) == SQLITE_OK) {
             sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
+            sqlite3_bind_int(sel, 2, kMaxDocTextChars);
         }
         if (sel) {
             while (sqlite3_step(sel) == SQLITE_ROW) {
                 const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
                 const unsigned char* c = sqlite3_column_text(sel, 1);
                 if (c && c[0]) {
+                    batchBytes += sqlite3_column_bytes(sel, 1);
                     fileIds.append(fileId);
                     texts.append(QString::fromUtf8(
                         reinterpret_cast<const char*>(c)));
+                    if (batchBytes >= batchBudgetBytes) break;
                 }
             }
             sqlite3_finalize(sel);
@@ -179,9 +191,10 @@ void EmbeddingController::ensureBackfill()
     // the chunks are regenerated.
     if (fileIds.isEmpty()) {
         chunkMode = true;
+        batchBytes = 0;
         sqlite3_stmt* sel = nullptr;
         if (sqlite3_prepare_v2(raw,
-            "SELECT dt.file_id, dt.extracted_text "
+            "SELECT dt.file_id, SUBSTR(dt.extracted_text, 1, ?3) "
             "FROM DocumentText dt "
             "WHERE EXISTS (SELECT 1 FROM BgeEmbeddings b "
             "              WHERE b.file_id = dt.file_id "
@@ -194,15 +207,18 @@ void EmbeddingController::ensureBackfill()
             -1, &sel, nullptr) == SQLITE_OK) {
             sqlite3_bind_int(sel, 1, BgeEmbeddingDb::kAlgoVersion);
             sqlite3_bind_int(sel, 2, BgeEmbeddingDb::kAlgoVersion);
+            sqlite3_bind_int(sel, 3, kMaxDocTextChars);
         }
         if (sel) {
             while (sqlite3_step(sel) == SQLITE_ROW) {
                 const int fileId = static_cast<int>(sqlite3_column_int64(sel, 0));
                 const unsigned char* c = sqlite3_column_text(sel, 1);
                 if (c && c[0]) {
+                    batchBytes += sqlite3_column_bytes(sel, 1);
                     fileIds.append(fileId);
                     texts.append(QString::fromUtf8(
                         reinterpret_cast<const char*>(c)));
+                    if (batchBytes >= batchBudgetBytes) break;
                 }
             }
             sqlite3_finalize(sel);
@@ -274,11 +290,14 @@ void EmbeddingController::noteEmbeddingFinished(int success, int fail)
     // drain whenever the AI toggle was off, freezing the queue forever —
     // embeddings are cheap, async, and useful the moment AI is re-enabled.
     if (remaining > 0 && m_service && m_service->isReady()) {
-        // 25 ms gap: just enough for the event loop to breathe between
-        // batches. The old 250 ms delay added up over dozens of batches
-        // and stretched the backlog out for no benefit — inference runs
-        // on the worker pool either way, so the UI stays responsive.
-        QTimer::singleShot(25, this, [this]() { ensureBackfill(); });
+        // v1.7.26: pressure mode stretches the chain delay 25 ms ->
+        // 250 ms so ONNX inference on the embedding pool interleaves
+        // politely with everything else on a low-RAM machine instead of
+        // running back-to-back. The old 250 ms flat delay stretched the
+        // whole backlog for no benefit on healthy machines — keep 25 ms
+        // there. Either way inference is off the UI thread.
+        const int chainDelayMs = m_pressureMode.load() ? 250 : 25;
+        QTimer::singleShot(chainDelayMs, this, [this]() { ensureBackfill(); });
     }
 }
 

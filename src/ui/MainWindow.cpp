@@ -159,6 +159,10 @@ inline QPixmap appLogoPixmap(qreal dpr = 1.0) {
 // query keywords actually appear. A file with no indexed text matches 0
 // keywords (and is therefore dropped) — honest, since it can't keyword-
 // match anyway. Returns the count of `keywords` present.
+// v1.7.26 RAM FIX: the text is fetched through SUBSTR(...,1,262144) —
+// this runs on the UI thread once per AI-only hit, and an unbounded
+// read let one multi-MB document stall the reveal. 256 KB covers the
+// gate's purpose (topical keyword presence) at a bounded cost.
 static int keywordMatchCount(sqlite3* raw, qint64 fileId,
                              const QStringList& keywords) {
     if (!raw || keywords.isEmpty()) return 0;
@@ -166,7 +170,7 @@ static int keywordMatchCount(sqlite3* raw, qint64 fileId,
     QString hay;
     sqlite3_stmt* s = nullptr;
     const char* sql =
-        "SELECT f.filename, COALESCE(d.extracted_text, '') "
+        "SELECT f.filename, COALESCE(SUBSTR(d.extracted_text, 1, 262144), '') "
         "FROM Files f LEFT JOIN DocumentText d ON d.file_id = f.id "
         "WHERE f.id = ?1;";
     if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
@@ -2516,7 +2520,8 @@ void MainWindow::onMemoryPressureCritical() {
     if (memoryStatusLbl_)
         memoryStatusLbl_->setText(QStringLiteral("RAM: Critical"));
     statusBar()->showMessage(
-        QStringLiteral("Low memory — OCR paused. Keyword + AI search still work."), 6000);
+        QStringLiteral("Low memory — OCR paused, AI indexing slowed. "
+                       "Search stays instant."), 6000);
 }
 
 void MainWindow::onMemoryPressureRecovered() {
