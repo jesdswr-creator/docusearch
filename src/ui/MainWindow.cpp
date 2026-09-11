@@ -151,6 +151,52 @@ inline QPixmap appLogoPixmap(qreal dpr = 1.0) {
     return pm;
 }
 
+// v1.7.26: keyword-coverage gate for AI-added documents. The user asked
+// that semantic search only ADD documents that match ALL (or at least
+// ~70%) of the typed keywords — a document matching 1 of 5 keywords is
+// noise. Semantic-only rows (keywordScore == 0) are checked here against
+// the file's filename + extracted text and dropped when too few of the
+// query keywords actually appear. A file with no indexed text matches 0
+// keywords (and is therefore dropped) — honest, since it can't keyword-
+// match anyway. Returns the count of `keywords` present.
+static int keywordMatchCount(sqlite3* raw, qint64 fileId,
+                             const QStringList& keywords) {
+    if (!raw || keywords.isEmpty()) return 0;
+
+    QString hay;
+    sqlite3_stmt* s = nullptr;
+    const char* sql =
+        "SELECT f.filename, COALESCE(d.extracted_text, '') "
+        "FROM Files f LEFT JOIN DocumentText d ON d.file_id = f.id "
+        "WHERE f.id = ?1;";
+    if (sqlite3_prepare_v2(raw, sql, -1, &s, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(s, 1, fileId);
+        if (sqlite3_step(s) == SQLITE_ROW) {
+            const unsigned char* fn = sqlite3_column_text(s, 0);
+            const unsigned char* tx = sqlite3_column_text(s, 1);
+            if (fn) hay += QString::fromUtf8(
+                               reinterpret_cast<const char*>(fn));
+            hay += QLatin1Char(' ');
+            if (tx) hay += QString::fromUtf8(
+                               reinterpret_cast<const char*>(tx));
+        }
+        sqlite3_finalize(s);
+    }
+
+    if (hay.trimmed().isEmpty()) return 0;   // no text to verify → 0 matches
+
+    // Case-folded substring match — language-agnostic (works for CJK and
+    // other scripts where `\b` word boundaries do not exist) and consistent
+    // with the FTS5 trigram tokenizer, which also matches substrings.
+    const QString haystack = hay.toLower();
+    int matched = 0;
+    for (const QString& kw : keywords) {
+        const QString k = kw.trimmed().toLower();
+        if (!k.isEmpty() && haystack.contains(k)) ++matched;
+    }
+    return matched;
+}
+
 // ============================================================
 // Constructor / destructor
 // ============================================================
@@ -1986,16 +2032,38 @@ void MainWindow::applySemanticResults(const QString& query,
                                       const QList<SearchHit>& keywordHits,
                                       std::vector<HybridResult> hybridResults,
                                       qint64 totalMs) {
-    Q_UNUSED(query);
     // v1.7.18: if the user switched the pane to the duplicates view while
     // the semantic scan was in flight, never stomp it with a late search
     // result. (Stage 1 of onSearch clears dupKeys_; only a duplicates run
     // started AFTER that can have re-populated it.)
     if (!dupKeys_.isEmpty()) return;
     lastSearchLatencyMs_ = totalMs;
+
+    // v1.7.26: keyword-coverage gate for AI-added documents. Semantic-only
+    // rows (keywordScore == 0, semanticScore > 0) are kept only when the
+    // file's filename/extracted text actually contains >= 70% of the
+    // query's meaningful keywords — the user's "don't bring a single
+    // keyword match out of 4-5 keywords". Keyword results (strict-AND
+    // matches) always pass; pure-filter queries (no keywords) skip the
+    // gate entirely.
+    const QStringList keywords = SearchEngine::splitSearchWords(query);
+    std::vector<HybridResult> kept;
+    kept.reserve(hybridResults.size());
+    for (auto& hr : hybridResults) {
+        if (!keywords.isEmpty()
+            && hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) {
+            // ceil(0.70 * N) in integer math: 1→1, 2→2, 3→3, 4→3, 5→4, …
+            const int required = (keywords.size() * 7 + 9) / 10;
+            const int matched = keywordMatchCount(
+                db_ ? db_->raw() : nullptr, hr.fileId, keywords);
+            if (matched < required) continue;   // too few keywords → drop
+        }
+        kept.push_back(std::move(hr));
+    }
+
     QList<SearchHit> merged;
-    merged.reserve(static_cast<int>(hybridResults.size()));
-    for (const auto& hr : hybridResults) {
+    merged.reserve(static_cast<int>(kept.size()));
+    for (const auto& hr : kept) {
         SearchHit h;
         h.fileId       = hr.fileId;
         h.filename     = hr.filename;
@@ -2075,7 +2143,7 @@ void MainWindow::applySemanticResults(const QString& query,
     // AI-only additions separately.
     int aiContribCount = 0;
     int aiOnlyCount = 0;
-    for (const auto& hr : hybridResults) {
+    for (const auto& hr : kept) {
         if (hr.semanticScore > 0.01f) ++aiContribCount;
         if (hr.semanticScore > 0.01f && hr.keywordScore < 0.01f) ++aiOnlyCount;
     }

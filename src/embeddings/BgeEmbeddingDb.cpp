@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cmath>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 
 namespace DocuSearch {
@@ -29,6 +30,42 @@ void normalizeInPlace(std::vector<float>& v) {
         for (float& x : v) x *= inv;
     }
 }
+
+// v1.7.26: bounded top-K collector (a min-heap by similarity). The old
+// document-level scan accumulated EVERY row above threshold into a
+// vector and sorted it — on a big library that meant tens of thousands
+// of SemanticHit allocations + two QString conversions per row + an
+// O(N log N) sort on every query. A fixed-size heap keeps memory and
+// sort cost at O(topK); the heap front is always the WORST of the kept
+// hits, so a better row evicts it.
+struct TopKHits {
+    std::vector<SemanticHit> heap;
+    int k;
+    explicit TopKHits(int k_) : k(std::max(1, k_)) {
+        heap.reserve(static_cast<size_t>(k));
+    }
+    void add(SemanticHit h) {
+        if (static_cast<int>(heap.size()) < k) {
+            heap.push_back(std::move(h));
+            std::push_heap(heap.begin(), heap.end(), worse);
+        } else if (!heap.empty() && h.similarity > heap.front().similarity) {
+            std::pop_heap(heap.begin(), heap.end(), worse);
+            heap.back() = std::move(h);
+            std::push_heap(heap.begin(), heap.end(), worse);
+        }
+    }
+    std::vector<SemanticHit> finish() {
+        std::sort(heap.begin(), heap.end(),
+            [](const SemanticHit& a, const SemanticHit& b) {
+                return a.similarity > b.similarity;
+            });
+        return std::move(heap);
+    }
+    // Min-heap comparator: `front` is the least-similar kept hit.
+    static bool worse(const SemanticHit& a, const SemanticHit& b) {
+        return a.similarity > b.similarity;
+    }
+};
 
 } // namespace
 
@@ -166,6 +203,8 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
     // Diagnostics: remember the best similarity even below threshold so the
     // UI can report how close the nearest document came.
     float bestSim = -1.0f;
+    // v1.7.26: bounded top-K collector — see TopKHits above.
+    TopKHits topk(topK);
     long long checkpoint = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         // v1.7.19: cooperative cancel — a superseded search must not pay
@@ -193,21 +232,13 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilar(
             hit.filePath  = path  ? QString::fromUtf8(path) : QString();
             hit.filename  = name  ? QString::fromUtf8(name) : QString();
             hit.similarity = sim;
-            results.push_back(hit);
+            topk.add(std::move(hit));
         }
     }
     sqlite3_finalize(stmt);
     m_lastBestSimilarity = bestSim;
 
-    // Sort by similarity descending, then trim to topK.
-    std::sort(results.begin(), results.end(),
-        [](const SemanticHit& a, const SemanticHit& b) {
-            return a.similarity > b.similarity;
-        });
-    if (static_cast<int>(results.size()) > topK) {
-        results.resize(topK);
-    }
-    return results;
+    return topk.finish();
 }
 
 std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
@@ -261,6 +292,8 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
     // scratch buffer reused across rows, cooperative cancel).
     std::vector<float> emb(EMBEDDING_DIM);
     const float* q = queryEmbedding.data();
+    // v1.7.26: bounded top-K collector (see TopKHits).
+    TopKHits topk(topK);
     long long checkpoint = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         if (++checkpoint % 4096 == 0 && cancel && cancel->load()) {
@@ -284,20 +317,12 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarFiltered(
             hit.filePath  = path  ? QString::fromUtf8(path) : QString();
             hit.filename  = name  ? QString::fromUtf8(name) : QString();
             hit.similarity = sim;
-            results.push_back(hit);
+            topk.add(std::move(hit));
         }
     }
     sqlite3_finalize(stmt);
 
-    // Sort by similarity descending, trim to topK.
-    std::sort(results.begin(), results.end(),
-        [](const SemanticHit& a, const SemanticHit& b) {
-            return a.similarity > b.similarity;
-        });
-    if (static_cast<int>(results.size()) > topK) {
-        results.resize(topK);
-    }
-    return results;
+    return topk.finish();
 }
 
 bool BgeEmbeddingDb::hasEmbedding(int fileId) {
@@ -543,11 +568,13 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
     const std::vector<float>& queryEmbedding,
     int topK,
     float threshold,
+    int maxRows,
     const std::atomic<bool>* cancel) {
 
     std::vector<SemanticHit> results;
     if (!m_db) return results;
     if (static_cast<int>(queryEmbedding.size()) != EMBEDDING_DIM) return results;
+    if (maxRows <= 0) maxRows = kDefaultScanBudget;
 
     // ── v1.7.19 REWRITE — this scan WAS the AI search bottleneck ──
     // The old version paginated with "LIMIT 500 OFFSET k": SQLite must
@@ -564,16 +591,23 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
     // is a B-tree seek + sequential read: the whole table is walked
     // exactly ONCE regardless of batch count (O(N), not O(N²)). Rows
     // stream through sqlite3_step — memory stays bounded (only the
-    // per-file best similarity + one path string per FILE are kept).
-    // Similarity is the dot-only kernel, the scratch buffer is reused,
-    // path strings convert once per file, and `cancel` aborts at each
-    // batch boundary so a superseded search stops scanning early.
-    std::map<int, float> bestPerFile;
-    std::map<int, std::pair<QString, QString>> pathPerFile;  // v1.7.4
+    // per-file best similarity + one path string per PASSING file are
+    // kept). Similarity is the dot-only kernel, the scratch buffer is
+    // reused, path strings convert once per file, and `cancel` aborts at
+    // each batch boundary so a superseded search stops scanning early.
+    //
+    // v1.7.26: O(1) hash maps replace the red-black std::map lookups,
+    // path/filename strings are converted ONLY for files that clear the
+    // similarity threshold (the old code allocated one QString pair per
+    // FILE on every query), and the scan stops after `maxRows` rows so a
+    // very large library can never again cost tens of seconds.
+    std::unordered_map<int, float> bestPerFile;
+    std::unordered_map<int, std::pair<QString, QString>> pathPerFile;
     m_lastBestSimilarity = -1.0f;
 
     const int BATCH = 4096;
     long long lastId = 0;  // chunk_id is AUTOINCREMENT — always > 0
+    long long scanned = 0;
 
     sqlite3_stmt* stmt = nullptr;
     // v1.7.4: INNER JOIN Files — ghost chunks of deleted/moved files are
@@ -591,8 +625,9 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
     std::vector<float> emb(EMBEDDING_DIM);
     const float* q = queryEmbedding.data();
     bool cancelled = false;
+    bool budgetExhausted = false;
 
-    while (true) {
+    while (!budgetExhausted) {
         sqlite3_reset(stmt);
         sqlite3_bind_int(stmt, 1, kAlgoVersion);
         sqlite3_bind_int64(stmt, 2, lastId);
@@ -600,6 +635,8 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
 
         int rowsRead = 0;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (scanned >= maxRows) { budgetExhausted = true; break; }
+            ++scanned;
             ++rowsRead;
             lastId = sqlite3_column_int64(stmt, 0);
             const int fileId = sqlite3_column_int(stmt, 1);
@@ -607,9 +644,21 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
             const int size = sqlite3_column_bytes(stmt, 2);
             if (!blob || size != EMBEDDING_BYTES) continue;
 
-            // Path strings convert ONCE per file (first chunk wins) —
-            // not once per chunk row.
-            if (pathPerFile.find(fileId) == pathPerFile.end()) {
+            std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
+
+            const float sim = dotSimilarity(q, emb.data(), EMBEDDING_DIM);
+            if (sim > m_lastBestSimilarity) m_lastBestSimilarity = sim;
+
+            auto it = bestPerFile.find(fileId);
+            if (it == bestPerFile.end() || sim > it->second) {
+                bestPerFile[fileId] = sim;
+            }
+
+            // Path strings convert ONCE per file and only for files that
+            // actually clear the bar — not once per chunk row, and not
+            // for the (usually large) crowd that never passes.
+            if (sim >= threshold
+                && pathPerFile.find(fileId) == pathPerFile.end()) {
                 const unsigned char* pth = sqlite3_column_text(stmt, 3);
                 const unsigned char* fn  = sqlite3_column_text(stmt, 4);
                 pathPerFile.emplace(fileId, std::make_pair(
@@ -618,17 +667,9 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
                     fn  ? QString::fromUtf8(reinterpret_cast<const char*>(fn))
                         : QString()));
             }
-
-            std::memcpy(emb.data(), blob, EMBEDDING_BYTES);
-
-            const float sim = dotSimilarity(q, emb.data(), EMBEDDING_DIM);
-            auto it = bestPerFile.find(fileId);
-            if (it == bestPerFile.end() || sim > it->second) {
-                bestPerFile[fileId] = sim;
-            }
         }
 
-        // Batch boundary: drain reached (rowsRead < BATCH) or cancelled.
+        // Batch boundary: drain reached, cancelled, or budget exhausted.
         if (cancel && cancel->load()) { cancelled = true; break; }
         if (rowsRead < BATCH) break;
     }
@@ -640,7 +681,6 @@ std::vector<SemanticHit> BgeEmbeddingDb::searchSimilarChunksAll(
 
     // Filter by threshold + sort + trim to topK.
     for (const auto& [fileId, sim] : bestPerFile) {
-        if (sim > m_lastBestSimilarity) m_lastBestSimilarity = sim;
         if (sim >= threshold) {
             SemanticHit hit;
             hit.fileId = fileId;

@@ -85,6 +85,9 @@ QStringList SearchEngine::splitSearchWords(const QString& raw) {
         "her", "his", "its", "she", "him", "you", "your", "they", "them",
         "we", "us", "our", "my", "me", "so", "if", "no", "do", "did",
         "regarding", "about", "concerning", "pertaining", "re",
+        // Common shorthand used in office correspondence — filler, not
+        // search intent, so it must not count toward the keyword gate.
+        "reg", "ref", "wrt", "dtd", "dt",
         "into", "onto", "upon", "than", "then", "there", "here",
         "where", "when", "why", "how", "what", "which", "who",
         "will", "would", "could", "should", "may", "might", "can"

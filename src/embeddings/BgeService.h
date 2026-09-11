@@ -78,10 +78,16 @@ public:
 
     // Phase 3: Search ALL chunks (not filtered by keyword results).
     // Used for RRF fusion — semantic search runs independently.
+    // v1.7.26: `maxRows` bounds how many chunk rows the scan may visit
+    // (see BgeEmbeddingDb::searchSimilarChunksAll); the document-level
+    // pass is skipped when the chunk scan already delivered `topK`
+    // precise hits, so a saturated chunk index no longer pays for two
+    // full scans per query.
     std::vector<SemanticHit> searchChunksAll(
         const QString& query,
         int topK = 50,
         float threshold = 0.40f,
+        int maxRows = 250000,
         const std::atomic<bool>* cancel = nullptr);
 
     // Embed a single document. Returns true on success.

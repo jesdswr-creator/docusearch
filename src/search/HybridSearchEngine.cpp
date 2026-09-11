@@ -130,20 +130,32 @@ std::vector<HybridResult> HybridSearchEngine::search(
             SemanticSearchThrottle::getAdaptiveConfig(tier, percentFree);
         const int semanticBudget = std::max(20,
             std::min(std::max(40, m_topK * 2), throttle.chunkBatchSize));
-        lastSemanticBudget_ = semanticBudget;
+
+        // v1.7.26: a REAL scan budget. The chunk scan used to walk the
+        // ENTIRE EmbeddingChunks table on every query — that is the
+        // user's "search takes 20 s" report on large libraries. The scan
+        // now stops after `scanBudget` chunk rows: small/medium libraries
+        // are still fully scanned (the budget is generous), huge ones
+        // return the best matches from the first `scanBudget` chunks
+        // plus the bounded document-level pass. Halved under RAM pressure.
+        int scanBudget = 250000;
+        if (tier == SystemTier::LowEnd)  scanBudget = 100000;
+        if (tier == SystemTier::HighEnd) scanBudget = 500000;
+        if (percentFree < 25)            scanBudget /= 2;
+
+        lastSemanticBudget_ = scanBudget;
         std::vector<SemanticHit> semanticHits =
-            m_bgeService->searchChunksAll(queryText, semanticBudget, m_threshold, cancel);
+            m_bgeService->searchChunksAll(queryText, semanticBudget,
+                                          m_threshold, scanBudget, cancel);
         if (cancel && cancel->load()) {
             return out;  // keyword list is complete — caller drops it by generation
         }
 
-        // No chunk hits → fall back to document-level search (all docs).
-        if (semanticHits.empty()) {
-            semanticHits = m_bgeService->search(queryText, semanticBudget, m_threshold, cancel);
-            if (cancel && cancel->load()) {
-                return out;
-            }
-        }
+        // (v1.7.26: searchChunksAll already runs the document-level pass
+        // when the chunk scan comes up short — including for pre-chunking
+        // indexes with no chunk rows at all — so a second `search()` call
+        // here was a redundant full scan on every no-match query and is
+        // gone.)
 
         // Map fileId → semantic similarity for annotation + additions.
         std::map<int, float> simByFile;

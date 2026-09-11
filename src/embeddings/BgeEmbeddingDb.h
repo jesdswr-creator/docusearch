@@ -106,10 +106,18 @@ public:
     // rows before it: O(N²) row visits per search (tens of millions of
     // wasted walks on a 100k-chunk library). Grouped by file_id, best
     // chunk wins. `cancel` aborts at each batch boundary.
+    // v1.7.26: a HARD scan budget (maxRows) bounds how many chunk rows a
+    // single query may visit — the old scan walked the ENTIRE table no
+    // matter what, which is the "search takes 20 s" report on very large
+    // libraries. Libraries smaller than the budget are still scanned in
+    // full; bigger ones return the best matches from the first `maxRows`
+    // chunks (plus the bounded document-level pass). maxRows <= 0 = the
+    // default budget.
     std::vector<SemanticHit> searchSimilarChunksAll(
         const std::vector<float>& queryEmbedding,
         int topK,
         float threshold,
+        int maxRows = kDefaultScanBudget,
         const std::atomic<bool>* cancel = nullptr);
 
     struct Stats {
@@ -147,6 +155,10 @@ private:
 
     static constexpr int EMBEDDING_DIM      = 384;
     static constexpr int EMBEDDING_BYTES    = EMBEDDING_DIM * 4;  // 1536
+    // v1.7.26: default cap on chunk rows visited per semantic query.
+    // ~1–2 s of scan work on mid hardware; HybridSearchEngine passes a
+    // tier-aware override.
+    static constexpr int kDefaultScanBudget = 250000;
 };
 
 } // namespace DocuSearch
