@@ -57,7 +57,8 @@
       Version="$(var.ProductVersion)"
       Language="1033"
       Codepage="1252"
-      UpgradeCode="$(var.ProductUpgradeCode)">
+      UpgradeCode="$(var.ProductUpgradeCode)"
+      InstallScope="perMachine">
 
     <SummaryInformation
         Codepage="1252"
@@ -71,8 +72,9 @@
 
     <Media Id="1" Cabinet="DocuSearch.cab" EmbedCab="yes" />
 
-    <!-- Installation properties -->
-    <Property Id="ALLUSERS" Value="1" />
+    <!-- Installation properties.
+         Note: ALLUSERS is set implicitly by InstallScope="perMachine" above.
+         Do NOT add <Property Id="ALLUSERS"/> — WiX v4 will error with WIX0091. -->
     <Property Id="ARPNOREMOVE" Value="0" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPHELPLINK" Value="https://github.com/jesdswr-creator/docusearch" />
