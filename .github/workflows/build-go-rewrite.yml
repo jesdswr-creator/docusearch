@@ -156,7 +156,20 @@ jobs:
           # mattn/go-sqlite3 (it's not included by default). Without
           # this, schema.sql's `CREATE VIRTUAL TABLE ... USING fts5(...)`
           # fails with "no such module: fts5".
-          wails build -clean -platform windows/amd64 -webview2 embed -tags "sqlite_fts5"
+          #
+          # Webview2: we use the DEFAULT (system-installed WebView2) instead
+          # of `-webview2 embed`. Reasons:
+          #   1. WebView2 Runtime is preinstalled on Windows 11 and on
+          #      most Windows 10 machines with Edge. Embedding adds ~150 MB
+          #      to the binary for no benefit on those machines.
+          #   2. The embedded fixed-version WebView2 had a known issue
+          #      causing blank-page rendering on some systems where the
+          #      system WebView2 was also installed.
+          #   3. Smaller binary = faster downloads and less disk usage.
+          # If you need to ship to Win10 LTSC / Server Core without Edge,
+          # add `-webview2 bootstrap` (downloads runtime on first launch,
+          # ~2 MB stub) or `-webview2 embed` (full offline, ~150 MB binary).
+          wails build -clean -platform windows/amd64 -tags "sqlite_fts5"
           if (-not (Test-Path "build\bin\DocuSearch.exe")) {
             throw "DocuSearch.exe not found after wails build"
           }

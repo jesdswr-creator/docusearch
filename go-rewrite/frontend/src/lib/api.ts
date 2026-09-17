@@ -1,6 +1,10 @@
-// Type definitions matching the Go structs in app.go.
-// Wails generates its own bindings at build time under ./wailsjs/go/main,
-// but we use these for type-safety in our typed wrappers below.
+// Typed Wails bindings wrapper.
+//
+// IMPORTANT (Wails v2 timing gotcha):
+// Wails injects `window.go.main.App` ASYNCHRONOUSLY after the page loads.
+// If we capture it once at module-load time, we'll often get undefined
+// (because the JS bundle executes before Wails injects the bindings)
+// and every API call will fail. The fix is to re-resolve on EVERY call.
 
 export interface FolderRecord {
   id: number;
@@ -61,9 +65,6 @@ export interface AddFolderResponse {
   extracted?: number;
 }
 
-// The Wails-generated binding object.
-// In dev (without wails dev), this is undefined and we throw.
-// The Wails runtime injects window.go when running under the Wails shell.
 interface WailsBindings {
   AddFolder(req: AddFolderRequest): Promise<AddFolderResponse>;
   ListFolders(): Promise<FolderRecord[]>;
@@ -78,27 +79,42 @@ interface WailsBindings {
   OCRSupportedLanguages(): Promise<string[]>;
 }
 
+// getBindings re-resolves window.go.main.App on every call. If Wails
+// hasn't injected it yet, we throw — the caller's catch block will
+// surface the error to the UI instead of crashing React's render.
 function getBindings(): WailsBindings {
-  // Wails v2 generates bindings at `window.go.main.App`.
   const w = window as unknown as {
     go?: { main?: { App: WailsBindings } };
   };
   if (w.go?.main?.App) {
     return w.go.main.App;
   }
-  // Fallback for plain Vite dev (no Wails shell) — return a stub that
-  // throws so the UI shows a clear "backend not available" message.
-  const err = new Error(
-    "DocuSearch backend not available. Run `wails dev` from the go-rewrite/ directory to start the desktop app."
+  throw new Error(
+    "DocuSearch backend not available. If you're running outside the Wails desktop shell, that's expected — build the app with `wails build` and run the resulting .exe."
   );
-  return new Proxy(
-    {},
-    {
-      get() {
-        return () => Promise.reject(err);
-      },
-    }
-  ) as WailsBindings;
 }
 
-export const api = getBindings();
+// Lazy proxy: each property access re-resolves the bindings. This means
+// the timing of Wails's binding injection no longer matters.
+export const api: WailsBindings = new Proxy({} as WailsBindings, {
+  get(_target, prop: string) {
+    // Resolve on every access. If Wails hasn't injected yet, throw.
+    const bindings = getBindings();
+    const fn = (bindings as unknown as Record<string, unknown>)[prop];
+    if (typeof fn !== "function") {
+      return undefined;
+    }
+    return (fn as Function).bind(bindings);
+  },
+});
+
+// Wails runtime — for OpenDirectoryDialog etc. Also lazy.
+interface WailsRuntime {
+  OpenDirectoryDialog(opts?: { Title?: string }): Promise<string>;
+  MessageDialog(opts: { Type: string; Title: string; Message: string }): Promise<string>;
+}
+
+export function getRuntime(): WailsRuntime | null {
+  const w = window as unknown as { runtime?: WailsRuntime };
+  return w.runtime ?? null;
+}

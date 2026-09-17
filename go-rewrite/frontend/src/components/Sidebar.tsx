@@ -12,6 +12,7 @@ import {
 import { useAppStore } from "@/stores/app-store";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { getRuntime } from "@/lib/api";
 
 export function Sidebar() {
   const { folders, stats, refreshFolders, refreshStats, addFolder, removeFolder } =
@@ -23,15 +24,37 @@ export function Sidebar() {
   }, [refreshFolders, refreshStats]);
 
   const handleAddFolder = async () => {
-    // Wails provides a file dialog via the runtime; for now we use a plain
-    // prompt as a placeholder. The production version will use
-    // window.runtime.EventsOn / OpenDirectoryDialog.
-    const path = window.prompt("Enter folder path to index:");
+    // Use the Wails runtime's native folder picker. Falls back to a
+    // text prompt if the runtime isn't available (e.g. running outside
+    // the desktop shell, which shouldn't happen in production but is
+    // useful for debugging).
+    let path = "";
+    const runtime = getRuntime();
+    if (runtime?.OpenDirectoryDialog) {
+      try {
+        path = await runtime.OpenDirectoryDialog({ Title: "Select folder to index" });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("OpenDirectoryDialog failed", e);
+      }
+    } else {
+      // WebView2 doesn't have window.prompt — only use as last-resort fallback.
+      path = window.prompt?.("Enter folder path to index:") ?? "";
+    }
     if (!path) return;
     try {
       await addFolder(path, true);
     } catch (e) {
-      alert("Failed to add folder: " + (e as Error).message);
+      // eslint-disable-next-line no-console
+      console.error("Failed to add folder:", e);
+      const rt = getRuntime();
+      if (rt?.MessageDialog) {
+        await rt.MessageDialog({
+          Type: "error",
+          Title: "Add folder failed",
+          Message: (e as Error).message,
+        });
+      }
     }
   };
 
@@ -80,8 +103,22 @@ export function Sidebar() {
                   </div>
                   <button
                     className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400"
-                    onClick={() => {
-                      if (window.confirm(`Remove ${f.path} from index?`)) {
+                    onClick={async () => {
+                      // Use Wails runtime dialog if available; fall back to window.confirm
+                      // (which may not exist in WebView2 — the optional chaining handles that).
+                      const rt = getRuntime();
+                      let confirmed = false;
+                      if (rt?.MessageDialog) {
+                        const result = await rt.MessageDialog({
+                          Type: "question",
+                          Title: "Remove folder?",
+                          Message: `Remove ${f.path} from the index? Files on disk are not affected.`,
+                        });
+                        confirmed = result === "Yes" || result === "yes";
+                      } else {
+                        confirmed = window.confirm?.(`Remove ${f.path} from index?`) ?? false;
+                      }
+                      if (confirmed) {
                         removeFolder(f.id);
                       }
                     }}
