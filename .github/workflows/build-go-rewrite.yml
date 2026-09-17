@@ -91,11 +91,6 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install -g wix --version 4.0.5
-          # Pre-fetch the UI extension so wix build can resolve it offline.
-          # The `extension add` caches it in %USERPROFILE%\.wix\extensions.
-          # We pass the explicit version on the -ext flag in the build step
-          # as well, which forces NuGet resolution if the cache lookup fails.
-          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add WixToolset.UI.wixext/4.0.5
           & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
 
@@ -192,14 +187,16 @@ jobs:
         run: |
           $ver = "${{ steps.version.outputs.msi }}"
           $out = Join-Path (Get-Location) "build\bin\DocuSearch-Setup-$ver.msi"
-          # -ext with explicit version forces NuGet resolution if the
-          # extension cache lookup fails. Without this we get WIX0144.
+          # No -ext flag: PoC MSI ships without the WixUI install wizard
+          # (silent install). The WixToolset.UI.wixext extension was failing
+          # to resolve in CI with WIX0144 — see installer/DocuSearch.wxs
+          # for how to re-enable the wizard in the parity build.
           & wix build `
             installer\DocuSearch.wxs `
             -o $out `
             -d ProductVersion=$ver `
             -d BuildOutputDir=build\bin `
-            -ext WixToolset.UI.wixext/4.0.5
+            -platform x64
           if (-not (Test-Path $out)) {
             throw "MSI not produced at $out"
           }

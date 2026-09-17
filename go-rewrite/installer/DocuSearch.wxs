@@ -70,9 +70,14 @@
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPHELPLINK" Value="https://github.com/jesdswr-creator/docusearch" />
 
-    <UIRef Id="WixUI_InstallDir" />
-
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <!--
+      UI: PoC builds ship without the WixUI install wizard (silent install).
+      The WixToolset.UI.wixext extension was failing to resolve at build
+      time in CI with WIX0144. The parity build can re-add:
+        <UIRef Id="WixUI_InstallDir" />
+        <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+      and pass `-ext WixToolset.UI.wixext` to `wix build`.
+    -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
 
     <!--
