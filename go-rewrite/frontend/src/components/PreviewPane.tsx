@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { cn, formatBytes, timeAgo } from "@/lib/utils";
+import { formatBytes, timeAgo } from "@/lib/utils";
 
 export function PreviewPane() {
   const { selectedHit, selectedFile, loadingFile } = useAppStore();

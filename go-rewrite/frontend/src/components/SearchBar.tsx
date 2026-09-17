@@ -1,6 +1,7 @@
 import { Search, Loader2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // SearchBar with debounce + autocomplete suggestions.
@@ -45,7 +46,6 @@ export function SearchBar() {
     }
     sugDebounceRef.current = setTimeout(async () => {
       try {
-        const { api } = await import("@/lib/api");
         const s = await api.Suggestions(local.trim(), 8);
         setSuggestions(s);
       } catch {

@@ -1,5 +1,4 @@
-import { FileText, File, Sheet, Presentation, Image as ImageIcon, Star } from "lucide-react";
-import type { SearchHit } from "@/lib/api";
+import { FileText, File, Sheet, Presentation, Image as ImageIcon } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { cn, formatBytes, timeAgo } from "@/lib/utils";
 
