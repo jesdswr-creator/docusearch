@@ -70,7 +70,9 @@ func (d *DB) ListFolders(ctx context.Context) ([]FolderRecord, error) {
         }
         defer rows.Close()
 
-        var out []FolderRecord
+        // Initialize to empty (not nil) so JSON serialization returns []
+        // instead of null. Otherwise the frontend crashes on .length.
+        out := []FolderRecord{}
         for rows.Next() {
                 var fr FolderRecord
                 var lastScan sql.NullString
@@ -197,7 +199,8 @@ func (d *DB) PendingFiles(ctx context.Context, folderID int64, limit int) ([]Fil
         }
         defer rows.Close()
 
-        var out []FileRecord
+        // Initialize to empty (not nil) — see ListFolders for the JSON reason.
+        out := []FileRecord{}
         for rows.Next() {
                 var rec FileRecord
                 if err := rows.Scan(&rec.ID, &rec.FolderID, &rec.Path, &rec.FileName,

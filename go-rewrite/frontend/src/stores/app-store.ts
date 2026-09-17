@@ -49,7 +49,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set({ searching: true, searchError: null });
     try {
-      const hits = await api.Search(query, 100);
+      // Coerce null -> []: Go serializes nil slices as JSON null, which
+      // would crash .length / .map on the consumer.
+      const hits = (await api.Search(query, 100)) ?? [];
       set({ hits, searching: false });
     } catch (e) {
       set({ searching: false, searchError: (e as Error).message });
@@ -70,7 +72,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   refreshFolders: async () => {
     try {
-      const folders = await api.ListFolders();
+      // Coerce null -> [] (Go nil slice JSON serialization).
+      const folders = (await api.ListFolders()) ?? [];
       set({ folders });
     } catch (e) {
       console.error("ListFolders failed", e);

@@ -46,7 +46,8 @@ export function SearchBar() {
     }
     sugDebounceRef.current = setTimeout(async () => {
       try {
-        const s = await api.Suggestions(local.trim(), 8);
+        // Coerce null -> [] (Go nil slice JSON serialization).
+        const s = (await api.Suggestions(local.trim(), 8)) ?? [];
         setSuggestions(s);
       } catch {
         setSuggestions([]);

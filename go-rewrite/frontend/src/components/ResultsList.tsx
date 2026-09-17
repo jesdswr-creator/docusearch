@@ -17,7 +17,10 @@ function IconFor({ ext }: { ext: string }) {
 }
 
 export function ResultsList() {
-  const { hits, selectedHit, selectHit, searching, query } = useAppStore();
+  const state = useAppStore();
+  // Defensive: store should always return arrays, but coerce in case.
+  const hits = state.hits ?? [];
+  const { selectedHit, selectHit, searching, query } = state;
 
   if (searching) {
     return (

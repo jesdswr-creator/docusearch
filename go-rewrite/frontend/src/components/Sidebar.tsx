@@ -15,8 +15,12 @@ import { Button } from "@/components/ui/button";
 import { getRuntime } from "@/lib/api";
 
 export function Sidebar() {
-  const { folders, stats, refreshFolders, refreshStats, addFolder, removeFolder } =
-    useAppStore();
+  const state = useAppStore();
+  // Defensive: store should always have arrays, but coerce in case the
+  // backend returns null (Go nil slice serializes to JSON null).
+  const folders = state.folders ?? [];
+  const stats = state.stats;
+  const { refreshFolders, refreshStats, addFolder, removeFolder } = state;
 
   useEffect(() => {
     refreshFolders();
