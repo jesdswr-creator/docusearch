@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* DocuSearch design tokens — dark theme is the default.
+   Light theme overrides at the bottom via html:not(.dark). */
+:root,
+html.dark {
+  --bg: 18 18 21;          /* #121215 — near-black, slightly warm */
+  --bg-subtle: 28 28 32;   /* #1c1c20 — sidebar / panels */
+  --bg-hover: 38 38 44;    /* #26262c — hover states */
+  --border: 42 42 48;      /* #2a2a30 — subtle dividers */
+  --border-strong: 64 64 72;
+  --fg: 240 240 245;       /* #f0f0f5 — primary text */
+  --fg-muted: 168 168 178; /* #a8a8b2 — secondary text */
+  --fg-subtle: 120 120 130;
+  --accent: 96 165 250;    /* #60a5fa — Links / focus / primary actions */
+  --accent-fg: 18 18 21;
+}
+
+html:not(.dark) {
+  --bg: 252 252 253;
+  --bg-subtle: 244 244 246;
+  --bg-hover: 234 234 238;
+  --border: 226 226 230;
+  --border-strong: 200 200 206;
+  --fg: 24 24 27;
+  --fg-muted: 82 82 91;
+  --fg-subtle: 130 130 140;
+  --accent: 37 99 235;
+  --accent-fg: 255 255 255;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: rgb(var(--bg));
+  color: rgb(var(--fg));
+  font-family: theme("fontFamily.sans");
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+}
+
+/* Wails: hide scrollbars by default on the window chrome, but allow them
+   inside .scrollable areas. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-strong));
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--fg-subtle));
+}
+
+/* mark: search result highlight */
+mark {
+  background: rgb(var(--accent) / 0.25);
+  color: rgb(var(--fg));
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* Allow text selection inside scrollable text content */
+.scrollable, .scrollable * {
+  user-select: text;
+}

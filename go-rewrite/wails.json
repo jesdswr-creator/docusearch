@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DocuSearch",
+  "outputfilename": "DocuSearch",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "jesdswr-creator"
+  },
+  "info": {
+    "productName": "DocuSearch",
+    "productVersion": "2.0.0-poc",
+    "copyright": "Copyright © 2026",
+    "comments": "Offline Intelligent Document Search - Go + Wails rewrite"
+  },
+  "wailsjsdir": "./frontend/src/wailsjs"
+}

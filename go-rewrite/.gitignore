@@ -1,0 +1,33 @@
+# Build outputs
+/build/
+/dist/
+/frontend/dist/
+/frontend/wailsjs/
+*.exe
+*.msi
+*.pdb
+
+# Go
+/go.sum
+/vendor/
+
+# Node
+/node_modules/
+/frontend/node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local DB (for dev runs)
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
