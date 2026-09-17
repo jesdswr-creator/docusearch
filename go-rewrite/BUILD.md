@@ -30,6 +30,23 @@ wails doctor
 
 `wails doctor` will flag any missing dependencies.
 
+### The `sqlite_fts5` build tag (IMPORTANT)
+
+The PoC uses `mattn/go-sqlite3` for SQLite. By default that package
+**does NOT include the FTS5 extension** — but our `schema.sql` creates an
+FTS5 virtual table. You must therefore pass `-tags "sqlite_fts5"` to every
+`go build` / `go test` / `wails build` invocation:
+
+```powershell
+wails build -clean -platform windows/amd64 -webview2 embed -tags "sqlite_fts5"
+go test -tags "sqlite_fts5" ./...
+```
+
+Without this tag, the app will panic at startup with
+`no such module: fts5`. The CI workflow already passes this flag.
+
+If you forget the tag, the failure is loud and immediate — easy to debug.
+
 ---
 
 ## Development mode (hot reload)
@@ -38,7 +55,7 @@ From the `go-rewrite/` directory:
 
 ```powershell
 cd go-rewrite
-wails dev
+wails dev -tags "sqlite_fts5"
 ```
 
 This launches:
@@ -55,7 +72,7 @@ Logs at `%APPDATA%\DocuSearch\logs\docusearch.log`.
 
 ```powershell
 cd go-rewrite
-wails build -clean -platform windows/amd64
+wails build -clean -platform windows/amd64 -webview2 embed -tags "sqlite_fts5"
 ```
 
 Output: `go-rewrite/build/bin/DocuSearch.exe` — a single static binary
@@ -65,7 +82,7 @@ PDFium / ONNX / WinRT bridges.
 ### Build with optimizations
 
 ```powershell
-wails build -clean -ldflags "-s -w" -trimpath
+wails build -clean -platform windows/amd64 -webview2 embed -tags "sqlite_fts5" -ldflags "-s -w" -trimpath
 ```
 
 - `-s -w` strips debug symbols (smaller binary)

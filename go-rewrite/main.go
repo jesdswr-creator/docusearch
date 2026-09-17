@@ -1,4 +1,9 @@
 // Package main is the Wails entrypoint for DocuSearch Go rewrite.
+//
+// IMPORTANT (Wails gotcha): main() must NOT do any work that can fail
+// (DB connections, network, file IO). Wails runs main() during binding
+// generation, and any panic there breaks the build. All real init goes
+// in App.OnStartup instead.
 package main
 
 import (
@@ -6,10 +11,6 @@ import (
 	"log/slog"
 
 	"github.com/jesdswr-creator/docusearch/go-rewrite/internal/config"
-	"github.com/jesdswr-creator/docusearch/go-rewrite/internal/db"
-	"github.com/jesdswr-creator/docusearch/go-rewrite/internal/indexer"
-	"github.com/jesdswr-creator/docusearch/go-rewrite/internal/ocr"
-	"github.com/jesdswr-creator/docusearch/go-rewrite/internal/search"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -25,27 +26,15 @@ func main() {
 	logger := cfg.Logger()
 	slog.SetDefault(logger)
 
-	database, err := db.Open(cfg.DBPath)
-	if err != nil {
-		logger.Error("open database", "err", err, "path", cfg.DBPath)
-		panic(err)
-	}
-	defer database.Close()
-
-	pipe := indexer.NewPipeline(database, logger)
-	eng := search.NewEngine(database)
-	ocrEng := ocr.New()
-
+	// App holds lazy-initialized subsystems. They are nil here and get
+	// wired up in OnStartup. This keeps main() panic-free, which Wails
+	// requires for binding generation.
 	app := &App{
-		cfg:      cfg,
-		db:       database,
-		pipeline: pipe,
-		search:   eng,
-		ocr:      ocrEng,
-		logger:   logger,
+		cfg:    cfg,
+		logger: logger,
 	}
 
-	err = wails.Run(&options.App{
+	err := wails.Run(&options.App{
 		Title:     "DocuSearch",
 		Width:     1280,
 		Height:    800,

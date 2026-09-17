@@ -152,7 +152,12 @@ jobs:
           # Pass flags explicitly — PowerShell does NOT tokenize env vars
           # containing spaces, so `$env:WAILS_BUILD_FLAGS` would arrive
           # as a single arg and Wails would reject it as an unknown flag.
-          wails build -clean -platform windows/amd64 -webview2 embed
+          #
+          # -tags "sqlite_fts5" enables the FTS5 extension in
+          # mattn/go-sqlite3 (it's not included by default). Without
+          # this, schema.sql's `CREATE VIRTUAL TABLE ... USING fts5(...)`
+          # fails with "no such module: fts5".
+          wails build -clean -platform windows/amd64 -webview2 embed -tags "sqlite_fts5"
           if (-not (Test-Path "build\bin\DocuSearch.exe")) {
             throw "DocuSearch.exe not found after wails build"
           }
