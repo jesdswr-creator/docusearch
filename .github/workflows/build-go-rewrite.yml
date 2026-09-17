@@ -1,0 +1,212 @@
+name: Build DocuSearch (Go + Wails)
+
+# Build the Go-rewrite PoC on every push that touches go-rewrite/.
+# Produces:
+#   - DocuSearch.exe  — portable single-file binary (WebView2 embedded)
+#   - DocuSearch-Setup.msi — WiX v4 MSI installer
+# On go-v* tags, also creates a GitHub Release with both artifacts.
+
+on:
+  push:
+    paths:
+      - 'go-rewrite/**'
+      - '.github/workflows/build-go-rewrite.yml'
+    tags:
+      - 'go-v*'
+    branches:
+      - 'go-rewrite/**'
+  pull_request:
+    paths:
+      - 'go-rewrite/**'
+      - '.github/workflows/build-go-rewrite.yml'
+  workflow_dispatch:
+
+# Cancel in-progress runs of the same workflow on the same ref when a new
+# commit lands. Saves CI minutes on rapid-fire pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.22'
+  NODE_VERSION: '20'
+  WAILS_VERSION: 'v2.10.1'
+  # Embed WebView2 so the binary runs on Windows 10 LTSC / Server Core /
+  # any machine without the WebView2 Runtime preinstalled. Adds ~150 MB
+  # to the binary but eliminates the only runtime dependency.
+  WAILS_BUILD_FLAGS: '-clean -platform windows/amd64 -webview2 embed'
+
+jobs:
+  build:
+    name: Build on Windows Server 2022
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write   # for release creation on tag
+      actions: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # for `git describe` to derive a version
+
+      # ----------------------------------------------------------------------
+      # Toolchain setup
+      # ----------------------------------------------------------------------
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go-rewrite/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: go-rewrite/frontend/package.json
+
+      # CGO is required by mattn/go-sqlite3. The windows-2022 runner has
+      # MSVC preinstalled but the dev environment isn't on PATH until we
+      # activate it.
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+          wails version
+          # Ensure GOPATH/bin is on PATH for subsequent steps.
+          echo "$env:USERPROFILE\go\bin" >> $env:GITHUB_PATH
+
+      - name: Install WiX v4 (pinned to avoid v7 OSMF EULA)
+        shell: pwsh
+        run: |
+          dotnet tool install -g wix --version 4.0.5
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add WixToolset.UI.wixext/4.0.5
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" --version
+          echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+
+      # ----------------------------------------------------------------------
+      # Version derivation
+      # ----------------------------------------------------------------------
+      # We tag releases as go-v1.0.0 etc. For non-tag builds we synthesize
+      # a version like 0.0.0-dev.<short-sha> so the MSI ProductVersion is
+      # always set and incrementable.
+      - name: Derive version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^go-v(.+)$') {
+            $ver = $matches[1]
+          } else {
+            $sha = "${{ github.sha }}".Substring(0, 7)
+            $ver = "0.0.0-dev.$sha"
+          }
+          # MSI ProductVersion must be x.y.z.w (4 parts).
+          $parts = ($ver + ".0.0.0").Split('.') | Select-Object -First 4
+          $msiVer = $parts -join '.'
+          Write-Host "App version: $ver"
+          Write-Host "MSI version: $msiVer"
+          "app=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "msi=$msiVer" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ----------------------------------------------------------------------
+      # Frontend dependencies + build (wails build runs npm itself, but
+      # installing first gives clearer errors and reuses the npm cache).
+      # ----------------------------------------------------------------------
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        working-directory: go-rewrite/frontend
+        run: |
+          npm ci
+          # Also pull in devDeps that `npm ci` may prune on lock mismatch.
+          if (-not (Test-Path node_modules/.bin/vite)) {
+            npm install
+          }
+
+      # ----------------------------------------------------------------------
+      # Build the portable EXE
+      # ----------------------------------------------------------------------
+
+      - name: Build EXE (Wails)
+        shell: pwsh
+        working-directory: go-rewrite
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          wails build $env:WAILS_BUILD_FLAGS
+          # Wails emits build/bin/DocuSearch.exe — confirm it exists.
+          if (-not (Test-Path "build\bin\DocuSearch.exe")) {
+            throw "DocuSearch.exe not found after wails build"
+          }
+          # Stamp the version into the filename for clarity.
+          $ver = "${{ steps.version.outputs.app }}"
+          Copy-Item "build\bin\DocuSearch.exe" "build\bin\DocuSearch-$ver.exe"
+          Get-Item "build\bin\DocuSearch-$ver.exe" |
+            Select-Object Name, @{N='SizeMB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocuSearch-exe-${{ steps.version.outputs.app }}
+          path: go-rewrite/build/bin/DocuSearch-${{ steps.version.outputs.app }}.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------------------------
+      # Build the MSI installer (WiX v4)
+      # ----------------------------------------------------------------------
+      # The Wails build produces a single .exe with no DLLs, so the MSI
+      # source is tiny (no `heat` harvest needed). See
+      # go-rewrite/installer/DocuSearch.wxs for the source.
+
+      - name: Build MSI (WiX v4)
+        shell: pwsh
+        working-directory: go-rewrite
+        run: |
+          $ver = "${{ steps.version.outputs.msi }}"
+          $out = Join-Path (Get-Location) "build\bin\DocuSearch-Setup-$ver.msi"
+          & wix build `
+            installer\DocuSearch.wxs `
+            -o $out `
+            -d ProductVersion=$ver `
+            -d BuildOutputDir=build\bin `
+            -ext WixToolset.UI.wixext
+          if (-not (Test-Path $out)) {
+            throw "MSI not produced at $out"
+          }
+          Get-Item $out |
+            Select-Object Name, @{N='SizeMB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocuSearch-msi-${{ steps.version.outputs.app }}
+          path: go-rewrite/build/bin/DocuSearch-Setup-${{ steps.version.outputs.msi }}.msi
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------------------------
+      # Release (only on go-v* tags)
+      # ----------------------------------------------------------------------
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/go-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DocuSearch (Go) ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            go-rewrite/build/bin/DocuSearch-${{ steps.version.outputs.app }}.exe
+            go-rewrite/build/bin/DocuSearch-Setup-${{ steps.version.outputs.msi }}.msi

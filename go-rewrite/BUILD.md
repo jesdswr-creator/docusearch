@@ -131,6 +131,34 @@ orphan `DocuSearch.exe` processes via Task Manager.
 
 ---
 
+## CI / GitHub Actions
+
+A dedicated workflow at `.github/workflows/build-go-rewrite.yml` builds the
+EXE and MSI on every push that touches `go-rewrite/`. It runs on
+`windows-2022`, installs Go + Node + MSVC + Wails CLI + WiX v4, runs
+`wails build` and `wix build`, and uploads both artifacts.
+
+**Artifacts** (downloadable from the Actions tab for 30 days):
+- `DocuSearch-exe-<version>` — portable `DocuSearch-<version>.exe`
+- `DocuSearch-msi-<version>` — `DocuSearch-Setup-<version>.msi`
+
+**Releases**: tag a commit as `go-v1.0.0` (note the `go-` prefix to avoid
+colliding with the C++ app's `v*` tags) and the workflow will:
+1. Build both artifacts as usual.
+2. Create a GitHub Release named "DocuSearch (Go) go-v1.0.0".
+3. Attach the EXE and MSI to the release.
+4. Auto-generate release notes from commits since the last tag.
+
+The workflow is separate from the C++ app's `build.yml` — they coexist and
+don't interfere. The `paths:` filter ensures the Go workflow only runs when
+files under `go-rewrite/` change.
+
+### Trigger a manual build
+
+GitHub → Actions → "Build DocuSearch (Go + Wails)" → Run workflow.
+
+---
+
 ## Replacing the PoC PDF library with PDFium (production)
 
 The PoC uses `github.com/ledongthuc/pdf` (pure Go, simpler, less accurate).
