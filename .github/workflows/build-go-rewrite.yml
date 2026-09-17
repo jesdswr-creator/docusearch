@@ -34,7 +34,9 @@ env:
   # Embed WebView2 so the binary runs on Windows 10 LTSC / Server Core /
   # any machine without the WebView2 Runtime preinstalled. Adds ~150 MB
   # to the binary but eliminates the only runtime dependency.
-  WAILS_BUILD_FLAGS: '-clean -platform windows/amd64 -webview2 embed'
+  # NOTE: do NOT put multi-word flags into a single env var and try to
+  # splat them in pwsh — PowerShell passes the whole string as one arg.
+  # Use explicit args in the `wails build` step below.
 
 jobs:
   build:
@@ -127,10 +129,14 @@ jobs:
         shell: pwsh
         working-directory: go-rewrite/frontend
         run: |
-          npm ci
-          # Also pull in devDeps that `npm ci` may prune on lock mismatch.
-          if (-not (Test-Path node_modules/.bin/vite)) {
-            npm install
+          # `npm ci` requires a committed package-lock.json (which we have
+          # at frontend/package-lock.json). If a future change breaks the
+          # lockfile, fall back to `npm install` so the build still works.
+          if (Test-Path package-lock.json) {
+            npm ci --no-fund --no-audit
+          } else {
+            Write-Host "package-lock.json missing — running npm install"
+            npm install --no-fund --no-audit
           }
 
       # ----------------------------------------------------------------------
@@ -143,8 +149,10 @@ jobs:
         env:
           CGO_ENABLED: '1'
         run: |
-          wails build $env:WAILS_BUILD_FLAGS
-          # Wails emits build/bin/DocuSearch.exe — confirm it exists.
+          # Pass flags explicitly — PowerShell does NOT tokenize env vars
+          # containing spaces, so `$env:WAILS_BUILD_FLAGS` would arrive
+          # as a single arg and Wails would reject it as an unknown flag.
+          wails build -clean -platform windows/amd64 -webview2 embed
           if (-not (Test-Path "build\bin\DocuSearch.exe")) {
             throw "DocuSearch.exe not found after wails build"
           }
