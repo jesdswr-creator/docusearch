@@ -15,11 +15,19 @@
 
   Features:
     * Start Menu shortcut (DocuSearch)
-    * Optional Desktop shortcut (checkbox in wizard)
-    * Add/Remove Programs entry with publisher + version + icon
+    * Optional Desktop shortcut (controlled by INSTALLDESKTOPSHORTCUT)
+    * Add/Remove Programs entry with publisher + version
     * Per-machine install (ALLUSERS=1) so all users on the PC get it
     * Uninstall removes the install dir but preserves user data at
       %APPDATA%\DocuSearch\ (database, logs)
+
+  WiX v4 syntax notes (vs WiX v3):
+    * Standard directories use <StandardDirectory Id="..."> instead of
+      <Directory Id="TARGETDIR"><Directory Id="ProgramFiles64Folder">.
+    * The Win64 attribute on <Component> was REMOVED — 64-bit is now
+      the default when wix build is invoked with -platform x64.
+    * <Condition> as a child of <Component> was REMOVED — use the
+      Condition attribute on <Component> directly instead.
 
   Build with (WiX v4):
 
@@ -27,12 +35,11 @@
           -o build\bin\DocuSearch-Setup.msi `
           -d ProductVersion=2.0.0.0 `
           -d BuildOutputDir=build\bin `
-          -ext WixToolset.UI.wixext
+          -platform x64
 
   ============================================================
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
   <?define ProductName       = "DocuSearch" ?>
   <?define ProductPublisher  = "DocuSearch" ?>
@@ -80,33 +87,13 @@
     -->
     <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
 
-    <!--
-      Bitmaps and license RTF: optional. We only reference them if they
-      exist in installer/bitmaps/ and installer/LICENSE.rtf respectively.
-      The CI workflow doesn't ship these yet — WixUI uses defaults when
-      the WixVariables are not set.
-    -->
-
-    <!-- =====================================================================
-         Directory layout
-         ===================================================================== -->
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)" />
-      </Directory>
-      <Directory Id="ProgramMenuFolder">
-        <Directory Id="StartMenuDir" Name="$(var.ProductName)" />
-      </Directory>
-      <Directory Id="DesktopFolder" Name="Desktop" />
-    </Directory>
-
     <!-- =====================================================================
          Files
          ===================================================================== -->
     <Feature Id="Complete" Title="$(var.ProductName)" Level="1"
              Display="expand" Description="Complete installation">
       <Feature Id="MainProgram" Title="DocuSearch application" Level="1">
-        <ComponentGroupRef Id="AppComponents" />
+        <ComponentRef Id="MainExe" />
       </Feature>
       <Feature Id="Shortcuts" Title="Start menu shortcut" Level="1">
         <ComponentRef Id="StartMenuShortcut" />
@@ -117,34 +104,40 @@
     <!-- The single .exe produced by `wails build`. BuildOutputDir is
          passed via -d BuildOutputDir=build\bin so this file works in
          both local and CI builds. -->
-    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
-      <Component Id="MainExe" Guid="A4C2E1F0-3B5D-4A6E-9F1C-7D8B2E0A1C3F" Win64="yes">
-        <File Id="DocuSearchExe" Source="$(var.BuildOutputDir)\DocuSearch.exe"
-              KeyPath="yes" Checksum="yes" />
-      </Component>
-    </ComponentGroup>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="$(var.ProductName)">
+        <Component Id="MainExe" Guid="A4C2E1F0-3B5D-4A6E-9F1C-7D8B2E0A1C3F">
+          <File Id="DocuSearchExe" Source="$(var.BuildOutputDir)\DocuSearch.exe"
+                KeyPath="yes" Checksum="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
 
     <!-- Start Menu shortcut -->
-    <DirectoryRef Id="StartMenuDir">
-      <Component Id="StartMenuShortcut" Guid="C5D3F2A1-4C6E-4B7F-A0D2-8E9F1A2B3C4D" Win64="yes">
-        <Shortcut Id="StartMenuShortcutLink"
-                  Name="$(var.ProductName)"
-                  Description="Offline Intelligent Document Search"
-                  Target="[INSTALLFOLDER]DocuSearch.exe"
-                  WorkingDirectory="INSTALLFOLDER" />
-        <RemoveFolder Id="RemoveStartMenuDir" Directory="StartMenuDir" On="uninstall" />
-        <RegistryValue Root="HKCU"
-                       Key="Software\$(var.ProductPublisher)\$(var.ProductName)"
-                       Name="StartMenuShortcut"
-                       Type="integer"
-                       Value="1"
-                       KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="StartMenuDir" Name="$(var.ProductName)">
+        <Component Id="StartMenuShortcut" Guid="C5D3F2A1-4C6E-4B7F-A0D2-8E9F1A2B3C4D">
+          <Shortcut Id="StartMenuShortcutLink"
+                    Name="$(var.ProductName)"
+                    Description="Offline Intelligent Document Search"
+                    Target="[INSTALLFOLDER]DocuSearch.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveStartMenuDir" Directory="StartMenuDir" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\$(var.ProductPublisher)\$(var.ProductName)"
+                         Name="StartMenuShortcut"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
 
-    <!-- Optional Desktop shortcut -->
-    <DirectoryRef Id="DesktopFolder">
-      <Component Id="DesktopShortcut" Guid="D6E4A3B2-5D7F-4C80-B1E3-9F0A2B3C4D5E" Win64="yes">
+    <!-- Optional Desktop shortcut.
+         WiX v4: use the Condition attribute on Component (not a child element). -->
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="D6E4A3B2-5D7F-4C80-B1E3-9F0A2B3C4D5E"
+                 Condition="INSTALLDESKTOPSHORTCUT = 1">
         <Shortcut Id="DesktopShortcutLink"
                   Name="$(var.ProductName)"
                   Description="Offline Intelligent Document Search"
@@ -154,11 +147,10 @@
                        Key="Software\$(var.ProductPublisher)\$(var.ProductName)"
                        Name="DesktopShortcut"
                        Type="integer"
-                       Value="[INSTALLDESKTOPSHORTCUT]"
+                       Value="1"
                        KeyPath="yes" />
-        <Condition>INSTALLDESKTOPSHORTCUT = 1</Condition>
       </Component>
-    </DirectoryRef>
+    </StandardDirectory>
 
   </Package>
 </Wix>
